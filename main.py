@@ -519,7 +519,15 @@ def health():
 
 # ─── Start ─────────────────────────────────────────────────────────────────────
 init_db_on_start()
-
+@app.get("/debug")
+def debug():
+    import os
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    return {
+        "static_dir": static_dir,
+        "exists": os.path.exists(static_dir),
+        "files": os.listdir(static_dir) if os.path.exists(static_dir) else []
+    }
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)

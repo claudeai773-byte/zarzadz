@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1a1f2e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>⚙ Produkcja</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+  :root {
+    --bg: #1a1f2e; --panel: #242938; --accent: #e8a020;
+    --text: #e8eaf0; --dim: #8892a4; --border: #2e3548;
+    --green: #27ae60; --red: #e74c3c; --blue: #3498db;
+    --orange: #f39c12; --entry: #1e2435;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif;
+         min-height: 100vh; overflow-x: hidden; }
+
+  /* ── Layout ── */
+  #app { display: flex; flex-direction: column; min-height: 100vh; }
+  .topbar { background: var(--panel); padding: 12px 16px; display: flex;
+             align-items: center; justify-content: space-between;
+             border-bottom: 2px solid var(--accent); position: sticky; top: 0; z-index: 100; }
+  .topbar h1 { font-family: Consolas, monospace; font-size: 18px; color: var(--accent); }
+  .topbar .user-info { font-size: 12px; color: var(--dim); text-align: right; line-height: 1.4; }
+  .logout-btn { background: var(--red); color: white; border: none; padding: 6px 12px;
+                border-radius: 6px; cursor: pointer; font-size: 13px; }
+
+  .content { flex: 1; padding: 12px; max-width: 600px; margin: 0 auto; width: 100%; }
+
+  /* ── Login ── */
+  .login-card { background: var(--panel); border-radius: 16px; padding: 32px 24px;
+                margin: 40px auto; max-width: 380px; border: 1px solid var(--border); }
+  .login-card h2 { color: var(--accent); font-family: Consolas, monospace; font-size: 22px;
+                   text-align: center; margin-bottom: 8px; }
+  .login-card .subtitle { color: var(--dim); text-align: center; font-size: 13px; margin-bottom: 28px; }
+
+  /* ── Forms ── */
+  .field { margin-bottom: 16px; }
+  .field label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .field input, .field select, .field textarea {
+    width: 100%; background: var(--entry); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; font-size: 15px; outline: none;
+    transition: border-color .2s; }
+  .field input:focus, .field select:focus { border-color: var(--accent); }
+  .field textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+  select option { background: var(--panel); }
+
+  /* ── Buttons ── */
+  .btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
+         font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .15s;
+         text-align: center; }
+  .btn:active { opacity: .8; }
+  .btn-accent { background: var(--accent); color: #1a1f2e; }
+  .btn-green  { background: var(--green);  color: white; }
+  .btn-red    { background: var(--red);    color: white; }
+  .btn-blue   { background: var(--blue);   color: white; }
+  .btn-sm { padding: 8px 16px; width: auto; font-size: 13px; border-radius: 8px;
+             border: none; cursor: pointer; font-weight: 600; }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--dim);
+                 padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; width: 100%; }
+
+  /* ── Cards ── */
+  .card { background: var(--panel); border-radius: 12px; padding: 16px;
+          margin-bottom: 12px; border: 1px solid var(--border); }
+  .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+  .card-title { font-weight: 700; font-size: 15px; color: var(--text); }
+  .card-sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .badge-green  { background: rgba(39,174,96,.2);  color: var(--green); }
+  .badge-orange { background: rgba(243,156,18,.2); color: var(--orange); }
+  .badge-red    { background: rgba(231,76,60,.2);  color: var(--red); }
+  .badge-blue   { background: rgba(52,152,219,.2); color: var(--blue); }
+  .badge-dim    { background: rgba(136,146,164,.15); color: var(--dim); }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; background: var(--panel); border-radius: 10px; padding: 4px;
+           margin-bottom: 16px; gap: 2px; }
+  .tab { flex: 1; padding: 10px 4px; border: none; background: transparent; color: var(--dim);
+          border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all .2s; }
+  .tab.active { background: var(--accent); color: #1a1f2e; }
+
+  /* ── Timer ── */
+  .timer-card { background: linear-gradient(135deg, #1a2e1a, #1e2e1e);
+                border: 2px solid var(--green); border-radius: 16px; padding: 24px;
+                text-align: center; margin-bottom: 16px; }
+  .timer-display { font-family: Consolas, monospace; font-size: 48px; font-weight: 700;
+                   color: var(--green); letter-spacing: 4px; margin: 8px 0; }
+  .timer-label { color: var(--dim); font-size: 13px; margin-bottom: 4px; }
+  .timer-op { color: var(--text); font-size: 16px; font-weight: 600; margin: 8px 0; }
+  .timer-zl { color: var(--accent); font-size: 13px; }
+
+  /* ── Stats ── */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .stat-box { background: var(--panel); border-radius: 10px; padding: 14px 12px;
+               text-align: center; border: 1px solid var(--border); }
+  .stat-val { font-size: 28px; font-weight: 700; color: var(--accent); font-family: Consolas, monospace; }
+  .stat-lbl { color: var(--dim); font-size: 11px; margin-top: 4px; }
+
+  /* ── Section headers ── */
+  .section-hdr { color: var(--dim); font-size: 11px; font-weight: 700; letter-spacing: 1px;
+                 text-transform: uppercase; margin-bottom: 10px; padding-bottom: 6px;
+                 border-bottom: 1px solid var(--border); }
+
+  /* ── Loading / Error ── */
+  .spinner { text-align: center; padding: 40px; color: var(--dim); font-size: 32px; }
+  .empty { text-align: center; padding: 40px; color: var(--dim); font-size: 14px; }
+  .error-banner { background: rgba(231,76,60,.15); border: 1px solid var(--red);
+                  color: var(--red); border-radius: 10px; padding: 12px 16px;
+                  margin-bottom: 12px; font-size: 14px; }
+
+  /* ── Bottom nav ── */
+  .bottom-nav { background: var(--panel); border-top: 1px solid var(--border);
+                display: flex; position: sticky; bottom: 0; z-index: 100; }
+  .nav-btn { flex: 1; padding: 10px 4px 14px; border: none; background: transparent;
+              color: var(--dim); cursor: pointer; display: flex; flex-direction: column;
+              align-items: center; gap: 3px; font-size: 10px; transition: color .2s; }
+  .nav-btn .icon { font-size: 22px; }
+  .nav-btn.active { color: var(--accent); }
+
+  /* ── Progress bar ── */
+  .progress-wrap { background: var(--border); border-radius: 4px; height: 6px; margin: 8px 0; overflow: hidden; }
+  .progress-bar  { height: 100%; border-radius: 4px; background: var(--green); transition: width .3s; }
+
+  /* ── Modal ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200;
+                   display: flex; align-items: flex-end; }
+  .modal { background: var(--panel); border-radius: 20px 20px 0 0; padding: 24px 20px 36px;
+            width: 100%; max-height: 80vh; overflow-y: auto; }
+  .modal h3 { font-size: 18px; margin-bottom: 20px; color: var(--accent); }
+  .modal-close { float: right; background: none; border: none; color: var(--dim);
+                  font-size: 24px; cursor: pointer; margin-top: -4px; }
+
+  /* ── Config screen ── */
+  .config-wrap { padding: 24px 16px; max-width: 420px; margin: 0 auto; }
+  .config-wrap h2 { color: var(--accent); font-family: Consolas, monospace; margin-bottom: 6px; }
+  .config-wrap p  { color: var(--dim); font-size: 13px; margin-bottom: 24px; }
+
+  @media (prefers-color-scheme: dark) { body { background: var(--bg); } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════
+//  KONFIGURACJA – zmień SERVER_URL po deployu na Railway
+// ════════════════════════════════════════════════════════════════════
+let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
+let SERVER_URL = CONFIG.server_url || '';
+let API_KEY    = CONFIG.api_key    || '';
+
+const HEADERS = () => ({ 'Content-Type': 'application/json', 'x-api-key': API_KEY });
+
+// ── API ──────────────────────────────────────────────────────────────
+async function api(path, opts = {}) {
+  const url = SERVER_URL.replace(/\/$/, '') + path;
+  const res = await fetch(url, { headers: HEADERS(), ...opts });
+  if (!res.ok) {
+    const t = await res.text().catch(() => 'Błąd serwera');
+    throw new Error(t);
+  }
+  return res.json();
+}
+const get  = p => api(p);
+const post = (p, b) => api(p, { method: 'POST', body: JSON.stringify(b) });
+
+// ── State ─────────────────────────────────────────────────────────────
+let state = {
+  screen: SERVER_URL ? 'login' : 'config',
+  user: null,
+  activeTab: 'praca',
+  loading: false,
+  error: null,
+
+  // Pracownik
+  operacje: [],
+  aktivnaSesja: null,
+  timerSec: 0,
+  timerInterval: null,
+
+  // Majster
+  majsterStats: null,
+
+  // Magazynier
+  transportOps: [],
+
+  // Modal: stop
+  stopModal: false,
+  stopIlosc: 1,
+  stopUwagi: '',
+};
+
+function setState(partial) {
+  state = { ...state, ...partial };
+  render();
+}
+
+// ── Timer ──────────────────────────────────────────────────────────────
+function startTimer(startISO) {
+  if (state.timerInterval) clearInterval(state.timerInterval);
+  const update = () => {
+    const diff = Math.floor((Date.now() - new Date(startISO)) / 1000);
+    state.timerSec = diff;
+    const el = document.getElementById('timer-val');
+    if (el) el.textContent = fmtTime(diff);
+  };
+  update();
+  state.timerInterval = setInterval(update, 1000);
+}
+function stopTimer() {
+  if (state.timerInterval) clearInterval(state.timerInterval);
+  state.timerInterval = null;
+}
+function fmtTime(sec) {
+  const h = String(Math.floor(sec / 3600)).padStart(2, '0');
+  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+  const s = String(sec % 60).padStart(2, '0');
+  return `${h}:${m}:${s}`;
+}
+
+// ── Data loaders ──────────────────────────────────────────────────────
+async function loadPracownik() {
+  setState({ loading: true, error: null });
+  try {
+    const [ops, sesja] = await Promise.all([
+      get('/api/operacje/aktywne'),
+      get(`/api/sesje/aktywna/${state.user.id}`),
+    ]);
+    if (sesja) startTimer(sesja.start_time);
+    else stopTimer();
+    setState({ operacje: ops, aktivnaSesja: sesja, loading: false });
+  } catch(e) {
+    setState({ loading: false, error: e.message });
+  }
+}
+async function loadMajster() {
+  setState({ loading: true, error: null });
+  try {
+    const stats = await get('/api/stats/majster');
+    setState({ majsterStats: stats, loading: false });
+  } catch(e) {
+    setState({ loading: false, error: e.message });
+  }
+}
+async function loadMagazynier() {
+  setState({ loading: true, error: null });
+  try {
+    const ops = await get('/api/operacje/zakonczone-do-transportu');
+    setState({ transportOps: ops, loading: false });
+  } catch(e) {
+    setState({ loading: false, error: e.message });
+  }
+}
+
+// ── Actions ────────────────────────────────────────────────────────────
+async function doLogin(username, password) {
+  setState({ loading: true, error: null });
+  try {
+    const user = await post('/api/login', { username, password });
+    setState({ user, screen: 'main', loading: false, activeTab: defaultTab(user.role) });
+    loadTabData(defaultTab(user.role));
+  } catch(e) {
+    setState({ loading: false, error: 'Nieprawidłowy login lub hasło' });
+  }
+}
+function defaultTab(role) {
+  if (role === 'magazynier') return 'magazyn';
+  if (role === 'majster') return 'majster';
+  return 'praca';
+}
+
+async function startSesja(operacjaId) {
+  try {
+    const res = await post('/api/sesje/start', {
+      operacja_id: operacjaId, user_id: state.user.id
+    });
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function stopSesja() {
+  if (!state.aktivnaSesja) return;
+  try {
+    await post('/api/sesje/stop', {
+      sesja_id: state.aktivnaSesja.id,
+      ilosc_sztuk: parseInt(state.stopIlosc) || 0,
+      uwagi: state.stopUwagi,
+    });
+    stopTimer();
+    setState({ stopModal: false, stopUwagi: '', stopIlosc: 1 });
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+function loadTabData(tab) {
+  if (tab === 'praca')   loadPracownik();
+  if (tab === 'majster') loadMajster();
+  if (tab === 'magazyn') loadMagazynier();
+}
+
+function switchTab(tab) {
+  setState({ activeTab: tab });
+  loadTabData(tab);
+}
+
+function logout() {
+  stopTimer();
+  setState({ user: null, screen: 'login', aktivnaSesja: null, operacje: [] });
+}
+
+// ── Render helpers ─────────────────────────────────────────────────────
+function statusBadge(s) {
+  const map = {
+    'w_toku': ['badge-orange', '🔄 w toku'],
+    'oczekuje': ['badge-dim', '⏳ oczekuje'],
+    'zakonczona': ['badge-green', '✅ ukończona'],
+    'nowe': ['badge-blue', '🆕 nowe'],
+  };
+  const [cls, label] = map[s] || ['badge-dim', s];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function roleName(r) {
+  return { admin: 'Administrator', technolog: 'Technolog', pracownik: 'Pracownik',
+           magazynier: 'Magazynier', majster: 'Majster' }[r] || r;
+}
+
+// ── Screens ────────────────────────────────────────────────────────────
+
+function renderConfig() {
+  return `
+  <div class="config-wrap">
+    <h2>⚙ Konfiguracja</h2>
+    <p>Wpisz adres serwera Railway i klucz API, aby połączyć aplikację z bazą danych.</p>
+    <div class="field">
+      <label>URL Serwera Railway</label>
+      <input id="cfg-url" type="url" placeholder="https://produkcja-xxx.railway.app"
+             value="${SERVER_URL}" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Klucz API</label>
+      <input id="cfg-key" type="password" placeholder="zmien-mnie-na-bezpieczny-klucz"
+             value="${API_KEY}">
+    </div>
+    <button class="btn btn-accent" onclick="saveConfig()">💾 Zapisz i połącz</button>
+    <p style="margin-top:16px;font-size:12px;color:var(--dim);text-align:center">
+      Klucz API ustaw w Railway → Variables → API_KEY
+    </p>
+  </div>`;
+}
+
+function saveConfig() {
+  const url = document.getElementById('cfg-url').value.trim();
+  const key = document.getElementById('cfg-key').value.trim();
+  if (!url || !key) { alert('Wypełnij oba pola'); return; }
+  SERVER_URL = url;
+  API_KEY    = key;
+  localStorage.setItem('produkcja_config', JSON.stringify({ server_url: url, api_key: key }));
+  setState({ screen: 'login' });
+}
+
+function renderLogin() {
+  return `
+  <div style="padding:16px">
+    <div class="login-card">
+      <h2>⚙ PRODUKCJA</h2>
+      <p class="subtitle">System Zarządzania Produkcją</p>
+      ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
+      <div class="field">
+        <label>Login</label>
+        <input id="lg-user" type="text" placeholder="np. piotr.p" autocomplete="username"
+               onkeydown="if(event.key==='Enter')document.getElementById('lg-pass').focus()">
+      </div>
+      <div class="field">
+        <label>Hasło</label>
+        <input id="lg-pass" type="password" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')doLogin(document.getElementById('lg-user').value,this.value)">
+      </div>
+      <button class="btn btn-accent" style="margin-top:8px"
+              onclick="doLogin(document.getElementById('lg-user').value, document.getElementById('lg-pass').value)"
+              ${state.loading ? 'disabled' : ''}>
+        ${state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się'}
+      </button>
+      <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">
+        ⚙ Zmień serwer
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderTopbar() {
+  if (!state.user) return '';
+  return `
+  <div class="topbar">
+    <h1>⚙ PRODUKCJA</h1>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="user-info">
+        <div style="color:var(--text)">${state.user.full_name}</div>
+        <div>${roleName(state.user.role)}</div>
+      </div>
+      <button class="logout-btn" onclick="logout()">🔒</button>
+    </div>
+  </div>`;
+}
+
+function renderBottomNav() {
+  const role = state.user?.role;
+  const tabs = [];
+  if (role !== 'magazynier') tabs.push({ id: 'praca', icon: '👷', label: 'Praca' });
+  if (role === 'magazynier' || role === 'admin') tabs.push({ id: 'magazyn', icon: '📦', label: 'Magazyn' });
+  if (role === 'majster' || role === 'admin')   tabs.push({ id: 'majster', icon: '🔧', label: 'Majster' });
+  if (role !== 'pracownik' && role !== 'magazynier') tabs.push({ id: 'zlecenia', icon: '📋', label: 'Zlecenia' });
+
+  return `
+  <nav class="bottom-nav">
+    ${tabs.map(t => `
+      <button class="nav-btn ${state.activeTab===t.id?'active':''}" onclick="switchTab('${t.id}')">
+        <span class="icon">${t.icon}</span>${t.label}
+      </button>`).join('')}
+    <button class="nav-btn ${state.activeTab==='ustawienia'?'active':''}" onclick="switchTab('ustawienia')">
+      <span class="icon">⚙</span>Ustawienia
+    </button>
+  </nav>`;
+}
+
+// ── Tab: Praca (pracownik) ──────────────────────────────────────────────
+function renderPraca() {
+  const s = state;
+  if (s.loading) return `<div class="spinner">⏳</div>`;
+
+  let html = '';
+
+  // Aktywna sesja (timer)
+  if (s.aktivnaSesja) {
+    const sesja = s.aktivnaSesja;
+    html += `
+    <div class="timer-card">
+      <div class="timer-label">⏱ AKTYWNA SESJA</div>
+      <div class="timer-display" id="timer-val">${fmtTime(s.timerSec)}</div>
+      <div class="timer-op">${sesja.op_nazwa}</div>
+      <div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>
+      <div style="color:var(--dim);font-size:12px;margin:4px 0 16px">${sesja.stanowisko||''}</div>
+      <button class="btn btn-red" onclick="setState({stopModal:true})">
+        ⏹ Zakończ operację
+      </button>
+    </div>`;
+  } else {
+    html += `
+    <div class="card" style="text-align:center;padding:20px 16px">
+      <div style="font-size:36px;margin-bottom:8px">⏸</div>
+      <div style="color:var(--dim);font-size:14px">Brak aktywnej sesji</div>
+      <div style="color:var(--dim);font-size:12px;margin-top:4px">Wybierz operację poniżej aby zacząć</div>
+    </div>`;
+  }
+
+  // Lista operacji
+  html += `<div class="section-hdr" style="margin-top:4px">Dostępne operacje</div>`;
+
+  if (!s.operacje.length) {
+    html += `<div class="empty">✅ Brak operacji do wykonania</div>`;
+  } else {
+    s.operacje.forEach(op => {
+      const isActive = s.aktivnaSesja?.operacja_id === op.id;
+      const prog = op.ilosc_sztuk > 0
+        ? Math.min(100, Math.round((op.ilosc_wykonana / op.ilosc_sztuk) * 100))
+        : 0;
+      html += `
+      <div class="card ${isActive ? 'card-active' : ''}" style="${isActive ? 'border-color:var(--green)' : ''}">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${op.kolejnosc}. ${op.nazwa}</div>
+            <div class="card-sub">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
+            <div class="card-sub" style="margin-top:2px">🏭 ${op.stanowisko||'—'}</div>
+          </div>
+          ${statusBadge(op.status)}
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:12px;color:var(--dim)">
+            ${op.ilosc_wykonana}/${op.ilosc_sztuk} szt. (${prog}%)
+          </span>
+          ${!isActive && !s.aktivnaSesja && op.status !== 'zakonczona' ? `
+          <button class="btn-sm btn-green" onclick="startSesja(${op.id})">▶ Start</button>
+          ` : ''}
+          ${isActive ? `<span style="color:var(--green);font-size:12px">● AKTYWNA</span>` : ''}
+        </div>
+      </div>`;
+    });
+  }
+
+  // Odśwież
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadPracownik()">🔄 Odśwież</button>`;
+
+  // Modal stop
+  if (s.stopModal) {
+    html += `
+    <div class="modal-overlay" onclick="if(event.target===this)setState({stopModal:false})">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({stopModal:false})">×</button>
+        <h3>⏹ Zakończ sesję</h3>
+        <div class="field">
+          <label>Liczba wykonanych sztuk</label>
+          <input type="number" id="stop-ilosc" value="${s.stopIlosc}" min="0"
+                 oninput="state.stopIlosc=this.value">
+        </div>
+        <div class="field">
+          <label>Uwagi (opcjonalnie)</label>
+          <textarea id="stop-uwagi" placeholder="np. problem z narzędziem..."
+                    oninput="state.stopUwagi=this.value">${s.stopUwagi}</textarea>
+        </div>
+        <button class="btn btn-red" onclick="stopSesja()">✅ Potwierdź zakończenie</button>
+      </div>
+    </div>`;
+  }
+
+  return html;
+}
+
+// ── Tab: Majster ────────────────────────────────────────────────────────
+function renderMajster() {
+  if (state.loading) return `<div class="spinner">⏳</div>`;
+  const stats = state.majsterStats;
+  if (!stats) return `<div class="empty">Ładowanie...</div>`;
+
+  let html = `
+  <div class="stats-grid">
+    <div class="stat-box">
+      <div class="stat-val">${stats.aktywne_sesje.length}</div>
+      <div class="stat-lbl">pracowników online</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val">${stats.dzis_sztuk || 0}</div>
+      <div class="stat-lbl">sztuk dziś</div>
+    </div>
+  </div>`;
+
+  // Aktywne sesje
+  html += `<div class="section-hdr">🟢 Pracownicy aktywni</div>`;
+  if (!stats.aktywne_sesje.length) {
+    html += `<div class="empty" style="padding:20px">Brak aktywnych sesji</div>`;
+  } else {
+    stats.aktywne_sesje.forEach(s => {
+      const elapsed = Math.floor((Date.now() - new Date(s.start_time)) / 1000);
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">👤 ${s.full_name}</div>
+            <div class="card-sub">🔧 ${s.op_nazwa}</div>
+            <div class="card-sub">📋 ${s.zl_numer} – ${s.zl_nazwa}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-family:Consolas;color:var(--green);font-size:16px">${fmtTime(elapsed)}</div>
+            <div style="font-size:11px;color:var(--dim)">🏭 ${s.stanowisko||'—'}</div>
+          </div>
+        </div>
+      </div>`;
+    });
+  }
+
+  // Postęp zleceń
+  html += `<div class="section-hdr" style="margin-top:8px">📋 Zlecenia w toku</div>`;
+  const aktZlecenia = stats.zlecenia.filter(z => z.status !== 'zakonczone');
+  if (!aktZlecenia.length) {
+    html += `<div class="empty" style="padding:20px">Brak aktywnych zleceń</div>`;
+  } else {
+    aktZlecenia.forEach(z => {
+      const prog = z.op_total > 0 ? Math.round((z.op_done / z.op_total) * 100) : 0;
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${z.numer}</div>
+            <div class="card-sub">${z.nazwa}</div>
+          </div>
+          ${statusBadge(z.status)}
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:6px">
+          <span>Operacje: ${z.op_done}/${z.op_total}</span>
+          <span>${prog}%</span>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
+        </div>
+      </div>`;
+    });
+  }
+
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMajster()">🔄 Odśwież</button>`;
+  return html;
+}
+
+// ── Tab: Magazyn ────────────────────────────────────────────────────────
+function renderMagazyn() {
+  if (state.loading) return `<div class="spinner">⏳</div>`;
+
+  let html = `<div class="section-hdr">📦 Operacje zakończone – do transportu</div>`;
+
+  if (!state.transportOps.length) {
+    html += `
+    <div class="card" style="text-align:center;padding:30px">
+      <div style="font-size:40px;margin-bottom:10px">✅</div>
+      <div style="color:var(--green);font-size:16px;font-weight:600">Brak operacji do transportu</div>
+    </div>`;
+  } else {
+    state.transportOps.forEach(op => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${op.kolejnosc}. ${op.nazwa}</div>
+            <div class="card-sub">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
+          </div>
+          <span class="badge badge-green">✅ ukończona</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          <div style="font-size:12px;color:var(--dim)">🏭 Stanowisko</div>
+          <div style="font-size:12px">${op.stanowisko||'—'}</div>
+          <div style="font-size:12px;color:var(--dim)">📦 Wykonano</div>
+          <div style="font-size:12px;color:var(--green);font-weight:600">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</div>
+        </div>
+      </div>`;
+    });
+  }
+
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMagazynier()">🔄 Odśwież</button>`;
+  return html;
+}
+
+// ── Tab: Zlecenia ────────────────────────────────────────────────────────
+async function loadZlecenia() {
+  setState({ loading: true, error: null });
+  try {
+    const zl = await get('/api/zlecenia');
+    setState({ zlecenia: zl, loading: false });
+  } catch(e) {
+    setState({ loading: false, error: e.message });
+  }
+}
+function renderZlecenia() {
+  if (state.loading) return `<div class="spinner">⏳</div>`;
+  const zl = state.zlecenia || [];
+  if (!zl.length) return `<div class="empty">Brak zleceń</div>`;
+  return zl.map(z => `
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">${z.numer}</div>
+        <div class="card-sub">${z.nazwa}</div>
+        ${z.termin ? `<div class="card-sub">📅 Termin: ${z.termin}</div>` : ''}
+      </div>
+      ${statusBadge(z.status)}
+    </div>
+    <div style="font-size:12px;color:var(--dim);margin-top:6px">
+      📦 ${z.ilosc_sztuk} szt.
+    </div>
+  </div>`).join('');
+}
+
+// ── Tab: Ustawienia ─────────────────────────────────────────────────────
+function renderUstawienia() {
+  return `
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px">⚙ Ustawienia połączenia</div>
+    <div style="font-size:13px;color:var(--dim);word-break:break-all;margin-bottom:8px">
+      Serwer: <span style="color:var(--text)">${SERVER_URL || '(nie ustawiony)'}</span>
+    </div>
+    <button class="btn btn-blue" onclick="setState({screen:'config'})">🔧 Zmień serwer</button>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div class="card-title" style="margin-bottom:12px">ℹ O aplikacji</div>
+    <div style="font-size:13px;color:var(--dim);line-height:1.8">
+      System Zarządzania Produkcją v3.0<br>
+      Wersja mobilna (PWA)<br>
+      <span style="color:var(--accent)">●</span> Dane synchronizowane w chmurze
+    </div>
+  </div>`;
+}
+
+// ── Main render ─────────────────────────────────────────────────────────
+function renderContent() {
+  if (state.screen === 'config') return renderConfig();
+  if (state.screen === 'login')  return renderLogin();
+
+  const tabContent = {
+    praca:      renderPraca,
+    majster:    renderMajster,
+    magazyn:    renderMagazyn,
+    zlecenia:   renderZlecenia,
+    ustawienia: renderUstawienia,
+  }[state.activeTab] || (() => '');
+
+  return `
+    ${renderTopbar()}
+    <div class="content">
+      ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
+      ${tabContent()}
+    </div>
+    ${renderBottomNav()}`;
+}
+
+function render() {
+  document.getElementById('app').innerHTML = renderContent();
+}
+
+// ── Init ────────────────────────────────────────────────────────────────
+// Auto-refresh co 30 sekund gdy jest aktywna sesja
+setInterval(() => {
+  if (state.screen === 'main' && state.activeTab === 'praca' && !state.stopModal) {
+    // Cichy reload operacji
+    if (state.user) {
+      get('/api/operacje/aktywne').then(ops => {
+        state.operacje = ops;
+        // Nie re-render żeby nie przerwać timera
+        // Tylko aktualizuj karty operacji
+      }).catch(() => {});
+    }
+  }
+}, 30000);
+
+render();
+</script>
+</body>
+</html>

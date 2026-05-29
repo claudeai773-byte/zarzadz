@@ -361,6 +361,7 @@ async function doLogin(username, password) {
   setState({loading:true, error:null});
   try {
     const user = await post('/api/login', {username, password});
+    stopLoginInfoRefresh();
     const tab = defaultTab(user.role);
     setState({user, screen:'main', loading:false, activeTab:tab});
     loadTabData(tab);
@@ -692,13 +693,16 @@ function saveConfig() {
 //  SCREEN: LOGIN
 // ══════════════════════════════════════════════════════════════
 function renderLogin() {
-  const warehouseInfo = state.warehouseInfo;
+  const wi = state.warehouseInfo;
   return `
-  <div style="padding:16px">
-    ${warehouseInfo ? renderWarehouseLoginPanel(warehouseInfo) : ''}
+  <div style="padding:16px;max-width:480px;margin:0 auto">
+    ${wi ? renderWarehouseLoginPanel(wi) : (SERVER_URL ? `
+    <div style="text-align:center;padding:20px 0 8px;color:var(--dim);font-size:12px">
+      ⏳ Ładowanie statusu produkcji...
+    </div>` : '')}
     <div class="login-card">
       <h2>⚙ PRODUKCJA</h2>
-      <p class="subtitle">System Zarządzania Produkcją v4.0</p>
+      <p class="subtitle">System Zarządzania Produkcją v5.0</p>
       ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
       <div class="field">
         <label>Login</label>
@@ -720,22 +724,83 @@ function renderLogin() {
   </div>`;
 }
 
-function renderWarehouseLoginPanel(info) {
-  if (!info || !info.length) return '';
-  return `
-  <div style="max-width:380px;margin:0 auto 12px">
-    <div style="background:rgba(39,174,96,.12);border:1px solid var(--green);border-radius:12px;padding:14px 16px">
-      <div style="font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
-        📦 Operacje czekające na odbiór (${info.length})
-      </div>
-      ${info.map(op => `
-      <div style="border-bottom:1px solid rgba(39,174,96,.2);padding:7px 0;last-child:border-none">
+function renderWarehouseLoginPanel(wi) {
+  const zakonczone = (wi.zakonczone || []);
+  const nastepne   = (wi.nastepne   || []);
+  const aktywne    = (wi.aktywne    || []);
+
+  let html = '';
+
+  // Sekcja: Operacje zakończone – do odbioru
+  if (zakonczone.length) {
+    html += `
+    <div style="background:rgba(39,174,96,.10);border:1px solid var(--green);border-radius:12px;padding:14px 16px;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+        <span>📦 Do odbioru (${zakonczone.length})</span>
+        <span style="font-weight:400;font-size:10px;color:var(--dim)">zakończone operacje</span>
+      </div>`;
+    zakonczone.forEach(op => {
+      html += `
+      <div style="border-bottom:1px solid rgba(39,174,96,.2);padding:7px 0">
         <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
         <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
-        <div style="font-size:12px;color:var(--dim)">🏭 ${op.stanowisko||'—'} | 📦 ${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</div>
-      </div>`).join('')}
-    </div>
-  </div>`;
+        <div style="font-size:12px;color:var(--dim)">🏭 ${op.stanowisko||'—'} | 📦 <span style="color:var(--green);font-weight:600">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</span></div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Sekcja: W trakcie realizacji
+  if (aktywne.length) {
+    html += `
+    <div style="background:rgba(243,156,18,.10);border:1px solid var(--orange);border-radius:12px;padding:14px 16px;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--orange);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
+        🔄 W trakcie (${aktywne.length})
+      </div>`;
+    aktywne.forEach(op => {
+      const prog = op.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana/op.ilosc_sztuk)*100) : 0;
+      html += `
+      <div style="border-bottom:1px solid rgba(243,156,18,.2);padding:7px 0">
+        <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
+        <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+          <div style="flex:1;background:var(--border);border-radius:3px;height:4px;overflow:hidden">
+            <div style="width:${prog}%;height:100%;background:var(--orange);border-radius:3px"></div>
+          </div>
+          <span style="font-size:11px;color:var(--dim)">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</span>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Sekcja: Następne operacje (kolejka)
+  if (nastepne.length) {
+    html += `
+    <div style="background:rgba(52,152,219,.10);border:1px solid var(--blue);border-radius:12px;padding:14px 16px;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--blue);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
+        ⏳ Kolejka – następne operacje (${nastepne.length})
+      </div>`;
+    nastepne.forEach(op => {
+      html += `
+      <div style="border-bottom:1px solid rgba(52,152,219,.2);padding:7px 0">
+        <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
+        <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
+        <div style="font-size:12px;color:var(--dim)">🏭 ${op.stanowisko||'—'}${op.czas_norma?' | ⏱ norma: '+op.czas_norma+' min':''}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (!zakonczone.length && !aktywne.length && !nastepne.length) {
+    html += `
+    <div style="background:rgba(39,174,96,.08);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;text-align:center">
+      <div style="color:var(--green);font-size:22px;margin-bottom:4px">✅</div>
+      <div style="font-size:13px;color:var(--dim)">Brak operacji do odbioru</div>
+    </div>`;
+  }
+
+  return html;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -2148,6 +2213,8 @@ function render() {
   for (const [sid, t] of Object.entries(state.timers)) {
     if (t.sesja) startTimerFor(t.sesja);
   }
+  // Obsługa kamery QR
+  afterRenderQR();
   // Narysuj QR jeśli modal QR otwarty
   if (state.qrGenModal && state.qrGenKod) {
     setTimeout(() => drawQRCanvas(state.qrGenKod), 50);
@@ -2244,12 +2311,9 @@ async function startQRCamera() {
   }
 }
 
-// Uruchom kamerę po renderze jeśli jesteśmy w trybie aparatu
-const _origRender = render;
-function render() {
+// Uruchom kamerę po renderze – wywoływane z głównej funkcji render() poniżej
+function afterRenderQR() {
   stopQRCamera();
-  _origRender();
-  // Jeśli QR scan mode aktywny i nie manual mode – uruchom kamerę
   if (state.qrScanMode && !state.qrManualMode && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
     setTimeout(startQRCamera, 100);
   }
@@ -2261,16 +2325,35 @@ function render() {
 // Wczytaj historię QR
 state.qrLastCodes = JSON.parse(localStorage.getItem('qr_historia')||'[]');
 
-// Załaduj info dla magazyniera na ekran logowania
+// Załaduj info produkcji na ekran logowania (bez auth – publiczny endpoint)
+let _loginInfoInterval = null;
+
 async function loadWarehouseLoginInfo() {
   if (!SERVER_URL || !API_KEY) return;
   try {
-    const ops = await get('/api/operacje/zakonczone-do-transportu');
-    setState({warehouseInfo: ops}, true);
+    const data = await get('/api/status/produkcja');
+    setState({warehouseInfo: data}, true);
     render();
-  } catch(e) { /* cicho – brak logowania */ }
+  } catch(e) {
+    // stary endpoint fallback
+    try {
+      const ops = await get('/api/operacje/zakonczone-do-transportu');
+      setState({warehouseInfo: {zakonczone: ops, nastepne: [], aktywne: []}}, true);
+      render();
+    } catch(_) { /* cicho */ }
+  }
 }
-if (SERVER_URL) loadWarehouseLoginInfo();
+
+function startLoginInfoRefresh() {
+  loadWarehouseLoginInfo();
+  if (_loginInfoInterval) clearInterval(_loginInfoInterval);
+  _loginInfoInterval = setInterval(loadWarehouseLoginInfo, 20000);
+}
+
+function stopLoginInfoRefresh() {
+  if (_loginInfoInterval) { clearInterval(_loginInfoInterval); _loginInfoInterval = null; }
+}
+if (SERVER_URL) startLoginInfoRefresh();
 
 // Auto-refresh co 30s
 setInterval(() => {

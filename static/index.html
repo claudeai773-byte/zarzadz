@@ -98,6 +98,19 @@
   .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
   .chip{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--entry);color:var(--dim);}
   .chip.active{background:var(--accent);color:#1a1f2e;border-color:var(--accent);}
+  .wyd-bar-wrap{height:10px;background:var(--border);border-radius:5px;overflow:hidden;flex:1;}
+  .wyd-bar{height:100%;border-radius:5px;transition:width .4s;}
+  .sub-tabs{display:flex;background:var(--entry);border-radius:8px;padding:3px;margin-bottom:14px;gap:2px;}
+  .sub-tab{flex:1;padding:8px 4px;border:none;background:transparent;color:var(--dim);border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;transition:all .2s;}
+  .sub-tab.active{background:var(--accent);color:#1a1f2e;}
+  @media print{
+    body{background:#fff !important;color:#000 !important;}
+    .no-print,.bottom-nav,.topbar,#print-overlay .btn-row{display:none !important;}
+    #print-overlay{position:fixed;inset:0;background:white;z-index:9999;display:block !important;}
+    .modal{border-radius:0;max-height:100vh !important;padding:16px;}
+    .modal-close,.btn-row{display:none !important;}
+    #print-content{box-shadow:none !important;}
+  }
 </style>
 </head>
 <body>
@@ -175,6 +188,22 @@ let state = {
   // QR gen
   qrGenModal: false,
   qrGenKod: '',
+  qrGenTitle: '',
+  qrZleceniePickerModal: null,
+
+  // Pracownik wydajność
+  pracaSubTab: 'praca',   // praca | wydajnosc
+  pracaWydajnosc: null,
+  pracaWydOkres: 'tydzien',
+
+  // Majster wydajność
+  wydajnoscMajster: null,
+  wydajnoscOkres: 'dzis',
+  majsterExpandedUser: null,
+
+  // Print modal
+  printModal: null,
+  printOps: [],
 };
 
 function setState(p, noRender) {
@@ -293,6 +322,24 @@ async function loadAdmin() {
   }
 }
 
+async function loadPracownikWydajnosc(okres) {
+  const o = okres || state.pracaWydOkres;
+  setState({pracaWydOkres: o});
+  try {
+    const w = await get(`/api/stats/wydajnosc/${state.user.id}?okres=${o}`);
+    setState({pracaWydajnosc: w});
+  } catch(e) { alert(e.message); }
+}
+
+async function loadWydajnoscMajster(okres) {
+  const o = okres || state.wydajnoscOkres;
+  setState({wydajnoscOkres: o});
+  try {
+    const w = await get(`/api/stats/wydajnosc?okres=${o}`);
+    setState({wydajnoscMajster: w});
+  } catch(e) { alert(e.message); }
+}
+
 // ══════════════════════════════════════════════════════════════
 //  ACTIONS
 // ══════════════════════════════════════════════════════════════
@@ -379,8 +426,60 @@ function showQRResult(res) {
       startSesja(op.id);
     }
   } else if (res.type === 'zlecenie') {
-    alert(`Zlecenie: ${res.data.numer} – ${res.data.nazwa}\nStatus: ${res.data.status}\nOperacje: ${res.operacje.length}`);
+    setState({qrZleceniePickerModal: {zlecenie: res.data, operacje: res.operacje}});
   }
+}
+
+function renderQRZleceniePickerModal() {
+  const m = state.qrZleceniePickerModal;
+  if (!m) return '';
+  const z = m.zlecenie;
+  const ops = m.operacje || [];
+  const dostepne = ops.filter(o => o.status !== 'zakonczone' && o.status !== 'anulowane');
+  let html = `
+  <div class="modal-overlay">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({qrZleceniePickerModal:null})">×</button>
+      <h3>📋 ${z.numer}</h3>
+      <div style="color:var(--dim);font-size:13px;margin-bottom:16px">${z.nazwa}</div>`;
+  if (!dostepne.length) {
+    html += `<div class="empty">Brak dostępnych operacji do rozpoczęcia</div>`;
+  } else {
+    html += `<div style="color:var(--dim);font-size:12px;margin-bottom:10px">Wybierz operację do rozpoczęcia:</div>`;
+    dostepne.forEach(op => {
+      const czyAktywna = (state.aktywnesje||[]).some(s => s.operacja_id === op.id);
+      html += `
+      <div class="card" style="padding:12px;margin-bottom:8px;cursor:${czyAktywna?'default':'pointer'}"
+           ${czyAktywna?'':'onclick="pickOperacjaFromQR('+op.id+')"'}>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:600">${op.kolejnosc}. ${op.nazwa}</div>
+            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min':''}</div>
+          </div>
+          <div>
+            ${czyAktywna
+              ? `<span class="badge badge-yellow">▶ W toku</span>`
+              : `<span class="badge" style="background:var(--accent);color:#000">${statusBadge_txt(op.status)}</span>`}
+          </div>
+        </div>
+      </div>`;
+    });
+  }
+  html += `
+      <button class="btn btn-outline" style="margin-top:8px" onclick="setState({qrZleceniePickerModal:null})">Anuluj</button>
+    </div>
+  </div>`;
+  return html;
+}
+
+function statusBadge_txt(s) {
+  const m = {nowe:'Nowe', w_toku:'W toku', zakonczone:'Zakończone', oczekuje:'Oczekuje', anulowane:'Anulowane'};
+  return m[s]||s;
+}
+
+async function pickOperacjaFromQR(opId) {
+  setState({qrZleceniePickerModal:null});
+  await startSesja(opId);
 }
 
 function loadTabData(tab) {
@@ -606,6 +705,100 @@ function renderBottomNav() {
 // ══════════════════════════════════════════════════════════════
 function renderPraca() {
   if (state.loading) return '<div class="spinner">⏳</div>';
+
+  const subTabs = [{id:'praca',label:'🔧 Praca'},{id:'wydajnosc',label:'📊 Wydajność'}];
+  let html = `
+  <div class="sub-tabs">
+    ${subTabs.map(t => `<button class="sub-tab ${state.pracaSubTab===t.id?'active':''}"
+      onclick="switchPracaTab('${t.id}')">${t.label}</button>`).join('')}
+  </div>`;
+
+  if (state.pracaSubTab === 'wydajnosc') return html + renderPracaWydajnosc();
+  return html + renderPracaGlowna();
+}
+
+function switchPracaTab(tab) {
+  setState({pracaSubTab: tab}, true);
+  if (tab === 'wydajnosc' && !state.pracaWydajnosc) {
+    loadPracownikWydajnosc(state.pracaWydOkres);
+  }
+  render();
+}
+
+function renderPracaWydajnosc() {
+  const w = state.pracaWydajnosc;
+  const okres = state.pracaWydOkres;
+  const okresLabels = {dzis:'Dziś', tydzien:'7 dni', miesiac:'30 dni'};
+
+  let html = `
+  <div class="chip-row">
+    ${Object.entries(okresLabels).map(([k,v]) =>
+      `<div class="chip ${okres===k?'active':''}" onclick="loadPracownikWydajnosc('${k}')">${v}</div>`
+    ).join('')}
+  </div>`;
+
+  if (!w) {
+    html += `<div class="empty">⏳ Ładowanie wydajności...</div>`;
+    return html;
+  }
+
+  const wydPct = w.normy_total > 0 ? Math.round(w.normy_ok/w.normy_total*100) : null;
+  const barColor = wydPct === null ? 'var(--dim)' : wydPct >= 90 ? 'var(--green)' : wydPct >= 70 ? 'var(--orange)' : 'var(--red)';
+
+  html += `
+  <div class="stats-grid" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:14px">
+    <div class="stat-box"><div class="stat-val">${w.sesji}</div><div class="stat-lbl">Sesji</div></div>
+    <div class="stat-box"><div class="stat-val">${w.sztuki}</div><div class="stat-lbl">Sztuk</div></div>
+    <div class="stat-box"><div class="stat-val">${w.godz}h</div><div class="stat-lbl">Godz.</div></div>
+  </div>`;
+
+  if (wydPct !== null) {
+    html += `
+    <div class="card" style="margin-bottom:14px;border-color:${barColor}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:13px;color:var(--dim)">Realizacja norm (${w.normy_ok}/${w.normy_total})</span>
+        <span style="font-weight:700;color:${barColor};font-size:18px">${wydPct}%</span>
+      </div>
+      <div class="wyd-bar-wrap"><div class="wyd-bar" style="width:${wydPct}%;background:${barColor}"></div></div>
+    </div>`;
+  }
+
+  html += `<div class="section-hdr">Historia sesji (${w.sesje.length})</div>`;
+  if (!w.sesje.length) {
+    html += `<div class="empty">Brak danych za wybrany okres</div>`;
+  } else {
+    w.sesje.forEach(s => {
+      const wPct = s.wyd_pct;
+      const wColor = wPct===null ? 'var(--dim)' : wPct>=90 ? 'var(--green)' : wPct>=70 ? 'var(--orange)' : 'var(--red)';
+      html += `
+      <div class="card" style="padding:10px;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="font-weight:600;font-size:13px">${s.op_nazwa}</div>
+            <div style="font-size:11px;color:var(--dim)">📋 ${s.zl_numer} | 🏭 ${s.stanowisko||'—'}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">
+              ⏱ ${s.czas_min} min${s.norma_min ? ' | norma: '+s.norma_min+' min' : ''} | 📦 ${s.ilosc_sztuk} szt.
+            </div>
+          </div>
+          ${wPct !== null ? `
+          <div style="text-align:right">
+            <div style="font-weight:700;font-size:18px;color:${wColor}">${wPct}%</div>
+            <div style="font-size:10px;color:var(--dim)">normy</div>
+          </div>` : ''}
+        </div>
+        ${wPct !== null ? `
+        <div class="wyd-bar-wrap" style="margin-top:6px">
+          <div class="wyd-bar" style="width:${Math.min(100,wPct)}%;background:${wColor}"></div>
+        </div>` : ''}
+      </div>`;
+    });
+  }
+
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadPracownikWydajnosc()">🔄 Odśwież</button>`;
+  return html;
+}
+
+function renderPracaGlowna() {
   let html = '';
 
   // QR skaner
@@ -759,11 +952,11 @@ function renderMajster() {
   const stats = state.majsterStats;
   if (!stats) return '<div class="empty">Ładowanie...</div>';
 
-  const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];
+  const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'podsumowanie',label:'📊 Podsumowanie'},{id:'wydajnosc',label:'🏆 Wydajność'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];
   let html = `
-  <div class="tabs">
+  <div class="tabs" style="flex-wrap:wrap;gap:2px">
     ${subTabs.map(t => `<button class="tab ${state.majsterSubTab===t.id?'active':''}"
-      onclick="setState({majsterSubTab:'${t.id}'})">${t.label}</button>`).join('')}
+      onclick="switchMajsterTab('${t.id}')">${t.label}</button>`).join('')}
   </div>`;
 
   if (state.majsterSubTab === 'live') {
@@ -878,7 +1071,165 @@ function renderMajster() {
     }
   }
 
-  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMajster()">🔄 Odśwież</button>`;
+  if (state.majsterSubTab === 'wydajnosc') {
+    html += renderMajsterWydajnosc();
+  }
+
+  if (state.majsterSubTab === 'podsumowanie') {
+    html += renderMajsterPodsumowanie(stats);
+  }
+
+  html += `<button class="btn-outline no-print" style="margin-top:8px" onclick="loadMajster()">🔄 Odśwież</button>`;
+  return html;
+}
+
+function switchMajsterTab(tab) {
+  setState({majsterSubTab: tab}, true);
+  if (tab === 'wydajnosc' && !state.wydajnoscMajster) {
+    loadWydajnoscMajster(state.wydajnoscOkres);
+  }
+  render();
+}
+
+function renderMajsterPodsumowanie(stats) {
+  const zlecenia = (stats?.zlecenia || []);
+  const wszystkie = state.zlecenia || [];
+  const aktywne = zlecenia;
+  const zakonczone = wszystkie.filter(z => z.status === 'zakonczone');
+  const anulowane = wszystkie.filter(z => z.status === 'anulowane');
+
+  let html = `
+  <div class="stats-grid" style="grid-template-columns:1fr 1fr 1fr 1fr;margin-bottom:14px">
+    <div class="stat-box"><div class="stat-val" style="color:var(--blue)">${aktywne.length}</div><div class="stat-lbl">Aktywnych</div></div>
+    <div class="stat-box"><div class="stat-val" style="color:var(--green)">${zakonczone.length}</div><div class="stat-lbl">Zakończonych</div></div>
+    <div class="stat-box"><div class="stat-val" style="color:var(--red)">${anulowane.length}</div><div class="stat-lbl">Anulowanych</div></div>
+    <div class="stat-box"><div class="stat-val">${stats.dzis_sztuk||0}</div><div class="stat-lbl">Sztuk dziś</div></div>
+  </div>
+  <div class="section-hdr">📋 Wszystkie aktywne zlecenia – szczegóły</div>`;
+
+  if (!aktywne.length) {
+    html += `<div class="empty">Brak aktywnych zleceń</div>`;
+  } else {
+    aktywne.forEach(z => {
+      const prog = z.op_total > 0 ? Math.round((z.op_done/z.op_total)*100) : 0;
+      const sztProg = z.ilosc_sztuk > 0 ? Math.round(((z.sztuki_wykonane||0)/z.ilosc_sztuk)*100) : 0;
+      const przeterminowane = z.termin && new Date(z.termin) < new Date();
+      const wartość = (z.cena_brutto_szt||0) * (z.ilosc_sztuk||0);
+
+      html += `
+      <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">⚠ TERMIN</span>':''}</div>
+            <div class="card-sub">${z.nazwa}</div>
+            ${z.termin?`<div class="card-sub">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
+          </div>
+          ${statusBadge(z.status)}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin:8px 0">
+          <span style="color:var(--dim)">Operacje</span>
+          <span>${z.op_done||0}/${z.op_total||0} (${prog}%)</span>
+          <span style="color:var(--dim)">Sztuki</span>
+          <span>${z.sztuki_wykonane||0}/${z.ilosc_sztuk} (${sztProg}%)</span>
+          ${wartość ? `<span style="color:var(--dim)">Wartość</span><span style="color:var(--accent)">${fmtPLN(wartość)}</span>` : ''}
+        </div>
+        <div style="margin-bottom:4px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:2px">
+            <span>Operacje</span><span>${prog}%</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
+          </div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:2px">
+            <span>Sztuki</span><span>${sztProg}%</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-bar" style="width:${sztProg}%;background:${sztProg>=100?'var(--green)':'var(--blue)'}"></div>
+          </div>
+        </div>
+      </div>`;
+    });
+  }
+  return html;
+}
+
+function renderMajsterWydajnosc() {
+  const w = state.wydajnoscMajster;
+  const okres = state.wydajnoscOkres;
+  const okresLabels = {dzis:'Dziś', tydzien:'7 dni', miesiac:'30 dni'};
+
+  let html = `
+  <div class="chip-row">
+    ${Object.entries(okresLabels).map(([k,v]) =>
+      `<div class="chip ${okres===k?'active':''}" onclick="loadWydajnoscMajster('${k}')">${v}</div>`
+    ).join('')}
+  </div>`;
+
+  if (!w) {
+    html += `<div class="empty">⏳ Ładowanie danych wydajności...</div>`;
+    return html;
+  }
+
+  if (!w.pracownicy.length) {
+    html += `<div class="empty">Brak danych za wybrany okres</div>`;
+    return html;
+  }
+
+  html += `<div class="section-hdr">🏆 Ranking pracowników – ${okresLabels[okres]}</div>`;
+
+  w.pracownicy.forEach((p, idx) => {
+    const medal = idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':'';
+    const wydPct = p.normy_total > 0 ? Math.round(p.normy_ok/p.normy_total*100) : null;
+    const barColor = wydPct===null ? 'var(--dim)' : wydPct>=90 ? 'var(--green)' : wydPct>=70 ? 'var(--orange)' : 'var(--red)';
+    const expanded = state.majsterExpandedUser === p.user_id;
+
+    html += `
+    <div class="card" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer"
+           onclick="setState({majsterExpandedUser: ${expanded ? 'null' : p.user_id}})">
+        <div>
+          <div style="font-weight:700">${medal} ${p.full_name}</div>
+          <div style="font-size:12px;color:var(--dim)">
+            ${p.sesji} sesji | ${p.sztuki} szt. | ${p.godz}h
+            ${wydPct!==null ? ` | normy: <span style="color:${barColor}">${wydPct}%</span>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          ${wydPct !== null ? `
+          <div style="text-align:right">
+            <div style="font-size:20px;font-weight:700;color:${barColor}">${wydPct}%</div>
+            <div style="font-size:10px;color:var(--dim)">${p.normy_ok}/${p.normy_total} norm</div>
+          </div>` : ''}
+          <span style="color:var(--dim)">${expanded?'▲':'▼'}</span>
+        </div>
+      </div>
+      ${wydPct !== null ? `
+      <div class="wyd-bar-wrap" style="margin-top:8px">
+        <div class="wyd-bar" style="width:${wydPct}%;background:${barColor}"></div>
+      </div>` : ''}
+      ${expanded && p.sesje.length ? `
+      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Ostatnie sesje:</div>
+        ${p.sesje.slice(0,10).map(s => {
+          const wColor = s.wyd_pct===null ? 'var(--dim)' : s.wyd_pct>=90 ? 'var(--green)' : s.wyd_pct>=70 ? 'var(--orange)' : 'var(--red)';
+          return `
+          <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid rgba(46,53,72,.3)">
+            <div>
+              <span>${s.op_nazwa}</span>
+              <span style="color:var(--dim)"> | ${s.zl_numer} | ${s.ilosc_sztuk} szt.</span>
+            </div>
+            <div style="text-align:right">
+              <span style="color:var(--dim)">${s.czas_min}min</span>
+              ${s.wyd_pct!==null?`<span style="color:${wColor};margin-left:6px;font-weight:700">${s.wyd_pct}%</span>`:''}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+    </div>`;
+  });
+
   return html;
 }
 
@@ -959,6 +1310,8 @@ function renderZlecenia() {
             <option value="zakonczone">zakonczone</option>
             <option value="anulowane">anulowane</option>
           </select>
+          <button class="btn-sm btn-accent" onclick="showQRForZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">📷 QR</button>
+          <button class="btn-sm btn-green" onclick="printZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">🖨 Karta</button>
           <button class="btn-sm btn-red" onclick="deleteZlecenie(${z.id})">🗑</button>
         </div>` : ''}
       </div>`;
@@ -967,6 +1320,9 @@ function renderZlecenia() {
 
   // Modal QR gen
   html += renderQRGenModal();
+
+  // Modal drukuj kartę
+  html += renderPrintModal();
 
   // Modal zlecenie
   if (state.zlecenieModal !== null) {
@@ -1056,7 +1412,6 @@ function renderOperacjeModal() {
           <div style="display:flex;gap:6px">
             <button class="btn-sm btn-blue" onclick="editOperacja(${JSON.stringify(op).replace(/"/g,'&quot;')})">✏</button>
             <button class="btn-sm btn-red" onclick="deleteOp(${op.id},${zl.id})">🗑</button>
-            <button class="btn-sm btn-accent" onclick="showQRForOp('${op.qr_code||''}','${op.nazwa}')">QR</button>
           </div>
         </div>
       </div>`;
@@ -1107,28 +1462,224 @@ async function deleteOp(opId, zlecenieId) {
   } catch(e) { alert('Błąd: '+e.message); }
 }
 
-function showQRForOp(qr, nazwa) {
-  if (!qr) { alert('Brak kodu QR'); return; }
-  setState({qrGenModal:true, qrGenKod:qr});
+function showQRForZlecenie(z) {
+  if (!z.qr_code) { alert('Brak kodu QR dla zlecenia'); return; }
+  setState({qrGenModal:true, qrGenKod:z.qr_code, qrGenTitle: z.numer + ' – ' + z.nazwa});
 }
 
 function renderQRGenModal() {
   if (!state.qrGenModal) return '';
   const kod = state.qrGenKod;
-  const qrUrl = `${SERVER_URL.replace(/\/$/,'')}/api/qr/${encodeURIComponent(kod)}`;
+  const title = state.qrGenTitle || kod;
   return `
   <div class="modal-overlay">
     <div class="modal" style="text-align:center">
       <button class="modal-close" onclick="setState({qrGenModal:false})">×</button>
-      <h3>📷 Kod QR</h3>
-      <div style="font-family:Consolas;font-size:14px;color:var(--accent);margin-bottom:16px">${kod}</div>
-      <img src="${qrUrl}?x-api-key=${API_KEY}" style="max-width:200px;background:white;padding:10px;border-radius:10px"
-           onerror="this.style.display='none';document.getElementById('qr-err').style.display='block'">
-      <div id="qr-err" style="display:none;color:var(--red);font-size:13px">Błąd ładowania QR (sprawdź połączenie z serwerem)</div>
+      <h3>📷 Kod QR zlecenia</h3>
+      <div style="font-family:Consolas;font-size:13px;color:var(--accent);margin-bottom:4px">${title}</div>
+      <div style="font-family:Consolas;font-size:11px;color:var(--dim);margin-bottom:16px">${kod}</div>
+      <canvas id="qr-canvas" style="background:white;padding:10px;border-radius:10px;display:block;margin:0 auto"></canvas>
+      <div id="qr-err" style="display:none;color:var(--red);font-size:13px;margin-top:8px">Błąd generowania QR</div>
       <div style="font-size:12px;color:var(--dim);margin-top:12px">Zrób zdjęcie lub wydrukuj</div>
       <button class="btn btn-outline" style="margin-top:16px;width:auto;padding:10px 24px" onclick="setState({qrGenModal:false})">Zamknij</button>
     </div>
   </div>`;
+}
+
+function drawQRCanvas(kod) {
+  // Simple QR rendering via server fetch with auth header, drawn onto canvas
+  const canvas = document.getElementById('qr-canvas');
+  if (!canvas) return;
+  const url = `${SERVER_URL.replace(/\/$/,'')}/api/qr/${encodeURIComponent(kod)}`;
+  fetch(url, {headers: {'x-api-key': API_KEY}})
+    .then(r => { if (!r.ok) throw new Error('HTTP '+r.status); return r.blob(); })
+    .then(blob => {
+      const img = new Image();
+      img.onload = () => {
+        canvas.width = img.width; canvas.height = img.height;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        URL.revokeObjectURL(img.src);
+      };
+      img.src = URL.createObjectURL(blob);
+    })
+    .catch(() => {
+      canvas.style.display = 'none';
+      const err = document.getElementById('qr-err');
+      if (err) err.style.display = 'block';
+    });
+}
+
+// ─── Karta zlecenia (druk) ────────────────────────────────────
+async function printZlecenie(z) {
+  let ops = [];
+  try { ops = await get(`/api/zlecenia/${z.id}/operacje`); } catch(e) {}
+  setState({printModal: {zlecenie: z, operacje: ops}});
+}
+
+function renderPrintModal() {
+  const m = state.printModal;
+  if (!m) return '';
+  const z = m.zlecenie;
+  const ops = m.operacje || [];
+
+  return `
+  <div class="modal-overlay" id="print-overlay">
+    <div class="modal" style="max-height:92vh;overflow-y:auto">
+      <button class="modal-close no-print" onclick="setState({printModal:null})">×</button>
+      <h3 class="no-print" style="margin-bottom:12px">🖨 Podgląd karty zlecenia</h3>
+
+      <div id="print-content" style="background:#fff;color:#000;padding:20px;border-radius:8px;border:1px solid #ddd">
+        <!-- NAGŁÓWEK -->
+        <div style="text-align:center;border-bottom:3px solid #000;padding-bottom:12px;margin-bottom:16px">
+          <div style="font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#555">Karta Zlecenia Produkcyjnego</div>
+          <div style="font-size:28px;font-weight:900;font-family:Consolas,monospace;margin:4px 0">${z.numer}</div>
+          <div style="font-size:16px;font-weight:600">${z.nazwa}</div>
+        </div>
+
+        <!-- INFO O ZLECENIU -->
+        <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px">
+          <tr style="background:#f5f5f5">
+            <td style="padding:7px 10px;font-weight:700;width:35%;border:1px solid #ccc">Ilość sztuk</td>
+            <td style="padding:7px 10px;border:1px solid #ccc;font-size:20px;font-weight:900;color:#000">${z.ilosc_sztuk} szt.</td>
+          </tr>
+          ${z.termin ? `<tr><td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Termin realizacji</td><td style="padding:7px 10px;border:1px solid #ccc">${fmtDate(z.termin)}</td></tr>` : ''}
+          ${z.opis ? `<tr><td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Opis</td><td style="padding:7px 10px;border:1px solid #ccc">${z.opis}</td></tr>` : ''}
+          <tr>
+            <td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Status</td>
+            <td style="padding:7px 10px;border:1px solid #ccc;text-transform:uppercase">${z.status}</td>
+          </tr>
+          <tr>
+            <td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Materiał od klienta</td>
+            <td style="padding:7px 10px;border:1px solid #ccc">${z.material_od_klienta ? '✓ Tak' : 'Nie'}</td>
+          </tr>
+        </table>
+
+        <!-- OPERACJE -->
+        ${ops.length ? `
+        <div style="font-weight:800;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #000;padding-bottom:4px">
+          Operacje produkcyjne (${ops.length})
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
+          <thead>
+            <tr style="background:#222;color:#fff">
+              <th style="padding:6px 8px;text-align:left;width:30px">Lp.</th>
+              <th style="padding:6px 8px;text-align:left">Operacja</th>
+              <th style="padding:6px 8px;text-align:left">Stanowisko</th>
+              <th style="padding:6px 8px;text-align:center">Norma</th>
+              <th style="padding:6px 8px;text-align:center">Wyk.</th>
+              <th style="padding:6px 8px;text-align:center">✓</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${ops.map((op,i) => `
+            <tr style="background:${i%2===0?'#f9f9f9':'#fff'}">
+              <td style="padding:7px 8px;border:1px solid #ddd;font-weight:700">${op.kolejnosc}</td>
+              <td style="padding:7px 8px;border:1px solid #ddd">
+                <div style="font-weight:600">${op.nazwa}</div>
+                ${op.opis_czynnosci ? `<div style="font-size:11px;color:#666;margin-top:2px">${op.opis_czynnosci}</div>` : ''}
+              </td>
+              <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
+              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center">${op.czas_norma||'—'} min</td>
+              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:60px"></td>
+              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:30px"></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>` : '<div style="color:#666;font-size:13px;margin-bottom:16px">Brak zdefiniowanych operacji</div>'}
+
+        <!-- QR KOD + PODPISY -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;border-top:2px solid #000;padding-top:12px;margin-top:8px">
+          <div>
+            ${z.qr_code ? `
+            <div style="margin-bottom:6px">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">KOD QR ZLECENIA</div>
+              <canvas id="print-qr-canvas" style="display:block;border:1px solid #ccc;padding:4px"></canvas>
+              <div style="font-family:Consolas;font-size:9px;margin-top:2px;color:#555">${z.qr_code}</div>
+            </div>` : ''}
+          </div>
+          <div style="text-align:right;font-size:12px">
+            <div style="margin-bottom:20px">
+              <div style="font-weight:700">Wydał</div>
+              <div style="border-top:1px solid #000;margin-top:20px;width:150px;text-align:center;padding-top:3px;font-size:10px">podpis i data</div>
+            </div>
+            <div>
+              <div style="font-weight:700">Przyjął</div>
+              <div style="border-top:1px solid #000;margin-top:20px;width:150px;text-align:center;padding-top:3px;font-size:10px">podpis i data</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-row no-print" style="margin-top:14px">
+        <button class="btn btn-accent" onclick="doPrint()">🖨 Drukuj kartę</button>
+        <button class="btn btn-outline" onclick="setState({printModal:null})">Zamknij</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function doPrint() {
+  const content = document.getElementById('print-content');
+  if (!content) return;
+  // Convert QR canvas to img before printing
+  const qrCanvas = document.getElementById('print-qr-canvas');
+  let qrImgSrc = null;
+  if (qrCanvas && qrCanvas.width > 0) {
+    qrImgSrc = qrCanvas.toDataURL();
+  }
+  let html = content.innerHTML;
+  if (qrImgSrc) {
+    html = html.replace(
+      'id="print-qr-canvas"',
+      `style="display:none" id="print-qr-canvas-hidden"`
+    );
+    html += `<img src="${qrImgSrc}" style="position:absolute;left:0;top:0" />`;
+  }
+  const win = window.open('', '_blank', 'width=720,height:1020');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>Karta zlecenia – ${state.printModal?.zlecenie?.numer||''}</title>
+    <style>
+      body{font-family:Arial,sans-serif;margin:10mm;background:#fff;}
+      @media print{body{margin:5mm;} @page{margin:10mm;}}
+    </style></head><body>${content.outerHTML}</body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 500);
+}
+
+// ─── Edycja operacji ─────────────────────────────────────────
+function editOperacja(op) {
+  const n = document.getElementById('op-nazwa');
+  const k = document.getElementById('op-kol');
+  const s = document.getElementById('op-stan');
+  const norma = document.getElementById('op-norma');
+  const opis = document.getElementById('op-opis');
+  if (n) n.value = op.nazwa;
+  if (k) k.value = op.kolejnosc;
+  if (s) s.value = op.stanowisko || '';
+  if (norma) norma.value = op.czas_norma || 0;
+  if (opis) opis.value = op.opis_czynnosci || '';
+  // swap button to update
+  const addBtn = document.querySelector('[onclick^="addOperacja"]');
+  if (addBtn) {
+    addBtn.textContent = '💾 Zapisz zmiany';
+    addBtn.setAttribute('onclick', `updateOperacja(${op.id}, ${state.operacjeModal.zlecenie.id})`);
+  }
+}
+
+async function updateOperacja(opId, zlecenieId) {
+  const nazwa = document.getElementById('op-nazwa')?.value?.trim();
+  if (!nazwa) { alert('Podaj nazwę operacji'); return; }
+  try {
+    await put(`/api/operacje/${opId}`, {
+      zlecenie_id: zlecenieId,
+      nazwa,
+      kolejnosc: parseInt(document.getElementById('op-kol').value)||1,
+      stanowisko: document.getElementById('op-stan').value,
+      czas_norma: parseFloat(document.getElementById('op-norma').value)||0,
+      opis_czynnosci: document.getElementById('op-opis')?.value||'',
+    });
+    await openOperacje(state.operacjeModal.zlecenie);
+  } catch(e) { alert('Błąd: '+e.message); }
 }
 
 async function loadKoszty(zlecenieId) {
@@ -1347,7 +1898,9 @@ function renderUstawienia() {
       Skaner QR ✅<br>
       Praca nieprodukcyjna ✅<br>
       Alerty norm ✅<br>
-      Podsumowanie kosztów ✅<br>
+      Wydajność pracowników ✅<br>
+      Podsumowanie zleceń (majster) ✅<br>
+      Wydruk karty zlecenia z QR ✅<br>
       Pełna administracja ✅
     </div>
   </div>`;
@@ -1375,7 +1928,8 @@ function renderContent() {
       ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
       ${tabContent()}
     </div>
-    ${renderBottomNav()}`;
+    ${renderBottomNav()}
+    ${renderQRZleceniePickerModal()}`;
 }
 
 function render() {
@@ -1383,6 +1937,30 @@ function render() {
   // Restart timerów po re-render
   for (const [sid, t] of Object.entries(state.timers)) {
     if (t.sesja) startTimerFor(t.sesja);
+  }
+  // Narysuj QR jeśli modal QR otwarty
+  if (state.qrGenModal && state.qrGenKod) {
+    setTimeout(() => drawQRCanvas(state.qrGenKod), 50);
+  }
+  // Narysuj QR na karcie zlecenia jeśli print modal otwarty
+  if (state.printModal && state.printModal.zlecenie?.qr_code) {
+    setTimeout(() => {
+      const canvas = document.getElementById('print-qr-canvas');
+      if (!canvas) return;
+      const kod = state.printModal.zlecenie.qr_code;
+      const url = `${SERVER_URL.replace(/\/$/,'')}/api/qr/${encodeURIComponent(kod)}`;
+      fetch(url, {headers: {'x-api-key': API_KEY}})
+        .then(r => { if (!r.ok) throw new Error(); return r.blob(); })
+        .then(blob => {
+          const img = new Image();
+          img.onload = () => {
+            canvas.width = img.width; canvas.height = img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            URL.revokeObjectURL(img.src);
+          };
+          img.src = URL.createObjectURL(blob);
+        }).catch(() => {});
+    }, 80);
   }
 }
 

@@ -7,168 +7,130 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>⚙ Produkcja</title>
-<link rel="manifest" href="/manifest.json">
 <style>
   :root {
-    --bg: #1a1f2e; --panel: #242938; --accent: #e8a020;
-    --text: #e8eaf0; --dim: #8892a4; --border: #2e3548;
-    --green: #27ae60; --red: #e74c3c; --blue: #3498db;
-    --orange: #f39c12; --entry: #1e2435;
+    --bg:#1a1f2e;--panel:#242938;--accent:#e8a020;
+    --text:#e8eaf0;--dim:#8892a4;--border:#2e3548;
+    --green:#27ae60;--red:#e74c3c;--blue:#3498db;
+    --orange:#f39c12;--entry:#1e2435;--purple:#9b59b6;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif;
-         min-height: 100vh; overflow-x: hidden; }
-
-  /* ── Layout ── */
-  #app { display: flex; flex-direction: column; min-height: 100vh; }
-  .topbar { background: var(--panel); padding: 12px 16px; display: flex;
-             align-items: center; justify-content: space-between;
-             border-bottom: 2px solid var(--accent); position: sticky; top: 0; z-index: 100; }
-  .topbar h1 { font-family: Consolas, monospace; font-size: 18px; color: var(--accent); }
-  .topbar .user-info { font-size: 12px; color: var(--dim); text-align: right; line-height: 1.4; }
-  .logout-btn { background: var(--red); color: white; border: none; padding: 6px 12px;
-                border-radius: 6px; cursor: pointer; font-size: 13px; }
-
-  .content { flex: 1; padding: 12px; max-width: 600px; margin: 0 auto; width: 100%; }
-
-  /* ── Login ── */
-  .login-card { background: var(--panel); border-radius: 16px; padding: 32px 24px;
-                margin: 40px auto; max-width: 380px; border: 1px solid var(--border); }
-  .login-card h2 { color: var(--accent); font-family: Consolas, monospace; font-size: 22px;
-                   text-align: center; margin-bottom: 8px; }
-  .login-card .subtitle { color: var(--dim); text-align: center; font-size: 13px; margin-bottom: 28px; }
-
-  /* ── Forms ── */
-  .field { margin-bottom: 16px; }
-  .field label { display: block; color: var(--dim); font-size: 12px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-  .field input, .field select, .field textarea {
-    width: 100%; background: var(--entry); color: var(--text); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px 14px; font-size: 15px; outline: none;
-    transition: border-color .2s; }
-  .field input:focus, .field select:focus { border-color: var(--accent); }
-  .field textarea { resize: vertical; min-height: 80px; font-family: inherit; }
-  select option { background: var(--panel); }
-
-  /* ── Buttons ── */
-  .btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px;
-         font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .15s;
-         text-align: center; }
-  .btn:active { opacity: .8; }
-  .btn-accent { background: var(--accent); color: #1a1f2e; }
-  .btn-green  { background: var(--green);  color: white; }
-  .btn-red    { background: var(--red);    color: white; }
-  .btn-blue   { background: var(--blue);   color: white; }
-  .btn-sm { padding: 8px 16px; width: auto; font-size: 13px; border-radius: 8px;
-             border: none; cursor: pointer; font-weight: 600; }
-  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--dim);
-                 padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; width: 100%; }
-
-  /* ── Cards ── */
-  .card { background: var(--panel); border-radius: 12px; padding: 16px;
-          margin-bottom: 12px; border: 1px solid var(--border); }
-  .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
-  .card-title { font-weight: 700; font-size: 15px; color: var(--text); }
-  .card-sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
-  .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-  .badge-green  { background: rgba(39,174,96,.2);  color: var(--green); }
-  .badge-orange { background: rgba(243,156,18,.2); color: var(--orange); }
-  .badge-red    { background: rgba(231,76,60,.2);  color: var(--red); }
-  .badge-blue   { background: rgba(52,152,219,.2); color: var(--blue); }
-  .badge-dim    { background: rgba(136,146,164,.15); color: var(--dim); }
-
-  /* ── Tabs ── */
-  .tabs { display: flex; background: var(--panel); border-radius: 10px; padding: 4px;
-           margin-bottom: 16px; gap: 2px; }
-  .tab { flex: 1; padding: 10px 4px; border: none; background: transparent; color: var(--dim);
-          border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all .2s; }
-  .tab.active { background: var(--accent); color: #1a1f2e; }
-
-  /* ── Timer ── */
-  .timer-card { background: linear-gradient(135deg, #1a2e1a, #1e2e1e);
-                border: 2px solid var(--green); border-radius: 16px; padding: 24px;
-                text-align: center; margin-bottom: 16px; }
-  .timer-display { font-family: Consolas, monospace; font-size: 48px; font-weight: 700;
-                   color: var(--green); letter-spacing: 4px; margin: 8px 0; }
-  .timer-label { color: var(--dim); font-size: 13px; margin-bottom: 4px; }
-  .timer-op { color: var(--text); font-size: 16px; font-weight: 600; margin: 8px 0; }
-  .timer-zl { color: var(--accent); font-size: 13px; }
-
-  /* ── Stats ── */
-  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-  .stat-box { background: var(--panel); border-radius: 10px; padding: 14px 12px;
-               text-align: center; border: 1px solid var(--border); }
-  .stat-val { font-size: 28px; font-weight: 700; color: var(--accent); font-family: Consolas, monospace; }
-  .stat-lbl { color: var(--dim); font-size: 11px; margin-top: 4px; }
-
-  /* ── Section headers ── */
-  .section-hdr { color: var(--dim); font-size: 11px; font-weight: 700; letter-spacing: 1px;
-                 text-transform: uppercase; margin-bottom: 10px; padding-bottom: 6px;
-                 border-bottom: 1px solid var(--border); }
-
-  /* ── Loading / Error ── */
-  .spinner { text-align: center; padding: 40px; color: var(--dim); font-size: 32px; }
-  .empty { text-align: center; padding: 40px; color: var(--dim); font-size: 14px; }
-  .error-banner { background: rgba(231,76,60,.15); border: 1px solid var(--red);
-                  color: var(--red); border-radius: 10px; padding: 12px 16px;
-                  margin-bottom: 12px; font-size: 14px; }
-
-  /* ── Bottom nav ── */
-  .bottom-nav { background: var(--panel); border-top: 1px solid var(--border);
-                display: flex; position: sticky; bottom: 0; z-index: 100; }
-  .nav-btn { flex: 1; padding: 10px 4px 14px; border: none; background: transparent;
-              color: var(--dim); cursor: pointer; display: flex; flex-direction: column;
-              align-items: center; gap: 3px; font-size: 10px; transition: color .2s; }
-  .nav-btn .icon { font-size: 22px; }
-  .nav-btn.active { color: var(--accent); }
-
-  /* ── Progress bar ── */
-  .progress-wrap { background: var(--border); border-radius: 4px; height: 6px; margin: 8px 0; overflow: hidden; }
-  .progress-bar  { height: 100%; border-radius: 4px; background: var(--green); transition: width .3s; }
-
-  /* ── Modal ── */
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 200;
-                   display: flex; align-items: flex-end; }
-  .modal { background: var(--panel); border-radius: 20px 20px 0 0; padding: 24px 20px 36px;
-            width: 100%; max-height: 80vh; overflow-y: auto; }
-  .modal h3 { font-size: 18px; margin-bottom: 20px; color: var(--accent); }
-  .modal-close { float: right; background: none; border: none; color: var(--dim);
-                  font-size: 24px; cursor: pointer; margin-top: -4px; }
-
-  /* ── Config screen ── */
-  .config-wrap { padding: 24px 16px; max-width: 420px; margin: 0 auto; }
-  .config-wrap h2 { color: var(--accent); font-family: Consolas, monospace; margin-bottom: 6px; }
-  .config-wrap p  { color: var(--dim); font-size: 13px; margin-bottom: 24px; }
-
-  @media (prefers-color-scheme: dark) { body { background: var(--bg); } }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;overflow-x:hidden;}
+  #app{display:flex;flex-direction:column;min-height:100vh;}
+  .topbar{background:var(--panel);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid var(--accent);position:sticky;top:0;z-index:100;}
+  .topbar h1{font-family:Consolas,monospace;font-size:18px;color:var(--accent);}
+  .topbar .user-info{font-size:12px;color:var(--dim);text-align:right;line-height:1.4;}
+  .logout-btn{background:var(--red);color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;}
+  .content{flex:1;padding:12px;max-width:640px;margin:0 auto;width:100%;padding-bottom:80px;}
+  .login-card{background:var(--panel);border-radius:16px;padding:32px 24px;margin:40px auto;max-width:380px;border:1px solid var(--border);}
+  .login-card h2{color:var(--accent);font-family:Consolas,monospace;font-size:22px;text-align:center;margin-bottom:8px;}
+  .login-card .subtitle{color:var(--dim);text-align:center;font-size:13px;margin-bottom:28px;}
+  .field{margin-bottom:16px;}
+  .field label{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;}
+  .field input,.field select,.field textarea{width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:15px;outline:none;transition:border-color .2s;}
+  .field input:focus,.field select:focus{border-color:var(--accent);}
+  .field textarea{resize:vertical;min-height:80px;font-family:inherit;}
+  select option{background:var(--panel);}
+  .btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s;text-align:center;}
+  .btn:active{opacity:.8;}
+  .btn-accent{background:var(--accent);color:#1a1f2e;}
+  .btn-green{background:var(--green);color:white;}
+  .btn-red{background:var(--red);color:white;}
+  .btn-blue{background:var(--blue);color:white;}
+  .btn-purple{background:var(--purple);color:white;}
+  .btn-sm{padding:8px 14px;width:auto;font-size:12px;border-radius:8px;border:none;cursor:pointer;font-weight:600;}
+  .btn-outline{background:transparent;border:1px solid var(--border);color:var(--dim);padding:10px 14px;border-radius:8px;cursor:pointer;font-size:14px;width:100%;}
+  .btn-row{display:flex;gap:8px;margin-top:8px;}
+  .btn-row .btn{flex:1;}
+  .card{background:var(--panel);border-radius:12px;padding:16px;margin-bottom:10px;border:1px solid var(--border);}
+  .card-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
+  .card-title{font-weight:700;font-size:15px;color:var(--text);}
+  .card-sub{color:var(--dim);font-size:12px;margin-top:2px;}
+  .badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;}
+  .badge-green{background:rgba(39,174,96,.2);color:var(--green);}
+  .badge-orange{background:rgba(243,156,18,.2);color:var(--orange);}
+  .badge-red{background:rgba(231,76,60,.2);color:var(--red);}
+  .badge-blue{background:rgba(52,152,219,.2);color:var(--blue);}
+  .badge-dim{background:rgba(136,146,164,.15);color:var(--dim);}
+  .badge-purple{background:rgba(155,89,182,.2);color:var(--purple);}
+  .tabs{display:flex;background:var(--panel);border-radius:10px;padding:4px;margin-bottom:16px;gap:2px;}
+  .tab{flex:1;padding:10px 4px;border:none;background:transparent;color:var(--dim);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;transition:all .2s;}
+  .tab.active{background:var(--accent);color:#1a1f2e;}
+  .timer-card{background:linear-gradient(135deg,#1a2e1a,#1e2e1e);border:2px solid var(--green);border-radius:16px;padding:20px;text-align:center;margin-bottom:10px;}
+  .timer-card.paused{border-color:var(--orange);background:linear-gradient(135deg,#2e2a1a,#2e2e1a);}
+  .timer-display{font-family:Consolas,monospace;font-size:42px;font-weight:700;color:var(--green);letter-spacing:4px;margin:6px 0;}
+  .timer-card.paused .timer-display{color:var(--orange);}
+  .timer-label{color:var(--dim);font-size:13px;}
+  .timer-op{color:var(--text);font-size:15px;font-weight:600;margin:6px 0;}
+  .timer-zl{color:var(--accent);font-size:13px;}
+  .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+  .stats-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;}
+  .stat-box{background:var(--panel);border-radius:10px;padding:14px 12px;text-align:center;border:1px solid var(--border);}
+  .stat-val{font-size:26px;font-weight:700;color:var(--accent);font-family:Consolas,monospace;}
+  .stat-lbl{color:var(--dim);font-size:11px;margin-top:4px;}
+  .section-hdr{color:var(--dim);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+  .spinner{text-align:center;padding:40px;color:var(--dim);font-size:32px;}
+  .empty{text-align:center;padding:40px;color:var(--dim);font-size:14px;}
+  .error-banner{background:rgba(231,76,60,.15);border:1px solid var(--red);color:var(--red);border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:14px;}
+  .alert-banner{background:rgba(243,156,18,.15);border:1px solid var(--orange);color:var(--orange);border-radius:10px;padding:12px 16px;margin-bottom:10px;font-size:13px;}
+  .bottom-nav{background:var(--panel);border-top:1px solid var(--border);display:flex;position:fixed;bottom:0;left:0;right:0;z-index:100;}
+  .nav-btn{flex:1;padding:8px 4px 12px;border:none;background:transparent;color:var(--dim);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;transition:color .2s;}
+  .nav-btn .icon{font-size:20px;}
+  .nav-btn.active{color:var(--accent);}
+  .progress-wrap{background:var(--border);border-radius:4px;height:6px;margin:8px 0;overflow:hidden;}
+  .progress-bar{height:100%;border-radius:4px;background:var(--green);transition:width .3s;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:flex;align-items:flex-end;}
+  .modal{background:var(--panel);border-radius:20px 20px 0 0;padding:24px 20px 40px;width:100%;max-height:90vh;overflow-y:auto;}
+  .modal h3{font-size:18px;margin-bottom:16px;color:var(--accent);}
+  .modal-close{float:right;background:none;border:none;color:var(--dim);font-size:24px;cursor:pointer;margin-top:-4px;}
+  .config-wrap{padding:24px 16px;max-width:420px;margin:0 auto;}
+  .config-wrap h2{color:var(--accent);font-family:Consolas,monospace;margin-bottom:6px;}
+  .config-wrap p{color:var(--dim);font-size:13px;margin-bottom:24px;}
+  .qr-input-row{display:flex;gap:8px;}
+  .qr-input-row input{flex:1;}
+  .qr-preview{width:100%;border-radius:10px;background:white;padding:10px;display:flex;justify-content:center;margin-top:8px;}
+  .qr-preview img{max-width:200px;max-height:200px;}
+  .tag{display:inline-block;background:var(--entry);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--dim);margin:2px 2px 0 0;}
+  table.data-table{width:100%;border-collapse:collapse;font-size:13px;}
+  table.data-table th{color:var(--dim);font-weight:600;padding:8px 6px;border-bottom:1px solid var(--border);text-align:left;}
+  table.data-table td{padding:8px 6px;border-bottom:1px solid rgba(46,53,72,.5);}
+  .nieprodukcyjna-card{border-color:var(--purple) !important;}
+  .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+  .chip{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--entry);color:var(--dim);}
+  .chip.active{background:var(--accent);color:#1a1f2e;border-color:var(--accent);}
 </style>
 </head>
 <body>
 <div id="app"></div>
-
 <script>
-// ════════════════════════════════════════════════════════════════════
-//  KONFIGURACJA – zmień SERVER_URL po deployu na Railway
-// ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
+//  CONFIG
+// ══════════════════════════════════════════════════════════════
 let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
 let SERVER_URL = CONFIG.server_url || '';
 let API_KEY    = CONFIG.api_key    || '';
+const HEADERS  = () => ({'Content-Type':'application/json','x-api-key':API_KEY});
 
-const HEADERS = () => ({ 'Content-Type': 'application/json', 'x-api-key': API_KEY });
-
-// ── API ──────────────────────────────────────────────────────────────
-async function api(path, opts = {}) {
+async function api(path, opts={}) {
   const url = SERVER_URL.replace(/\/$/, '') + path;
-  const res = await fetch(url, { headers: HEADERS(), ...opts });
+  const res = await fetch(url, {headers: HEADERS(), ...opts});
   if (!res.ok) {
     const t = await res.text().catch(() => 'Błąd serwera');
-    throw new Error(t);
+    let msg = t;
+    try { msg = JSON.parse(t).detail || t; } catch(_) {}
+    throw new Error(msg);
   }
   return res.json();
 }
 const get  = p => api(p);
-const post = (p, b) => api(p, { method: 'POST', body: JSON.stringify(b) });
+const post = (p,b) => api(p, {method:'POST', body:JSON.stringify(b)});
+const put  = (p,b) => api(p, {method:'PUT', body:JSON.stringify(b)});
+const del  = p => api(p, {method:'DELETE'});
+const patch= (p,b) => api(p, {method:'PATCH', body:JSON.stringify(b)});
 
-// ── State ─────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════════════
 let state = {
   screen: SERVER_URL ? 'login' : 'config',
   user: null,
@@ -178,201 +140,410 @@ let state = {
 
   // Pracownik
   operacje: [],
-  aktivnaSesja: null,
-  timerSec: 0,
-  timerInterval: null,
+  aktywnesje: [],         // wiele sesji równoległych
+  timers: {},             // sesja_id -> {sec, interval, paused}
+  qrScanMode: false,
+  qrLastCodes: [],        // historia QR
 
   // Majster
   majsterStats: null,
+  majsterSubTab: 'live',
 
   // Magazynier
   transportOps: [],
 
-  // Modal: stop
-  stopModal: false,
-  stopIlosc: 1,
-  stopUwagi: '',
+  // Zlecenia
+  zlecenia: [],
+  zlecenieModal: null,    // null | 'new' | {edytowane zlecenie}
+  operacjeModal: null,    // {zlecenie} | null
+  zlecenieKoszty: null,
+
+  // Admin
+  adminTab: 'uzytkownicy',
+  users: [],
+  stawki: [],
+  katalog: [],
+  userModal: null,
+  stawkaModal: null,
+  produktModal: null,
+
+  // Modal stop/pauza
+  stopModal: null,        // null | {sesja}
+  pauzaModal: null,
+  nieprodukcyjnaModal: false,
+
+  // QR gen
+  qrGenModal: false,
+  qrGenKod: '',
 };
 
-function setState(partial) {
-  state = { ...state, ...partial };
-  render();
+function setState(p, noRender) {
+  state = {...state, ...p};
+  if (!noRender) render();
 }
 
-// ── Timer ──────────────────────────────────────────────────────────────
-function startTimer(startISO) {
-  if (state.timerInterval) clearInterval(state.timerInterval);
+// ══════════════════════════════════════════════════════════════
+//  TIMERS (multi-sesja)
+// ══════════════════════════════════════════════════════════════
+function startTimerFor(sesja) {
+  if (state.timers[sesja.id]?.interval) clearInterval(state.timers[sesja.id].interval);
+  const isPaused = () => {
+    const pauzy = JSON.parse(sesja.pauzy || '[]');
+    return pauzy.length > 0 && !pauzy[pauzy.length-1].koniec;
+  };
   const update = () => {
-    const diff = Math.floor((Date.now() - new Date(startISO)) / 1000);
-    state.timerSec = diff;
-    const el = document.getElementById('timer-val');
-    if (el) el.textContent = fmtTime(diff);
+    const el = document.getElementById('timer-'+sesja.id);
+    if (!el) return;
+    const paused = isPaused();
+    // calc elapsed minus pauses
+    const start = new Date(sesja.start_time);
+    let elapsed = Math.floor((Date.now() - start) / 1000);
+    const pauzy = JSON.parse(sesja.pauzy || '[]');
+    for (const p of pauzy) {
+      if (p.koniec) {
+        elapsed -= Math.floor((new Date(p.koniec) - new Date(p.start)) / 1000);
+      } else {
+        elapsed -= Math.floor((Date.now() - new Date(p.start)) / 1000);
+      }
+    }
+    el.textContent = fmtTime(Math.max(0,elapsed));
+    el.style.color = paused ? 'var(--orange)' : 'var(--green)';
   };
   update();
-  state.timerInterval = setInterval(update, 1000);
+  const interval = setInterval(update, 1000);
+  state.timers[sesja.id] = {interval, sesja};
 }
-function stopTimer() {
-  if (state.timerInterval) clearInterval(state.timerInterval);
-  state.timerInterval = null;
+
+function stopAllTimers() {
+  for (const t of Object.values(state.timers)) {
+    if (t.interval) clearInterval(t.interval);
+  }
+  state.timers = {};
 }
+
 function fmtTime(sec) {
-  const h = String(Math.floor(sec / 3600)).padStart(2, '0');
-  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
-  const s = String(sec % 60).padStart(2, '0');
+  const h = String(Math.floor(sec/3600)).padStart(2,'0');
+  const m = String(Math.floor((sec%3600)/60)).padStart(2,'0');
+  const s = String(sec%60).padStart(2,'0');
   return `${h}:${m}:${s}`;
 }
 
-// ── Data loaders ──────────────────────────────────────────────────────
+function isPaused(sesja) {
+  const pauzy = JSON.parse(sesja.pauzy || '[]');
+  return pauzy.length > 0 && !pauzy[pauzy.length-1].koniec;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  DATA LOADERS
+// ══════════════════════════════════════════════════════════════
 async function loadPracownik() {
-  setState({ loading: true, error: null });
+  setState({loading:true, error:null});
   try {
-    const [ops, sesja] = await Promise.all([
+    const [ops, sesje] = await Promise.all([
       get('/api/operacje/aktywne'),
-      get(`/api/sesje/aktywna/${state.user.id}`),
+      get(`/api/sesje/aktywne/${state.user.id}`),
     ]);
-    if (sesja) startTimer(sesja.start_time);
-    else stopTimer();
-    setState({ operacje: ops, aktivnaSesja: sesja, loading: false });
+    stopAllTimers();
+    for (const s of sesje) startTimerFor(s);
+    setState({operacje:ops, aktywnesje:sesje, loading:false});
   } catch(e) {
-    setState({ loading: false, error: e.message });
-  }
-}
-async function loadMajster() {
-  setState({ loading: true, error: null });
-  try {
-    const stats = await get('/api/stats/majster');
-    setState({ majsterStats: stats, loading: false });
-  } catch(e) {
-    setState({ loading: false, error: e.message });
-  }
-}
-async function loadMagazynier() {
-  setState({ loading: true, error: null });
-  try {
-    const ops = await get('/api/operacje/zakonczone-do-transportu');
-    setState({ transportOps: ops, loading: false });
-  } catch(e) {
-    setState({ loading: false, error: e.message });
+    setState({loading:false, error:e.message});
   }
 }
 
-// ── Actions ────────────────────────────────────────────────────────────
-async function doLogin(username, password) {
-  setState({ loading: true, error: null });
+async function loadMajster() {
+  setState({loading:true, error:null});
   try {
-    const user = await post('/api/login', { username, password });
-    setState({ user, screen: 'main', loading: false, activeTab: defaultTab(user.role) });
-    loadTabData(defaultTab(user.role));
+    const stats = await get('/api/stats/majster');
+    setState({majsterStats:stats, loading:false});
   } catch(e) {
-    setState({ loading: false, error: 'Nieprawidłowy login lub hasło' });
+    setState({loading:false, error:e.message});
   }
 }
+
+async function loadMagazynier() {
+  setState({loading:true, error:null});
+  try {
+    const ops = await get('/api/operacje/zakonczone-do-transportu');
+    setState({transportOps:ops, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+async function loadZlecenia() {
+  setState({loading:true, error:null});
+  try {
+    const zl = await get('/api/zlecenia');
+    setState({zlecenia:zl, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+async function loadAdmin() {
+  setState({loading:true, error:null});
+  try {
+    const [users, stawki, katalog] = await Promise.all([
+      get('/api/users'), get('/api/stawki'), get('/api/katalog')
+    ]);
+    setState({users, stawki, katalog, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ACTIONS
+// ══════════════════════════════════════════════════════════════
+async function doLogin(username, password) {
+  setState({loading:true, error:null});
+  try {
+    const user = await post('/api/login', {username, password});
+    const tab = defaultTab(user.role);
+    setState({user, screen:'main', loading:false, activeTab:tab});
+    loadTabData(tab);
+  } catch(e) {
+    setState({loading:false, error:'Nieprawidłowy login lub hasło'});
+  }
+}
+
 function defaultTab(role) {
   if (role === 'magazynier') return 'magazyn';
-  if (role === 'majster') return 'majster';
+  if (role === 'majster')    return 'majster';
+  if (role === 'admin')      return 'admin';
   return 'praca';
 }
 
 async function startSesja(operacjaId) {
   try {
-    const res = await post('/api/sesje/start', {
-      operacja_id: operacjaId, user_id: state.user.id
-    });
+    await post('/api/sesje/start', {operacja_id:operacjaId, user_id:state.user.id, typ:'operacja'});
     await loadPracownik();
   } catch(e) {
     alert('Błąd: ' + e.message);
   }
 }
 
-async function stopSesja() {
-  if (!state.aktivnaSesja) return;
+async function startNieprodukcyjna(opis) {
   try {
-    await post('/api/sesje/stop', {
-      sesja_id: state.aktivnaSesja.id,
-      ilosc_sztuk: parseInt(state.stopIlosc) || 0,
-      uwagi: state.stopUwagi,
-    });
-    stopTimer();
-    setState({ stopModal: false, stopUwagi: '', stopIlosc: 1 });
+    await post('/api/sesje/start', {user_id:state.user.id, typ:'nieprodukcyjna', opis_nieprodukcyjnej:opis});
+    setState({nieprodukcyjnaModal:false});
     await loadPracownik();
   } catch(e) {
     alert('Błąd: ' + e.message);
+  }
+}
+
+async function togglePauza(sesja) {
+  try {
+    const paused = isPaused(sesja);
+    if (paused) {
+      await post('/api/sesje/pauza/stop', {sesja_id:sesja.id});
+    } else {
+      await post('/api/sesje/pauza/start', {sesja_id:sesja.id, powod:''});
+    }
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function stopSesja(sesjaId, ilosc, uwagi) {
+  try {
+    await post('/api/sesje/stop', {sesja_id:sesjaId, ilosc_sztuk:parseInt(ilosc)||0, uwagi:uwagi||''});
+    setState({stopModal:null});
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function scanQR(kod) {
+  if (!kod.trim()) return;
+  try {
+    const res = await get('/api/scan/' + encodeURIComponent(kod.trim()));
+    // dodaj do historii
+    const hist = [kod.trim(), ...state.qrLastCodes.filter(c=>c!==kod.trim())].slice(0,10);
+    setState({qrLastCodes: hist, qrScanMode:false});
+    localStorage.setItem('qr_historia', JSON.stringify(hist));
+    showQRResult(res);
+  } catch(e) {
+    alert('Nie znaleziono kodu QR: ' + kod);
+  }
+}
+
+function showQRResult(res) {
+  if (res.type === 'operacja') {
+    const op = res.data;
+    if (confirm(`Operacja: ${op.nazwa}\nZlecenie: ${op.zl_numer}\nStatus: ${op.status}\n\nRozpocząć tę operację?`)) {
+      startSesja(op.id);
+    }
+  } else if (res.type === 'zlecenie') {
+    alert(`Zlecenie: ${res.data.numer} – ${res.data.nazwa}\nStatus: ${res.data.status}\nOperacje: ${res.operacje.length}`);
   }
 }
 
 function loadTabData(tab) {
-  if (tab === 'praca')   loadPracownik();
-  if (tab === 'majster') loadMajster();
-  if (tab === 'magazyn') loadMagazynier();
+  if (tab==='praca')    loadPracownik();
+  if (tab==='majster')  loadMajster();
+  if (tab==='magazyn')  loadMagazynier();
+  if (tab==='zlecenia') loadZlecenia();
+  if (tab==='admin')    loadAdmin();
 }
 
 function switchTab(tab) {
-  setState({ activeTab: tab });
+  setState({activeTab:tab, error:null});
   loadTabData(tab);
 }
 
 function logout() {
-  stopTimer();
-  setState({ user: null, screen: 'login', aktivnaSesja: null, operacje: [] });
+  // Modal potwierdzenia dla magazyniera
+  if (state.user?.role === 'magazynier' && state.transportOps.length > 0) {
+    const n = state.transportOps.length;
+    if (!confirm(`⚠ Uwaga!\n\nMasz ${n} operacji czekających na transport.\nCzy na pewno chcesz się wylogować?`)) return;
+  }
+  stopAllTimers();
+  setState({user:null, screen:'login', aktywnesje:[], operacje:[], timers:{}});
 }
 
-// ── Render helpers ─────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  ZLECENIA CRUD
+// ══════════════════════════════════════════════════════════════
+async function saveZlecenie(data) {
+  try {
+    if (data.id) {
+      await put(`/api/zlecenia/${data.id}`, data);
+    } else {
+      await post('/api/zlecenia', data);
+    }
+    setState({zlecenieModal:null});
+    await loadZlecenia();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function deleteZlecenie(id) {
+  if (!confirm('Usunąć zlecenie i wszystkie jego operacje?')) return;
+  try {
+    await del(`/api/zlecenia/${id}`);
+    await loadZlecenia();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function changeZlecenieStatus(id, status) {
+  try {
+    await patch(`/api/zlecenia/${id}/status`, {status});
+    await loadZlecenia();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ADMIN CRUD helpers
+// ══════════════════════════════════════════════════════════════
+async function saveUser(data) {
+  try {
+    if (data.id) { await put(`/api/users/${data.id}`, data); }
+    else { await post('/api/users', data); }
+    setState({userModal:null});
+    await loadAdmin();
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+async function deleteUser(id) {
+  if (!confirm('Usunąć użytkownika?')) return;
+  try { await del(`/api/users/${id}`); await loadAdmin(); }
+  catch(e) { alert('Błąd: '+e.message); }
+}
+async function saveStawka(data) {
+  try {
+    if (data.id) { await put(`/api/stawki/${data.id}`, data); }
+    else { await post('/api/stawki', data); }
+    setState({stawkaModal:null});
+    await loadAdmin();
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+async function deleteStawka(id) {
+  if (!confirm('Usunąć stawkę?')) return;
+  try { await del(`/api/stawki/${id}`); await loadAdmin(); }
+  catch(e) { alert('Błąd: '+e.message); }
+}
+async function saveProdukt(data) {
+  try {
+    if (data.id) { await put(`/api/katalog/${data.id}`, data); }
+    else { await post('/api/katalog', data); }
+    setState({produktModal:null});
+    await loadAdmin();
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+async function deleteProdukt(id) {
+  if (!confirm('Usunąć produkt?')) return;
+  try { await del(`/api/katalog/${id}`); await loadAdmin(); }
+  catch(e) { alert('Błąd: '+e.message); }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  RENDER HELPERS
+// ══════════════════════════════════════════════════════════════
 function statusBadge(s) {
   const map = {
-    'w_toku': ['badge-orange', '🔄 w toku'],
-    'oczekuje': ['badge-dim', '⏳ oczekuje'],
-    'zakonczona': ['badge-green', '✅ ukończona'],
-    'nowe': ['badge-blue', '🆕 nowe'],
+    'w_toku':    ['badge-orange','🔄 w toku'],
+    'oczekuje':  ['badge-dim',   '⏳ oczekuje'],
+    'zakonczona':['badge-green', '✅ ukończona'],
+    'zakonczone':['badge-green', '✅ ukończone'],
+    'nowe':      ['badge-blue',  '🆕 nowe'],
+    'anulowane': ['badge-red',   '❌ anulowane'],
   };
   const [cls, label] = map[s] || ['badge-dim', s];
   return `<span class="badge ${cls}">${label}</span>`;
 }
-
 function roleName(r) {
-  return { admin: 'Administrator', technolog: 'Technolog', pracownik: 'Pracownik',
-           magazynier: 'Magazynier', majster: 'Majster' }[r] || r;
+  return {admin:'Administrator',technolog:'Technolog',pracownik:'Pracownik',
+          magazynier:'Magazynier',majster:'Majster'}[r] || r;
 }
+function fmtPLN(n) { return (n||0).toFixed(2)+' zł'; }
+function fmtDate(d) { return d ? d.substring(0,10) : '—'; }
 
-// ── Screens ────────────────────────────────────────────────────────────
-
+// ══════════════════════════════════════════════════════════════
+//  SCREEN: CONFIG
+// ══════════════════════════════════════════════════════════════
 function renderConfig() {
   return `
   <div class="config-wrap">
     <h2>⚙ Konfiguracja</h2>
-    <p>Wpisz adres serwera Railway i klucz API, aby połączyć aplikację z bazą danych.</p>
+    <p>Wpisz adres serwera Railway i klucz API.</p>
     <div class="field">
-      <label>URL Serwera Railway</label>
-      <input id="cfg-url" type="url" placeholder="https://produkcja-xxx.railway.app"
-             value="${SERVER_URL}" autocomplete="off">
+      <label>URL Serwera</label>
+      <input id="cfg-url" type="url" placeholder="https://produkcja-xxx.railway.app" value="${SERVER_URL}">
     </div>
     <div class="field">
       <label>Klucz API</label>
-      <input id="cfg-key" type="password" placeholder="zmien-mnie-na-bezpieczny-klucz"
-             value="${API_KEY}">
+      <input id="cfg-key" type="password" placeholder="klucz-api" value="${API_KEY}">
     </div>
     <button class="btn btn-accent" onclick="saveConfig()">💾 Zapisz i połącz</button>
-    <p style="margin-top:16px;font-size:12px;color:var(--dim);text-align:center">
-      Klucz API ustaw w Railway → Variables → API_KEY
-    </p>
   </div>`;
 }
-
 function saveConfig() {
   const url = document.getElementById('cfg-url').value.trim();
   const key = document.getElementById('cfg-key').value.trim();
-  if (!url || !key) { alert('Wypełnij oba pola'); return; }
-  SERVER_URL = url;
-  API_KEY    = key;
-  localStorage.setItem('produkcja_config', JSON.stringify({ server_url: url, api_key: key }));
-  setState({ screen: 'login' });
+  if (!url||!key) { alert('Wypełnij oba pola'); return; }
+  SERVER_URL=url; API_KEY=key;
+  localStorage.setItem('produkcja_config', JSON.stringify({server_url:url, api_key:key}));
+  setState({screen:'login'});
 }
 
+// ══════════════════════════════════════════════════════════════
+//  SCREEN: LOGIN
+// ══════════════════════════════════════════════════════════════
 function renderLogin() {
   return `
   <div style="padding:16px">
     <div class="login-card">
       <h2>⚙ PRODUKCJA</h2>
-      <p class="subtitle">System Zarządzania Produkcją</p>
+      <p class="subtitle">System Zarządzania Produkcją v4.0</p>
       ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
       <div class="field">
         <label>Login</label>
@@ -385,19 +556,20 @@ function renderLogin() {
                onkeydown="if(event.key==='Enter')doLogin(document.getElementById('lg-user').value,this.value)">
       </div>
       <button class="btn btn-accent" style="margin-top:8px"
-              onclick="doLogin(document.getElementById('lg-user').value, document.getElementById('lg-pass').value)"
-              ${state.loading ? 'disabled' : ''}>
+              onclick="doLogin(document.getElementById('lg-user').value,document.getElementById('lg-pass').value)"
+              ${state.loading?'disabled':''}>
         ${state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się'}
       </button>
-      <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">
-        ⚙ Zmień serwer
-      </button>
+      <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">⚙ Zmień serwer</button>
     </div>
   </div>`;
 }
 
+// ══════════════════════════════════════════════════════════════
+//  TOPBAR & NAV
+// ══════════════════════════════════════════════════════════════
 function renderTopbar() {
-  if (!state.user) return '';
+  const notifyDot = state.majsterStats?.alerty_norm?.length > 0 ? ' 🔴' : '';
   return `
   <div class="topbar">
     <h1>⚙ PRODUKCJA</h1>
@@ -414,71 +586,103 @@ function renderTopbar() {
 function renderBottomNav() {
   const role = state.user?.role;
   const tabs = [];
-  if (role !== 'magazynier') tabs.push({ id: 'praca', icon: '👷', label: 'Praca' });
-  if (role === 'magazynier' || role === 'admin') tabs.push({ id: 'magazyn', icon: '📦', label: 'Magazyn' });
-  if (role === 'majster' || role === 'admin')   tabs.push({ id: 'majster', icon: '🔧', label: 'Majster' });
-  if (role !== 'pracownik' && role !== 'magazynier') tabs.push({ id: 'zlecenia', icon: '📋', label: 'Zlecenia' });
-
+  if (role !== 'magazynier') tabs.push({id:'praca',icon:'👷',label:'Praca'});
+  if (role === 'magazynier' || role === 'admin') tabs.push({id:'magazyn',icon:'📦',label:'Magazyn'});
+  if (role === 'majster' || role === 'admin')    tabs.push({id:'majster',icon:'🔧',label:'Majster'});
+  if (role !== 'pracownik' && role !== 'magazynier') tabs.push({id:'zlecenia',icon:'📋',label:'Zlecenia'});
+  if (role === 'admin' || role === 'technolog')  tabs.push({id:'admin',icon:'⚙',label:'Admin'});
+  tabs.push({id:'ustawienia',icon:'🔩',label:'Ustawienia'});
   return `
   <nav class="bottom-nav">
     ${tabs.map(t => `
       <button class="nav-btn ${state.activeTab===t.id?'active':''}" onclick="switchTab('${t.id}')">
         <span class="icon">${t.icon}</span>${t.label}
       </button>`).join('')}
-    <button class="nav-btn ${state.activeTab==='ustawienia'?'active':''}" onclick="switchTab('ustawienia')">
-      <span class="icon">⚙</span>Ustawienia
-    </button>
   </nav>`;
 }
 
-// ── Tab: Praca (pracownik) ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  TAB: PRACA
+// ══════════════════════════════════════════════════════════════
 function renderPraca() {
-  const s = state;
-  if (s.loading) return `<div class="spinner">⏳</div>`;
-
+  if (state.loading) return '<div class="spinner">⏳</div>';
   let html = '';
 
-  // Aktywna sesja (timer)
-  if (s.aktivnaSesja) {
-    const sesja = s.aktivnaSesja;
+  // QR skaner
+  if (state.qrScanMode) {
+    const hist = JSON.parse(localStorage.getItem('qr_historia')||'[]');
     html += `
-    <div class="timer-card">
-      <div class="timer-label">⏱ AKTYWNA SESJA</div>
-      <div class="timer-display" id="timer-val">${fmtTime(s.timerSec)}</div>
-      <div class="timer-op">${sesja.op_nazwa}</div>
-      <div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>
-      <div style="color:var(--dim);font-size:12px;margin:4px 0 16px">${sesja.stanowisko||''}</div>
-      <button class="btn btn-red" onclick="setState({stopModal:true})">
-        ⏹ Zakończ operację
-      </button>
+    <div class="card" style="border-color:var(--blue)">
+      <div class="section-hdr" style="margin-bottom:12px">📷 Skaner QR</div>
+      <div class="qr-input-row field" style="margin-bottom:10px">
+        <input id="qr-input" type="text" placeholder="Skanuj lub wpisz kod QR"
+               autofocus onkeydown="if(event.key==='Enter')scanQR(this.value)">
+        <button class="btn-sm btn-accent" onclick="scanQR(document.getElementById('qr-input').value)">▶</button>
+      </div>
+      ${hist.length ? `
+      <div class="section-hdr">Historia QR</div>
+      ${hist.map(c => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span class="tag">${c}</span>
+          <button class="btn-sm btn-blue" onclick="scanQR('${c}')">Użyj</button>
+        </div>`).join('')}
+      ` : ''}
+      <button class="btn-outline" style="margin-top:10px" onclick="setState({qrScanMode:false})">✕ Zamknij</button>
     </div>`;
   } else {
     html += `
-    <div class="card" style="text-align:center;padding:20px 16px">
+    <div class="btn-row" style="margin-bottom:12px">
+      <button class="btn btn-blue" onclick="setState({qrScanMode:true})">📷 Skanuj QR</button>
+      <button class="btn btn-purple" onclick="setState({nieprodukcyjnaModal:true})">⏸ Nieprodukcyjna</button>
+    </div>`;
+  }
+
+  // Aktywne sesje (wielokrotne)
+  if (state.aktywnesje.length) {
+    html += `<div class="section-hdr">⏱ Aktywne sesje (${state.aktywnesje.length})</div>`;
+    state.aktywnesje.forEach(sesja => {
+      const paused = isPaused(sesja);
+      const isNieprod = sesja.typ === 'nieprodukcyjna';
+      html += `
+      <div class="timer-card ${paused?'paused':''} ${isNieprod?'nieprodukcyjna-card':''}">
+        <div class="timer-label">${isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : (paused ? '⏸ PAUZA' : '⏱ AKTYWNA')}</div>
+        <div class="timer-display" id="timer-${sesja.id}">00:00:00</div>
+        <div class="timer-op">${sesja.op_nazwa || sesja.uwagi || '—'}</div>
+        ${sesja.zl_numer ? `<div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>` : ''}
+        <div style="color:var(--dim);font-size:12px;margin:4px 0 12px">${sesja.stanowisko||''}</div>
+        <div class="btn-row">
+          ${!isNieprod ? `<button class="btn ${paused?'btn-green':'btn-accent'}" onclick="togglePauza(${JSON.stringify(sesja).replace(/"/g,'&quot;')})">
+            ${paused ? '▶ Wznów' : '⏸ Pauza'}
+          </button>` : ''}
+          <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesja).replace(/"/g,'&quot;')}})">
+            ⏹ Zakończ
+          </button>
+        </div>
+      </div>`;
+    });
+  } else {
+    html += `
+    <div class="card" style="text-align:center;padding:20px">
       <div style="font-size:36px;margin-bottom:8px">⏸</div>
       <div style="color:var(--dim);font-size:14px">Brak aktywnej sesji</div>
-      <div style="color:var(--dim);font-size:12px;margin-top:4px">Wybierz operację poniżej aby zacząć</div>
     </div>`;
   }
 
   // Lista operacji
   html += `<div class="section-hdr" style="margin-top:4px">Dostępne operacje</div>`;
-
-  if (!s.operacje.length) {
+  if (!state.operacje.length) {
     html += `<div class="empty">✅ Brak operacji do wykonania</div>`;
   } else {
-    s.operacje.forEach(op => {
-      const isActive = s.aktivnaSesja?.operacja_id === op.id;
-      const prog = op.ilosc_sztuk > 0
-        ? Math.min(100, Math.round((op.ilosc_wykonana / op.ilosc_sztuk) * 100))
-        : 0;
+    state.operacje.forEach(op => {
+      const jestAktywna = state.aktywnesje.some(s => s.operacja_id === op.id);
+      const prog = op.ilosc_sztuk > 0 ? Math.min(100, Math.round((op.ilosc_wykonana/op.ilosc_sztuk)*100)) : 0;
       html += `
-      <div class="card ${isActive ? 'card-active' : ''}" style="${isActive ? 'border-color:var(--green)' : ''}">
+      <div class="card" style="${jestAktywna?'border-color:var(--green)':''}">
         <div class="card-header">
           <div>
             <div class="card-title">${op.kolejnosc}. ${op.nazwa}</div>
             <div class="card-sub">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
-            <div class="card-sub" style="margin-top:2px">🏭 ${op.stanowisko||'—'}</div>
+            <div class="card-sub">🏭 ${op.stanowisko||'—'} ${op.czas_norma ? `⏱ norma: ${op.czas_norma}min` : ''}</div>
           </div>
           ${statusBadge(op.status)}
         </div>
@@ -486,39 +690,60 @@ function renderPraca() {
           <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:12px;color:var(--dim)">
-            ${op.ilosc_wykonana}/${op.ilosc_sztuk} szt. (${prog}%)
-          </span>
-          ${!isActive && !s.aktivnaSesja && op.status !== 'zakonczona' ? `
-          <button class="btn-sm btn-green" onclick="startSesja(${op.id})">▶ Start</button>
-          ` : ''}
-          ${isActive ? `<span style="color:var(--green);font-size:12px">● AKTYWNA</span>` : ''}
+          <span style="font-size:12px;color:var(--dim)">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt. (${prog}%)</span>
+          ${!jestAktywna && op.status !== 'zakonczona' ? `
+          <button class="btn-sm btn-green" onclick="startSesja(${op.id})">▶ Start</button>` : ''}
+          ${jestAktywna ? `<span style="color:var(--green);font-size:12px">● AKTYWNA</span>` : ''}
         </div>
       </div>`;
     });
   }
 
-  // Odśwież
   html += `<button class="btn-outline" style="margin-top:8px" onclick="loadPracownik()">🔄 Odśwież</button>`;
 
   // Modal stop
-  if (s.stopModal) {
+  if (state.stopModal) {
+    const s = state.stopModal;
     html += `
-    <div class="modal-overlay" onclick="if(event.target===this)setState({stopModal:false})">
+    <div class="modal-overlay">
       <div class="modal">
-        <button class="modal-close" onclick="setState({stopModal:false})">×</button>
+        <button class="modal-close" onclick="setState({stopModal:null})">×</button>
         <h3>⏹ Zakończ sesję</h3>
+        <p style="color:var(--dim);font-size:13px;margin-bottom:16px">${s.op_nazwa || s.uwagi || '—'}</p>
+        ${s.typ !== 'nieprodukcyjna' ? `
         <div class="field">
           <label>Liczba wykonanych sztuk</label>
-          <input type="number" id="stop-ilosc" value="${s.stopIlosc}" min="0"
-                 oninput="state.stopIlosc=this.value">
+          <input type="number" id="stop-ilosc" value="1" min="0">
+        </div>` : ''}
+        <div class="field">
+          <label>Uwagi</label>
+          <textarea id="stop-uwagi" placeholder="opcjonalnie..."></textarea>
+        </div>
+        <button class="btn btn-red" onclick="stopSesja(${s.id}, document.getElementById('stop-ilosc')?.value||0, document.getElementById('stop-uwagi').value)">
+          ✅ Potwierdź zakończenie
+        </button>
+      </div>
+    </div>`;
+  }
+
+  // Modal nieprodukcyjna
+  if (state.nieprodukcyjnaModal) {
+    const opcje = ['Awaria maszyny','Brak materiału','Szkolenie','Spotkanie','Przerwa obiadowa','Sprzątanie','Inne'];
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({nieprodukcyjnaModal:false})">×</button>
+        <h3>⏸ Praca nieprodukcyjna</h3>
+        <div class="chip-row">
+          ${opcje.map(o => `<div class="chip" onclick="document.getElementById('np-opis').value='${o}'">${o}</div>`).join('')}
         </div>
         <div class="field">
-          <label>Uwagi (opcjonalnie)</label>
-          <textarea id="stop-uwagi" placeholder="np. problem z narzędziem..."
-                    oninput="state.stopUwagi=this.value">${s.stopUwagi}</textarea>
+          <label>Opis</label>
+          <input id="np-opis" type="text" placeholder="Co się dzieje?">
         </div>
-        <button class="btn btn-red" onclick="stopSesja()">✅ Potwierdź zakończenie</button>
+        <button class="btn btn-purple" onclick="startNieprodukcyjna(document.getElementById('np-opis').value)">
+          ▶ Rozpocznij rejestrację
+        </button>
       </div>
     </div>`;
   }
@@ -526,89 +751,145 @@ function renderPraca() {
   return html;
 }
 
-// ── Tab: Majster ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  TAB: MAJSTER
+// ══════════════════════════════════════════════════════════════
 function renderMajster() {
-  if (state.loading) return `<div class="spinner">⏳</div>`;
+  if (state.loading) return '<div class="spinner">⏳</div>';
   const stats = state.majsterStats;
-  if (!stats) return `<div class="empty">Ładowanie...</div>`;
+  if (!stats) return '<div class="empty">Ładowanie...</div>';
 
+  const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];
   let html = `
-  <div class="stats-grid">
-    <div class="stat-box">
-      <div class="stat-val">${stats.aktywne_sesje.length}</div>
-      <div class="stat-lbl">pracowników online</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-val">${stats.dzis_sztuk || 0}</div>
-      <div class="stat-lbl">sztuk dziś</div>
-    </div>
+  <div class="tabs">
+    ${subTabs.map(t => `<button class="tab ${state.majsterSubTab===t.id?'active':''}"
+      onclick="setState({majsterSubTab:'${t.id}'})">${t.label}</button>`).join('')}
   </div>`;
 
-  // Aktywne sesje
-  html += `<div class="section-hdr">🟢 Pracownicy aktywni</div>`;
-  if (!stats.aktywne_sesje.length) {
-    html += `<div class="empty" style="padding:20px">Brak aktywnych sesji</div>`;
-  } else {
-    stats.aktywne_sesje.forEach(s => {
-      const elapsed = Math.floor((Date.now() - new Date(s.start_time)) / 1000);
-      html += `
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <div class="card-title">👤 ${s.full_name}</div>
-            <div class="card-sub">🔧 ${s.op_nazwa}</div>
-            <div class="card-sub">📋 ${s.zl_numer} – ${s.zl_nazwa}</div>
+  if (state.majsterSubTab === 'live') {
+    html += `
+    <div class="stats-grid-3">
+      <div class="stat-box"><div class="stat-val">${stats.aktywne_sesje.length}</div><div class="stat-lbl">online</div></div>
+      <div class="stat-box"><div class="stat-val">${stats.dzis_sztuk}</div><div class="stat-lbl">sztuk dziś</div></div>
+      <div class="stat-box"><div class="stat-val">${(stats.dzis_godz||0).toFixed(1)}</div><div class="stat-lbl">godz. dziś</div></div>
+    </div>
+    <div class="section-hdr">🟢 Pracownicy aktywni</div>`;
+    if (!stats.aktywne_sesje.length) {
+      html += `<div class="empty" style="padding:20px">Brak aktywnych sesji</div>`;
+    } else {
+      stats.aktywne_sesje.forEach(s => {
+        const elapsed = Math.floor((Date.now() - new Date(s.start_time))/1000);
+        const pauzList = JSON.parse(s.pauzy||'[]');
+        const hasPauza = pauzList.length > 0 && !pauzList[pauzList.length-1].koniec;
+        html += `
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">👤 ${s.full_name} ${hasPauza?'<span class="badge badge-orange">PAUZA</span>':''}</div>
+              <div class="card-sub">${s.typ==='nieprodukcyjna'?'⏸ Nieprodukcyjna':'🔧 '+s.op_nazwa}</div>
+              ${s.zl_numer?`<div class="card-sub">📋 ${s.zl_numer} – ${s.zl_nazwa}</div>`:''}
+            </div>
+            <div style="text-align:right">
+              <div style="font-family:Consolas;color:var(--green);font-size:16px">${fmtTime(elapsed)}</div>
+              ${s.czas_norma?`<div style="font-size:11px;color:var(--dim)">norma: ${s.czas_norma}min</div>`:''}
+            </div>
           </div>
-          <div style="text-align:right">
-            <div style="font-family:Consolas;color:var(--green);font-size:16px">${fmtTime(elapsed)}</div>
-            <div style="font-size:11px;color:var(--dim)">🏭 ${s.stanowisko||'—'}</div>
-          </div>
-        </div>
-      </div>`;
-    });
+        </div>`;
+      });
+    }
   }
 
-  // Postęp zleceń
-  html += `<div class="section-hdr" style="margin-top:8px">📋 Zlecenia w toku</div>`;
-  const aktZlecenia = stats.zlecenia.filter(z => z.status !== 'zakonczone');
-  if (!aktZlecenia.length) {
-    html += `<div class="empty" style="padding:20px">Brak aktywnych zleceń</div>`;
-  } else {
-    aktZlecenia.forEach(z => {
-      const prog = z.op_total > 0 ? Math.round((z.op_done / z.op_total) * 100) : 0;
-      html += `
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <div class="card-title">${z.numer}</div>
-            <div class="card-sub">${z.nazwa}</div>
+  if (state.majsterSubTab === 'zlecenia') {
+    html += `<div class="section-hdr">📋 Zlecenia w toku</div>`;
+    if (!stats.zlecenia.length) {
+      html += `<div class="empty">Brak aktywnych zleceń</div>`;
+    } else {
+      stats.zlecenia.forEach(z => {
+        const prog = z.op_total > 0 ? Math.round((z.op_done/z.op_total)*100) : 0;
+        const sztProg = z.ilosc_sztuk > 0 ? Math.round(((z.sztuki_wykonane||0)/z.ilosc_sztuk)*100) : 0;
+        const przeterminowane = z.termin && new Date(z.termin) < new Date();
+        html += `
+        <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
+          <div class="card-header">
+            <div>
+              <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
+              <div class="card-sub">${z.nazwa}</div>
+              ${z.termin?`<div class="card-sub">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
+            </div>
+            ${statusBadge(z.status)}
           </div>
-          ${statusBadge(z.status)}
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:6px">
-          <span>Operacje: ${z.op_done}/${z.op_total}</span>
-          <span>${prog}%</span>
-        </div>
-        <div class="progress-wrap">
-          <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
-        </div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:4px">
+            <span>Operacje: ${z.op_done}/${z.op_total}</span><span>${prog}%</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
+          </div>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">
+            Sztuki: ${z.sztuki_wykonane||0}/${z.ilosc_sztuk} (${sztProg}%)
+          </div>
+        </div>`;
+      });
+    }
+  }
+
+  if (state.majsterSubTab === 'koszty') {
+    html += `<div class="section-hdr">💰 Koszty pracowników dziś</div>`;
+    const koszty = stats.koszty_dzis || [];
+    if (!koszty.length) {
+      html += `<div class="empty">Brak danych</div>`;
+    } else {
+      let total = 0;
+      html += `<table class="data-table"><thead><tr><th>Pracownik</th><th>Stanowisko</th><th>Godz.</th><th>Koszt</th></tr></thead><tbody>`;
+      koszty.forEach(k => {
+        const koszt = k.koszt || 0;
+        total += koszt;
+        html += `<tr>
+          <td>${k.full_name}</td>
+          <td style="font-size:11px">${k.stanowisko||'—'}</td>
+          <td>${(k.godz||0).toFixed(1)}</td>
+          <td style="color:var(--accent)">${fmtPLN(koszt)}</td>
+        </tr>`;
+      });
+      html += `</tbody></table>
+      <div class="card" style="margin-top:10px;text-align:center">
+        <div style="font-size:12px;color:var(--dim)">ŁĄCZNIE DZIŚ</div>
+        <div style="font-size:28px;font-weight:700;color:var(--accent)">${fmtPLN(total)}</div>
       </div>`;
-    });
+    }
+  }
+
+  if (state.majsterSubTab === 'alerty') {
+    const alerty = stats.alerty_norm || [];
+    html += `<div class="section-hdr">⚠ Alerty norm (${alerty.length})</div>`;
+    if (!alerty.length) {
+      html += `<div class="card" style="text-align:center;padding:20px;border-color:var(--green)">
+        <div style="font-size:32px">✅</div>
+        <div style="color:var(--green);margin-top:8px">Wszystkie operacje w normie</div>
+      </div>`;
+    } else {
+      alerty.forEach(a => {
+        html += `
+        <div class="alert-banner">
+          <div style="font-weight:700">⚠ ${a.pracownik}</div>
+          <div>${a.operacja} | ${a.zlecenie}</div>
+          <div>Norma: ${a.norma_min} min | Czas: ${a.elapsed_min} min | <strong>+${a.przekroczenie_pct}%</strong></div>
+        </div>`;
+      });
+    }
   }
 
   html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMajster()">🔄 Odśwież</button>`;
   return html;
 }
 
-// ── Tab: Magazyn ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  TAB: MAGAZYN
+// ══════════════════════════════════════════════════════════════
 function renderMagazyn() {
-  if (state.loading) return `<div class="spinner">⏳</div>`;
-
-  let html = `<div class="section-hdr">📦 Operacje zakończone – do transportu</div>`;
-
+  if (state.loading) return '<div class="spinner">⏳</div>';
+  let html = `<div class="section-hdr">📦 Operacje zakończone – do transportu (${state.transportOps.length})</div>`;
   if (!state.transportOps.length) {
-    html += `
-    <div class="card" style="text-align:center;padding:30px">
+    html += `<div class="card" style="text-align:center;padding:30px">
       <div style="font-size:40px;margin-bottom:10px">✅</div>
       <div style="color:var(--green);font-size:16px;font-weight:600">Brak operacji do transportu</div>
     </div>`;
@@ -623,71 +904,458 @@ function renderMagazyn() {
           </div>
           <span class="badge badge-green">✅ ukończona</span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-          <div style="font-size:12px;color:var(--dim)">🏭 Stanowisko</div>
-          <div style="font-size:12px">${op.stanowisko||'—'}</div>
-          <div style="font-size:12px;color:var(--dim)">📦 Wykonano</div>
-          <div style="font-size:12px;color:var(--green);font-weight:600">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin-top:6px">
+          <span style="color:var(--dim)">🏭 Stanowisko</span><span>${op.stanowisko||'—'}</span>
+          <span style="color:var(--dim)">📦 Wykonano</span><span style="color:var(--green);font-weight:600">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</span>
         </div>
       </div>`;
     });
   }
-
   html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMagazynier()">🔄 Odśwież</button>`;
   return html;
 }
 
-// ── Tab: Zlecenia ────────────────────────────────────────────────────────
-async function loadZlecenia() {
-  setState({ loading: true, error: null });
-  try {
-    const zl = await get('/api/zlecenia');
-    setState({ zlecenia: zl, loading: false });
-  } catch(e) {
-    setState({ loading: false, error: e.message });
-  }
-}
+// ══════════════════════════════════════════════════════════════
+//  TAB: ZLECENIA (planowanie)
+// ══════════════════════════════════════════════════════════════
 function renderZlecenia() {
-  if (state.loading) return `<div class="spinner">⏳</div>`;
+  if (state.loading) return '<div class="spinner">⏳</div>';
+
+  const role = state.user?.role;
+  const canEdit = ['admin','technolog','majster'].includes(role);
+
+  let html = '';
+  if (canEdit) {
+    html += `<button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({zlecenieModal:{}})">+ Nowe zlecenie</button>`;
+  }
+
   const zl = state.zlecenia || [];
-  if (!zl.length) return `<div class="empty">Brak zleceń</div>`;
-  return zl.map(z => `
-  <div class="card">
-    <div class="card-header">
-      <div>
-        <div class="card-title">${z.numer}</div>
-        <div class="card-sub">${z.nazwa}</div>
-        ${z.termin ? `<div class="card-sub">📅 Termin: ${z.termin}</div>` : ''}
+  if (!zl.length) {
+    html += `<div class="empty">Brak zleceń</div>`;
+  } else {
+    zl.forEach(z => {
+      const przeterminowane = z.termin && new Date(z.termin) < new Date() && z.status !== 'zakonczone';
+      html += `
+      <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
+            <div class="card-sub">${z.nazwa}</div>
+            ${z.termin ? `<div class="card-sub">📅 ${fmtDate(z.termin)}</div>` : ''}
+            <div class="card-sub">📦 ${z.ilosc_sztuk} szt. ${z.cena_brutto_szt ? '| '+fmtPLN(z.cena_brutto_szt)+'/szt' : ''}</div>
+          </div>
+          ${statusBadge(z.status)}
+        </div>
+        ${canEdit ? `
+        <div class="btn-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+          <button class="btn-sm btn-blue" onclick="setState({zlecenieModal:${JSON.stringify(z).replace(/"/g,'&quot;')}})">✏ Edytuj</button>
+          <button class="btn-sm btn-accent" onclick="openOperacje(${JSON.stringify(z).replace(/"/g,'&quot;')})">🔧 Operacje</button>
+          <button class="btn-sm btn-green" onclick="loadKoszty(${z.id})">💰 Koszty</button>
+          <select style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px"
+                  onchange="changeZlecenieStatus(${z.id},this.value);this.value='${z.status}'">
+            <option value="${z.status}" disabled selected>▶ Status</option>
+            <option value="nowe">nowe</option>
+            <option value="w_toku">w_toku</option>
+            <option value="zakonczone">zakonczone</option>
+            <option value="anulowane">anulowane</option>
+          </select>
+          <button class="btn-sm btn-red" onclick="deleteZlecenie(${z.id})">🗑</button>
+        </div>` : ''}
+      </div>`;
+    });
+  }
+
+  // Modal QR gen
+  html += renderQRGenModal();
+
+  // Modal zlecenie
+  if (state.zlecenieModal !== null) {
+    const z = state.zlecenieModal;
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({zlecenieModal:null})">×</button>
+        <h3>${z.id ? '✏ Edytuj zlecenie' : '+ Nowe zlecenie'}</h3>
+        <div class="field"><label>Numer</label><input id="zl-numer" type="text" value="${z.numer||''}"></div>
+        <div class="field"><label>Nazwa</label><input id="zl-nazwa" type="text" value="${z.nazwa||''}"></div>
+        <div class="field"><label>Opis</label><textarea id="zl-opis">${z.opis||''}</textarea></div>
+        <div class="field"><label>Termin</label><input id="zl-termin" type="date" value="${z.termin||''}"></div>
+        <div class="field"><label>Ilość sztuk</label><input id="zl-ilosc" type="number" value="${z.ilosc_sztuk||1}" min="1"></div>
+        <div class="field"><label>Cena brutto/szt (zł)</label><input id="zl-cena" type="number" step="0.01" value="${z.cena_brutto_szt||0}"></div>
+        <div class="field">
+          <label>Materiał od klienta</label>
+          <select id="zl-mat">
+            <option value="0" ${!z.material_od_klienta?'selected':''}>Nie</option>
+            <option value="1" ${z.material_od_klienta?'selected':''}>Tak</option>
+          </select>
+        </div>
+        <button class="btn btn-accent" onclick="saveZlecenieForm(${z.id||0})">💾 Zapisz</button>
       </div>
-      ${statusBadge(z.status)}
-    </div>
-    <div style="font-size:12px;color:var(--dim);margin-top:6px">
-      📦 ${z.ilosc_sztuk} szt.
-    </div>
-  </div>`).join('');
+    </div>`;
+  }
+
+  // Modal operacje
+  if (state.operacjeModal) {
+    html += renderOperacjeModal();
+  }
+
+  // Modal koszty
+  if (state.zlecenieKoszty) {
+    html += renderKosztyModal();
+  }
+
+  return html;
 }
 
-// ── Tab: Ustawienia ─────────────────────────────────────────────────────
-function renderUstawienia() {
+function saveZlecenieForm(id) {
+  const data = {
+    numer: document.getElementById('zl-numer').value.trim(),
+    nazwa: document.getElementById('zl-nazwa').value.trim(),
+    opis: document.getElementById('zl-opis').value,
+    termin: document.getElementById('zl-termin').value || null,
+    ilosc_sztuk: parseInt(document.getElementById('zl-ilosc').value)||1,
+    cena_brutto_szt: parseFloat(document.getElementById('zl-cena').value)||0,
+    material_od_klienta: parseInt(document.getElementById('zl-mat').value)||0,
+  };
+  if (!data.numer||!data.nazwa) { alert('Numer i nazwa są wymagane'); return; }
+  if (id) data.id = id;
+  saveZlecenie(data);
+}
+
+async function openOperacje(zlecenie) {
+  setState({operacjeModal:{zlecenie, operacje:[], loading:true}});
+  try {
+    const ops = await get(`/api/zlecenia/${zlecenie.id}/operacje`);
+    setState({operacjeModal:{zlecenie, operacje:ops, loading:false}});
+  } catch(e) { alert(e.message); }
+}
+
+function renderOperacjeModal() {
+  const m = state.operacjeModal;
+  if (!m) return '';
+  const zl = m.zlecenie;
+  const ops = m.operacje || [];
+  let html = `
+  <div class="modal-overlay">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({operacjeModal:null})">×</button>
+      <h3>🔧 Operacje – ${zl.numer}</h3>
+      <p style="color:var(--dim);font-size:13px;margin-bottom:16px">${zl.nazwa}</p>`;
+
+  if (m.loading) {
+    html += `<div class="spinner">⏳</div>`;
+  } else {
+    ops.forEach((op,i) => {
+      html += `
+      <div class="card" style="padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:600">${op.kolejnosc}. ${op.nazwa}</div>
+            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'} ${op.czas_norma?'| norma: '+op.czas_norma+'min':''}</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="editOperacja(${JSON.stringify(op).replace(/"/g,'&quot;')})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteOp(${op.id},${zl.id})">🗑</button>
+            <button class="btn-sm btn-accent" onclick="showQRForOp('${op.qr_code||''}','${op.nazwa}')">QR</button>
+          </div>
+        </div>
+      </div>`;
+    });
+
+    html += `
+    <div class="card" style="border-color:var(--accent)">
+      <div class="section-hdr" style="margin-bottom:10px">+ Dodaj operację</div>
+      <div class="field"><label>Nazwa</label><input id="op-nazwa" type="text" placeholder="np. Toczenie wału"></div>
+      <div class="field"><label>Kolejność</label><input id="op-kol" type="number" value="${ops.length+1}" min="1"></div>
+      <div class="field"><label>Stanowisko</label>
+        <select id="op-stan">
+          <option value="">— wybierz —</option>
+          ${(state.stawki||[]).map(s=>`<option value="${s.stanowisko}">${s.stanowisko}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Norma (min)</label><input id="op-norma" type="number" step="0.5" value="0" min="0"></div>
+      <div class="field"><label>Opis czynności</label><textarea id="op-opis" style="min-height:60px"></textarea></div>
+      <button class="btn btn-green" onclick="addOperacja(${zl.id})">+ Dodaj operację</button>
+    </div>`;
+  }
+
+  html += `</div></div>`;
+  return html;
+}
+
+async function addOperacja(zlecenieId) {
+  const nazwa = document.getElementById('op-nazwa')?.value?.trim();
+  if (!nazwa) { alert('Podaj nazwę operacji'); return; }
+  try {
+    await post('/api/operacje', {
+      zlecenie_id: zlecenieId,
+      nazwa,
+      kolejnosc: parseInt(document.getElementById('op-kol').value)||1,
+      stanowisko: document.getElementById('op-stan').value,
+      czas_norma: parseFloat(document.getElementById('op-norma').value)||0,
+      opis_czynnosci: document.getElementById('op-opis').value,
+    });
+    await openOperacje(state.operacjeModal.zlecenie);
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+
+async function deleteOp(opId, zlecenieId) {
+  if (!confirm('Usunąć operację?')) return;
+  try {
+    await del(`/api/operacje/${opId}`);
+    await openOperacje(state.operacjeModal.zlecenie);
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+
+function showQRForOp(qr, nazwa) {
+  if (!qr) { alert('Brak kodu QR'); return; }
+  setState({qrGenModal:true, qrGenKod:qr});
+}
+
+function renderQRGenModal() {
+  if (!state.qrGenModal) return '';
+  const kod = state.qrGenKod;
+  const qrUrl = `${SERVER_URL.replace(/\/$/,'')}/api/qr/${encodeURIComponent(kod)}`;
   return `
-  <div class="card">
-    <div class="card-title" style="margin-bottom:12px">⚙ Ustawienia połączenia</div>
-    <div style="font-size:13px;color:var(--dim);word-break:break-all;margin-bottom:8px">
-      Serwer: <span style="color:var(--text)">${SERVER_URL || '(nie ustawiony)'}</span>
-    </div>
-    <button class="btn btn-blue" onclick="setState({screen:'config'})">🔧 Zmień serwer</button>
-  </div>
-  <div class="card" style="margin-top:12px">
-    <div class="card-title" style="margin-bottom:12px">ℹ O aplikacji</div>
-    <div style="font-size:13px;color:var(--dim);line-height:1.8">
-      System Zarządzania Produkcją v3.0<br>
-      Wersja mobilna (PWA)<br>
-      <span style="color:var(--accent)">●</span> Dane synchronizowane w chmurze
+  <div class="modal-overlay">
+    <div class="modal" style="text-align:center">
+      <button class="modal-close" onclick="setState({qrGenModal:false})">×</button>
+      <h3>📷 Kod QR</h3>
+      <div style="font-family:Consolas;font-size:14px;color:var(--accent);margin-bottom:16px">${kod}</div>
+      <img src="${qrUrl}?x-api-key=${API_KEY}" style="max-width:200px;background:white;padding:10px;border-radius:10px"
+           onerror="this.style.display='none';document.getElementById('qr-err').style.display='block'">
+      <div id="qr-err" style="display:none;color:var(--red);font-size:13px">Błąd ładowania QR (sprawdź połączenie z serwerem)</div>
+      <div style="font-size:12px;color:var(--dim);margin-top:12px">Zrób zdjęcie lub wydrukuj</div>
+      <button class="btn btn-outline" style="margin-top:16px;width:auto;padding:10px 24px" onclick="setState({qrGenModal:false})">Zamknij</button>
     </div>
   </div>`;
 }
 
-// ── Main render ─────────────────────────────────────────────────────────
+async function loadKoszty(zlecenieId) {
+  setState({loading:true});
+  try {
+    const k = await get(`/api/zlecenia/${zlecenieId}/koszty`);
+    setState({zlecenieKoszty:k, loading:false});
+  } catch(e) { setState({loading:false}); alert(e.message); }
+}
+
+function renderKosztyModal() {
+  const k = state.zlecenieKoszty;
+  if (!k) return '';
+  return `
+  <div class="modal-overlay">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({zlecenieKoszty:null})">×</button>
+      <h3>💰 Koszty – ${k.zlecenie.numer}</h3>
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-box"><div class="stat-val" style="font-size:20px">${fmtPLN(k.total_koszt)}</div><div class="stat-lbl">Koszt robocizny</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:20px">${fmtPLN(k.przychod)}</div><div class="stat-lbl">Przychód</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:20px;color:${k.marza>=0?'var(--green)':'var(--red)'}">${fmtPLN(k.marza)}</div><div class="stat-lbl">Marża</div></div>
+        <div class="stat-box"><div class="stat-val">${k.total_godz}h</div><div class="stat-lbl">Godz. pracy</div></div>
+      </div>
+      <div class="section-hdr">Sesje pracy</div>
+      ${k.sesje.map(s => `
+      <div class="card" style="padding:10px;margin-bottom:6px">
+        <div style="font-weight:600;font-size:13px">${s.pracownik}</div>
+        <div style="font-size:12px;color:var(--dim)">${s.operacja} | ${s.stanowisko||'—'}</div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px">
+          <span>${s.godz}h @ ${fmtPLN(s.stawka_godz)}/h</span>
+          <span style="color:var(--accent)">${fmtPLN(s.koszt)}</span>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: ADMIN
+// ══════════════════════════════════════════════════════════════
+function renderAdmin() {
+  if (state.loading) return '<div class="spinner">⏳</div>';
+  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'stawki',label:'💰 Stawki'},{id:'katalog',label:'📦 Katalog'}];
+  let html = `
+  <div class="tabs">
+    ${subTabs.map(t => `<button class="tab ${state.adminTab===t.id?'active':''}"
+      onclick="setState({adminTab:'${t.id}'})">${t.label}</button>`).join('')}
+  </div>`;
+
+  if (state.adminTab === 'uzytkownicy') {
+    html += `
+    <button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({userModal:{}})">+ Nowy użytkownik</button>`;
+    (state.users||[]).forEach(u => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">👤 ${u.full_name}</div>
+            <div class="card-sub">@${u.username} | ${roleName(u.role)}</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="setState({userModal:${JSON.stringify(u).replace(/"/g,'&quot;')}})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteUser(${u.id})">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    });
+
+    if (state.userModal !== null) {
+      const u = state.userModal;
+      html += `
+      <div class="modal-overlay">
+        <div class="modal">
+          <button class="modal-close" onclick="setState({userModal:null})">×</button>
+          <h3>${u.id?'✏ Edytuj':'+ Nowy użytkownik'}</h3>
+          ${!u.id ? `<div class="field"><label>Login</label><input id="u-login" type="text" value="${u.username||''}"></div>` : ''}
+          <div class="field"><label>Imię i nazwisko</label><input id="u-name" type="text" value="${u.full_name||''}"></div>
+          <div class="field">
+            <label>Rola</label>
+            <select id="u-role">
+              ${['pracownik','majster','technolog','magazynier','admin'].map(r =>
+                `<option value="${r}" ${u.role===r?'selected':''}>${roleName(r)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>${u.id?'Nowe hasło (puste = bez zmiany)':'Hasło'}</label><input id="u-pass" type="password"></div>
+          <button class="btn btn-accent" onclick="saveUserForm(${u.id||0})">💾 Zapisz</button>
+        </div>
+      </div>`;
+    }
+  }
+
+  if (state.adminTab === 'stawki') {
+    html += `<button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({stawkaModal:{}})">+ Nowa stawka</button>`;
+    (state.stawki||[]).forEach(s => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${s.stanowisko}</div>
+            <div class="card-sub">${fmtPLN(s.stawka_godz)}/h | norma: ${s.czas_norma_min||0} min</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="setState({stawkaModal:${JSON.stringify(s).replace(/"/g,'&quot;')}})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteStawka(${s.id})">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    });
+    if (state.stawkaModal !== null) {
+      const s = state.stawkaModal;
+      html += `
+      <div class="modal-overlay">
+        <div class="modal">
+          <button class="modal-close" onclick="setState({stawkaModal:null})">×</button>
+          <h3>${s.id?'✏ Edytuj stawkę':'+ Nowa stawka'}</h3>
+          <div class="field"><label>Stanowisko</label><input id="st-stan" type="text" value="${s.stanowisko||''}"></div>
+          <div class="field"><label>Stawka (zł/h)</label><input id="st-stawka" type="number" step="0.5" value="${s.stawka_godz||0}"></div>
+          <div class="field"><label>Norma czasu (min)</label><input id="st-norma" type="number" step="0.5" value="${s.czas_norma_min||0}"></div>
+          <div class="field"><label>Opis</label><input id="st-opis" type="text" value="${s.opis||''}"></div>
+          <button class="btn btn-accent" onclick="saveStawkaForm(${s.id||0})">💾 Zapisz</button>
+        </div>
+      </div>`;
+    }
+  }
+
+  if (state.adminTab === 'katalog') {
+    html += `<button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({produktModal:{}})">+ Nowy produkt</button>`;
+    (state.katalog||[]).forEach(p => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${p.nazwa}</div>
+            <div class="card-sub">${p.opis||'—'} | ${fmtPLN(p.cena_szt)}/szt | domyślnie: ${p.ilosc_domyslna} szt.</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="setState({produktModal:${JSON.stringify(p).replace(/"/g,'&quot;')}})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteProdukt(${p.id})">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    });
+    if (state.produktModal !== null) {
+      const p = state.produktModal;
+      html += `
+      <div class="modal-overlay">
+        <div class="modal">
+          <button class="modal-close" onclick="setState({produktModal:null})">×</button>
+          <h3>${p.id?'✏ Edytuj produkt':'+ Nowy produkt'}</h3>
+          <div class="field"><label>Nazwa</label><input id="pr-nazwa" type="text" value="${p.nazwa||''}"></div>
+          <div class="field"><label>Opis</label><textarea id="pr-opis">${p.opis||''}</textarea></div>
+          <div class="field"><label>Ilość domyślna</label><input id="pr-ilosc" type="number" value="${p.ilosc_domyslna||1}" min="1"></div>
+          <div class="field"><label>Cena (zł/szt)</label><input id="pr-cena" type="number" step="0.01" value="${p.cena_szt||0}"></div>
+          <button class="btn btn-accent" onclick="saveProduktForm(${p.id||0})">💾 Zapisz</button>
+        </div>
+      </div>`;
+    }
+  }
+
+  return html;
+}
+
+function saveUserForm(id) {
+  const data = {
+    full_name: document.getElementById('u-name')?.value?.trim(),
+    role: document.getElementById('u-role')?.value,
+    password: document.getElementById('u-pass')?.value || undefined,
+  };
+  if (!data.full_name) { alert('Podaj imię i nazwisko'); return; }
+  if (id) { data.id = id; }
+  else { data.username = document.getElementById('u-login')?.value?.trim(); data.password = document.getElementById('u-pass')?.value; }
+  saveUser(data);
+}
+function saveStawkaForm(id) {
+  const data = {
+    stanowisko: document.getElementById('st-stan')?.value?.trim(),
+    stawka_godz: parseFloat(document.getElementById('st-stawka')?.value)||0,
+    czas_norma_min: parseFloat(document.getElementById('st-norma')?.value)||0,
+    opis: document.getElementById('st-opis')?.value||'',
+  };
+  if (!data.stanowisko) { alert('Podaj nazwę stanowiska'); return; }
+  if (id) data.id = id;
+  saveStawka(data);
+}
+function saveProduktForm(id) {
+  const data = {
+    nazwa: document.getElementById('pr-nazwa')?.value?.trim(),
+    opis: document.getElementById('pr-opis')?.value||'',
+    ilosc_domyslna: parseInt(document.getElementById('pr-ilosc')?.value)||1,
+    cena_szt: parseFloat(document.getElementById('pr-cena')?.value)||0,
+  };
+  if (!data.nazwa) { alert('Podaj nazwę produktu'); return; }
+  if (id) data.id = id;
+  saveProdukt(data);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: USTAWIENIA
+// ══════════════════════════════════════════════════════════════
+function renderUstawienia() {
+  return `
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px">⚙ Połączenie</div>
+    <div style="font-size:13px;color:var(--dim);word-break:break-all;margin-bottom:8px">
+      Serwer: <span style="color:var(--text)">${SERVER_URL||'(nie ustawiony)'}</span>
+    </div>
+    <button class="btn btn-blue" onclick="setState({screen:'config'})">🔧 Zmień serwer</button>
+  </div>
+  <div class="card" style="margin-top:10px">
+    <div class="card-title" style="margin-bottom:6px">ℹ O aplikacji</div>
+    <div style="font-size:13px;color:var(--dim);line-height:2">
+      System Zarządzania Produkcją v4.0<br>
+      Wielokrotne sesje równoległe ✅<br>
+      Pauzy sesji ✅<br>
+      Skaner QR ✅<br>
+      Praca nieprodukcyjna ✅<br>
+      Alerty norm ✅<br>
+      Podsumowanie kosztów ✅<br>
+      Pełna administracja ✅
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MAIN RENDER
+// ══════════════════════════════════════════════════════════════
 function renderContent() {
   if (state.screen === 'config') return renderConfig();
   if (state.screen === 'login')  return renderLogin();
@@ -697,6 +1365,7 @@ function renderContent() {
     majster:    renderMajster,
     magazyn:    renderMagazyn,
     zlecenia:   renderZlecenia,
+    admin:      renderAdmin,
     ustawienia: renderUstawienia,
   }[state.activeTab] || (() => '');
 
@@ -711,20 +1380,22 @@ function renderContent() {
 
 function render() {
   document.getElementById('app').innerHTML = renderContent();
+  // Restart timerów po re-render
+  for (const [sid, t] of Object.entries(state.timers)) {
+    if (t.sesja) startTimerFor(t.sesja);
+  }
 }
 
-// ── Init ────────────────────────────────────────────────────────────────
-// Auto-refresh co 30 sekund gdy jest aktywna sesja
+// ══════════════════════════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════════════════════════
+// Wczytaj historię QR
+state.qrLastCodes = JSON.parse(localStorage.getItem('qr_historia')||'[]');
+
+// Auto-refresh co 30s
 setInterval(() => {
-  if (state.screen === 'main' && state.activeTab === 'praca' && !state.stopModal) {
-    // Cichy reload operacji
-    if (state.user) {
-      get('/api/operacje/aktywne').then(ops => {
-        state.operacje = ops;
-        // Nie re-render żeby nie przerwać timera
-        // Tylko aktualizuj karty operacji
-      }).catch(() => {});
-    }
+  if (state.screen === 'main' && !state.loading) {
+    if (state.activeTab === 'majster') loadMajster();
   }
 }, 30000);
 

@@ -366,6 +366,7 @@ class PauzaRequest(BaseModel):
 def start_sesja(req: StartSesjaRequest):
     import datetime
     now = datetime.datetime.utcnow().isoformat() + 'Z'
+    with get_db() as conn:
         if req.typ == "operacja" and req.operacja_id:
             # sprawdź czy ta konkretna operacja nie jest już aktywna przez tego usera
             existing = conn.execute(

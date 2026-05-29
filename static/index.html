@@ -204,6 +204,7 @@ let state = {
   // Print modal
   printModal: null,
   printOps: [],
+  warehouseInfo: null,
 };
 
 function setState(p, noRender) {
@@ -638,8 +639,10 @@ function saveConfig() {
 //  SCREEN: LOGIN
 // ══════════════════════════════════════════════════════════════
 function renderLogin() {
+  const warehouseInfo = state.warehouseInfo;
   return `
   <div style="padding:16px">
+    ${warehouseInfo ? renderWarehouseLoginPanel(warehouseInfo) : ''}
     <div class="login-card">
       <h2>⚙ PRODUKCJA</h2>
       <p class="subtitle">System Zarządzania Produkcją v4.0</p>
@@ -660,6 +663,24 @@ function renderLogin() {
         ${state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się'}
       </button>
       <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">⚙ Zmień serwer</button>
+    </div>
+  </div>`;
+}
+
+function renderWarehouseLoginPanel(info) {
+  if (!info || !info.length) return '';
+  return `
+  <div style="max-width:380px;margin:0 auto 12px">
+    <div style="background:rgba(39,174,96,.12);border:1px solid var(--green);border-radius:12px;padding:14px 16px">
+      <div style="font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
+        📦 Operacje czekające na odbiór (${info.length})
+      </div>
+      ${info.map(op => `
+      <div style="border-bottom:1px solid rgba(39,174,96,.2);padding:7px 0;last-child:border-none">
+        <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
+        <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
+        <div style="font-size:12px;color:var(--dim)">🏭 ${op.stanowisko||'—'} | 📦 ${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</div>
+      </div>`).join('')}
     </div>
   </div>`;
 }
@@ -971,9 +992,17 @@ function renderMajster() {
       html += `<div class="empty" style="padding:20px">Brak aktywnych sesji</div>`;
     } else {
       stats.aktywne_sesje.forEach(s => {
-        const elapsed = Math.floor((Date.now() - new Date(s.start_time))/1000);
         const pauzList = JSON.parse(s.pauzy||'[]');
         const hasPauza = pauzList.length > 0 && !pauzList[pauzList.length-1].koniec;
+        let elapsed = Math.floor((Date.now() - new Date(s.start_time))/1000);
+        for (const p of pauzList) {
+          if (p.koniec) {
+            elapsed -= Math.floor((new Date(p.koniec) - new Date(p.start))/1000);
+          } else {
+            elapsed -= Math.floor((Date.now() - new Date(p.start))/1000);
+          }
+        }
+        elapsed = Math.max(0, elapsed);
         html += `
         <div class="card">
           <div class="card-header">
@@ -1032,14 +1061,15 @@ function renderMajster() {
       html += `<div class="empty">Brak danych</div>`;
     } else {
       let total = 0;
-      html += `<table class="data-table"><thead><tr><th>Pracownik</th><th>Stanowisko</th><th>Godz.</th><th>Koszt</th></tr></thead><tbody>`;
+      html += `<table class="data-table"><thead><tr><th>Pracownik</th><th>Stanowisko</th><th>Min.</th><th>Koszt</th></tr></thead><tbody>`;
       koszty.forEach(k => {
         const koszt = k.koszt || 0;
         total += koszt;
+        const min = Math.round((k.godz||0) * 60);
         html += `<tr>
           <td>${k.full_name}</td>
           <td style="font-size:11px">${k.stanowisko||'—'}</td>
-          <td>${(k.godz||0).toFixed(1)}</td>
+          <td>${min}</td>
           <td style="color:var(--accent)">${fmtPLN(koszt)}</td>
         </tr>`;
       });
@@ -1063,9 +1093,9 @@ function renderMajster() {
       alerty.forEach(a => {
         html += `
         <div class="alert-banner">
-          <div style="font-weight:700">⚠ ${a.pracownik}</div>
-          <div>${a.operacja} | ${a.zlecenie}</div>
-          <div>Norma: ${a.norma_min} min | Czas: ${a.elapsed_min} min | <strong>+${a.przekroczenie_pct}%</strong></div>
+          <div style="font-weight:700">⚠ Przekroczono normę – ${a.zlecenie}, operacja: ${a.operacja}</div>
+          <div style="font-size:12px;margin-top:2px">👤 ${a.pracownik}</div>
+          <div>Norma: ${a.norma_min} min | Czas: ${a.elapsed_min} min | <strong style="font-size:15px">+${a.przekroczenie_pct}%</strong></div>
         </div>`;
       });
     }
@@ -1327,11 +1357,25 @@ function renderZlecenia() {
   // Modal zlecenie
   if (state.zlecenieModal !== null) {
     const z = state.zlecenieModal;
+    const isNew = !z.id;
     html += `
     <div class="modal-overlay">
       <div class="modal">
         <button class="modal-close" onclick="setState({zlecenieModal:null})">×</button>
         <h3>${z.id ? '✏ Edytuj zlecenie' : '+ Nowe zlecenie'}</h3>
+        ${isNew ? `
+        <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+          <div style="font-size:11px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+            📂 Wczytaj istniejące zlecenie (autouzupełnienie)
+          </div>
+          <div style="display:flex;gap:8px">
+            <input id="zl-search" type="text" placeholder="Wpisz numer lub nazwę..." 
+                   style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;outline:none"
+                   oninput="filterZleceniaSearch(this.value)"
+                   onfocus="filterZleceniaSearch(this.value)">
+          </div>
+          <div id="zl-search-results" style="margin-top:6px"></div>
+        </div>` : ''}
         <div class="field"><label>Numer</label><input id="zl-numer" type="text" value="${z.numer||''}"></div>
         <div class="field"><label>Nazwa</label><input id="zl-nazwa" type="text" value="${z.nazwa||''}"></div>
         <div class="field"><label>Opis</label><textarea id="zl-opis">${z.opis||''}</textarea></div>
@@ -1361,6 +1405,49 @@ function renderZlecenia() {
   }
 
   return html;
+}
+
+function filterZleceniaSearch(query) {
+  const container = document.getElementById('zl-search-results');
+  if (!container) return;
+  const q = query.trim().toLowerCase();
+  const zl = state.zlecenia || [];
+  const filtered = q.length < 1 ? [] : zl.filter(z =>
+    z.numer.toLowerCase().includes(q) || z.nazwa.toLowerCase().includes(q)
+  ).slice(0, 8);
+  if (!filtered.length) { container.innerHTML = ''; return; }
+  container.innerHTML = filtered.map(z => `
+    <div onclick="autofillZlecenie(${z.id})"
+         style="padding:8px 10px;cursor:pointer;border-radius:6px;border:1px solid var(--border);
+                background:var(--panel);margin-bottom:4px;font-size:13px;
+                display:flex;justify-content:space-between;align-items:center"
+         onmouseover="this.style.borderColor='var(--accent)'"
+         onmouseout="this.style.borderColor='var(--border)'">
+      <div>
+        <span style="font-weight:700;color:var(--accent)">${z.numer}</span>
+        <span style="color:var(--dim);margin-left:8px">${z.nazwa}</span>
+      </div>
+      <span style="font-size:11px;color:var(--dim)">📋 wczytaj</span>
+    </div>`).join('');
+}
+
+function autofillZlecenie(id) {
+  const z = (state.zlecenia||[]).find(x => x.id === id);
+  if (!z) return;
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  setVal('zl-numer', z.numer || '');
+  setVal('zl-nazwa', z.nazwa || '');
+  setVal('zl-opis',  z.opis  || '');
+  setVal('zl-termin', z.termin ? z.termin.substring(0,10) : '');
+  setVal('zl-ilosc', z.ilosc_sztuk || 1);
+  setVal('zl-cena',  z.cena_brutto_szt || 0);
+  const matEl = document.getElementById('zl-mat');
+  if (matEl) matEl.value = z.material_od_klienta ? '1' : '0';
+  // wyczyść wyszukiwarkę
+  const search = document.getElementById('zl-search');
+  if (search) search.value = '';
+  const results = document.getElementById('zl-search-results');
+  if (results) results.innerHTML = '';
 }
 
 function saveZlecenieForm(id) {
@@ -1969,6 +2056,17 @@ function render() {
 // ══════════════════════════════════════════════════════════════
 // Wczytaj historię QR
 state.qrLastCodes = JSON.parse(localStorage.getItem('qr_historia')||'[]');
+
+// Załaduj info dla magazyniera na ekran logowania
+async function loadWarehouseLoginInfo() {
+  if (!SERVER_URL || !API_KEY) return;
+  try {
+    const ops = await get('/api/operacje/zakonczone-do-transportu');
+    setState({warehouseInfo: ops}, true);
+    render();
+  } catch(e) { /* cicho – brak logowania */ }
+}
+if (SERVER_URL) loadWarehouseLoginInfo();
 
 // Auto-refresh co 30s
 setInterval(() => {

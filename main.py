@@ -132,10 +132,15 @@ def login(req: LoginRequest):
 def status_produkcja():
     """Publiczny podgląd statusu produkcji dla ekranu logowania – zakończone, aktywne i kolejne operacje"""
     with get_db() as conn:
-        # Zakończone – do odbioru przez magazyn
+        # Zakończone – do odbioru przez magazyn + info o następnej operacji
         zakonczone = conn.execute("""
             SELECT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.ilosc_wykonana, o.ilosc_sztuk,
-                   z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk as zl_ilosc
+                   z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk as zl_ilosc,
+                   (SELECT o2.stanowisko FROM operacje o2
+                    WHERE o2.zlecenie_id = o.zlecenie_id
+                      AND o2.kolejnosc > o.kolejnosc
+                      AND o2.status != 'anulowane'
+                    ORDER BY o2.kolejnosc LIMIT 1) as nastepna_operacja
             FROM operacje o
             JOIN zlecenia z ON o.zlecenie_id = z.id
             WHERE o.status = 'zakonczona'
@@ -360,9 +365,7 @@ class PauzaRequest(BaseModel):
 @app.post("/api/sesje/start", dependencies=[Depends(verify_key)])
 def start_sesja(req: StartSesjaRequest):
     import datetime
-    now = datetime.datetime.now().isoformat()
-    with get_db() as conn:
-        # Dla pracy nieprodukcyjnej pozwalamy na równoległe sesje
+    now = datetime.datetime.utcnow().isoformat() + 'Z'
         if req.typ == "operacja" and req.operacja_id:
             # sprawdź czy ta konkretna operacja nie jest już aktywna przez tego usera
             existing = conn.execute(
@@ -389,7 +392,7 @@ def start_sesja(req: StartSesjaRequest):
 @app.post("/api/sesje/pauza/start", dependencies=[Depends(verify_key)])
 def pauza_start(req: PauzaRequest):
     import datetime
-    now = datetime.datetime.now().isoformat()
+    now = datetime.datetime.utcnow().isoformat() + "Z"
     with get_db() as conn:
         sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
         if not sesja:
@@ -406,7 +409,7 @@ def pauza_start(req: PauzaRequest):
 @app.post("/api/sesje/pauza/stop", dependencies=[Depends(verify_key)])
 def pauza_stop(req: PauzaRequest):
     import datetime
-    now = datetime.datetime.now().isoformat()
+    now = datetime.datetime.utcnow().isoformat() + "Z"
     with get_db() as conn:
         sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
         if not sesja:
@@ -422,7 +425,7 @@ def pauza_stop(req: PauzaRequest):
 @app.post("/api/sesje/stop", dependencies=[Depends(verify_key)])
 def stop_sesja(req: StopSesjaRequest):
     import datetime
-    now = datetime.datetime.now().isoformat()
+    now = datetime.datetime.utcnow().isoformat() + "Z"
     with get_db() as conn:
         sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
         if not sesja:
@@ -705,8 +708,8 @@ def majster_stats():
             ORDER BY z.numer
         """).fetchall()
 
-        # wszystkie zlecenia (do historii)
-        wszystkie_zlecenia = conn.execute("""
+        # wszystkie zlecenia (do historii) z kosztami i zyskiem
+        wszystkie_zlecenia_raw = conn.execute("""
             SELECT z.id, z.numer, z.nazwa, z.status, z.ilosc_sztuk, z.termin,
                    z.cena_brutto_szt, z.created_at,
                    COUNT(o.id) as op_total,
@@ -717,6 +720,41 @@ def majster_stats():
             GROUP BY z.id
             ORDER BY z.created_at DESC
         """).fetchall()
+
+        # Oblicz koszty i zysk dla każdego zlecenia
+        import datetime
+        wszystkie_zlecenia = []
+        for z in wszystkie_zlecenia_raw:
+            sesje_z = conn.execute("""
+                SELECT s.start_time, s.end_time, s.pauzy, st.stawka_godz
+                FROM sesje_pracy s
+                JOIN operacje o ON s.operacja_id = o.id
+                LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
+                WHERE o.zlecenie_id=? AND s.status='zakonczona'
+                  AND s.typ IN ('operacja','inne')
+            """, (z["id"],)).fetchall()
+
+            total_koszt = 0.0
+            for s in sesje_z:
+                if not s["end_time"] or not s["start_time"]:
+                    continue
+                elapsed = (datetime.datetime.fromisoformat(s["end_time"].replace('Z','')) -
+                           datetime.datetime.fromisoformat(s["start_time"].replace('Z',''))).total_seconds() / 3600
+                pauzy = json.loads(s["pauzy"] or "[]")
+                for p in pauzy:
+                    if p.get("koniec"):
+                        elapsed -= (datetime.datetime.fromisoformat(p["koniec"].replace('Z','')) -
+                                    datetime.datetime.fromisoformat(p["start"].replace('Z',''))).total_seconds() / 3600
+                total_koszt += max(0, elapsed) * (s["stawka_godz"] or 0)
+
+            przychod = (z["cena_brutto_szt"] or 0) * (z["ilosc_sztuk"] or 0)
+            marza = przychod - total_koszt
+
+            zd = dict(z)
+            zd["total_koszt"] = round(total_koszt, 2)
+            zd["przychod"] = round(przychod, 2)
+            zd["marza"] = round(marza, 2)
+            wszystkie_zlecenia.append(zd)
 
         # alerty norm (sesje przekraczające normę)
         alerty = conn.execute("""
@@ -733,7 +771,7 @@ def majster_stats():
         import datetime
         alert_list = []
         for a in alerty:
-            elapsed_min = (datetime.datetime.now() - datetime.datetime.fromisoformat(a["start_time"])).total_seconds() / 60
+            elapsed_min = (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(a["start_time"].replace('Z',''))).total_seconds() / 60
             # odejmij pauzy
             pauzy = json.loads(a["pauzy"] or "[]")
             for p in pauzy:
@@ -773,7 +811,7 @@ def majster_stats():
         "dzis_sztuk": dzis[1] or 0,
         "dzis_godz": round(dzis[2] or 0, 2),
         "zlecenia": [dict(r) for r in zlecenia],
-        "wszystkie_zlecenia": [dict(r) for r in wszystkie_zlecenia],
+        "wszystkie_zlecenia": wszystkie_zlecenia,
         "alerty_norm": alert_list,
         "koszty_dzis": [dict(r) for r in koszty],
     }
@@ -975,14 +1013,14 @@ def koszty_zlecenia(zid: int):
         rows = []
         for s in sesje:
             import datetime
-            elapsed = (datetime.datetime.fromisoformat(s["end_time"]) -
-                       datetime.datetime.fromisoformat(s["start_time"])).total_seconds() / 3600
+            elapsed = (datetime.datetime.fromisoformat(s["end_time"].replace('Z','')) -
+                       datetime.datetime.fromisoformat(s["start_time"].replace('Z',''))).total_seconds() / 3600
             # odejmij pauzy
             pauzy = json.loads(s["pauzy"] or "[]")
             for p in pauzy:
                 if p.get("koniec"):
-                    pause_sec = (datetime.datetime.fromisoformat(p["koniec"]) -
-                                 datetime.datetime.fromisoformat(p["start"])).total_seconds()
+                    pause_sec = (datetime.datetime.fromisoformat(p["koniec"].replace('Z','')) -
+                                 datetime.datetime.fromisoformat(p["start"].replace('Z',''))).total_seconds()
                     elapsed -= pause_sec / 3600
             koszt = elapsed * (s["stawka_godz"] or 0)
             total_koszt += koszt

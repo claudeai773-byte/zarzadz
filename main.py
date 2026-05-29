@@ -1,28 +1,26 @@
 """
-Serwer FastAPI dla Systemu Zarządzania Produkcją
-Deploy na Railway.app (darmowy plan)
+Serwer FastAPI dla Systemu Zarządzania Produkcją v4.0
+Deploy na Railway.app
 """
 
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
-import sqlite3, os, json, hashlib, time
+import sqlite3, os, json, hashlib, time, io
 from contextlib import contextmanager
 
 # ─── Konfiguracja ──────────────────────────────────────────────────────────────
-# Railway daje /data jako persistent volume (dodaj w Railway → Variables)
 DB_PATH  = os.environ.get("DB_PATH",  "/data/produkcja.db")
 API_KEY  = os.environ.get("API_KEY",  "zmien-mnie-na-bezpieczny-klucz")
 PORT     = int(os.environ.get("PORT", 8000))
 
-# Fallback dla lokalnych testów
 if not os.path.exists(os.path.dirname(DB_PATH)):
     DB_PATH = os.path.join(os.path.dirname(__file__), "produkcja.db")
 
-app = FastAPI(title="Produkcja API", version="3.0")
+app = FastAPI(title="Produkcja API", version="4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,7 +51,9 @@ def get_db():
     finally:
         conn.close()
 
-# ─── SQL Proxy (dla aplikacji PC – drop-in replacement) ────────────────────────
+def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
+
+# ─── SQL Proxy ────────────────────────────────────────────────────────────────
 class SQLRequest(BaseModel):
     sql: str
     params: List[Any] = []
@@ -62,28 +62,21 @@ class SQLRequest(BaseModel):
     params_list: List[List[Any]] = []
 
 class TransactionRequest(BaseModel):
-    operations: List[dict]  # [{sql, params}]
+    operations: List[dict]
 
 @app.post("/sql", dependencies=[Depends(verify_key)])
 def execute_sql(req: SQLRequest):
-    """
-    Proxy SQL – używany przez aplikację PC (RemoteConnection).
-    Każda operacja jest atomowa (auto-commit).
-    """
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         cur = conn.cursor()
-
         if req.many and req.params_list:
             cur.executemany(req.sql, req.params_list)
             conn.commit()
             conn.close()
             return {"rowcount": cur.rowcount, "lastrowid": cur.lastrowid}
-
         cur.execute(req.sql, req.params)
-
         is_read = req.sql.strip().upper().startswith(("SELECT", "PRAGMA", "WITH"))
         if is_read:
             rows = cur.fetchall()
@@ -95,17 +88,11 @@ def execute_sql(req: SQLRequest):
             rowcount  = cur.rowcount
             conn.close()
             return {"lastrowid": lastrowid, "rowcount": rowcount}
-
     except sqlite3.Error as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/transaction", dependencies=[Depends(verify_key)])
 def execute_transaction(req: TransactionRequest):
-    """
-    Transakcja atomowa – wiele operacji w jednym commicie.
-    Zwraca lastrowid każdej operacji.
-    """
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -122,14 +109,12 @@ def execute_transaction(req: TransactionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─── REST API dla aplikacji mobilnej ──────────────────────────────────────────
+# ─── REST API ─────────────────────────────────────────────────────────────────
 
 # Auth
 class LoginRequest(BaseModel):
     username: str
     password: str
-
-def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
 
 @app.post("/api/login")
 def login(req: LoginRequest):
@@ -143,7 +128,33 @@ def login(req: LoginRequest):
     return {"id": row[0], "username": row[1], "full_name": row[2], "role": row[3]}
 
 
-# Zlecenia
+# ─── QR Code scan ─────────────────────────────────────────────────────────────
+@app.get("/api/scan/{qr}", dependencies=[Depends(verify_key)])
+def scan_qr(qr: str):
+    """Szuka operacji lub zlecenia po QR kodzie"""
+    with get_db() as conn:
+        # szukaj operacji
+        op = conn.execute("""
+            SELECT o.*, z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk
+            FROM operacje o
+            JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE o.qr_code=?
+        """, (qr,)).fetchone()
+        if op:
+            return {"type": "operacja", "data": dict(op)}
+
+        # szukaj zlecenia
+        zl = conn.execute("SELECT * FROM zlecenia WHERE qr_code=?", (qr,)).fetchone()
+        if zl:
+            ops = conn.execute(
+                "SELECT * FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc", (zl["id"],)
+            ).fetchall()
+            return {"type": "zlecenie", "data": dict(zl), "operacje": [dict(o) for o in ops]}
+
+    raise HTTPException(404, "Nie znaleziono kodu QR: " + qr)
+
+
+# ─── Zlecenia CRUD ────────────────────────────────────────────────────────────
 @app.get("/api/zlecenia")
 def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
     with get_db() as conn:
@@ -152,24 +163,114 @@ def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
                 "SELECT * FROM zlecenia WHERE status=? ORDER BY created_at DESC", (status,)
             ).fetchall()
         else:
-            rows = conn.execute(
-                "SELECT * FROM zlecenia ORDER BY created_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM zlecenia ORDER BY created_at DESC").fetchall()
     return [dict(r) for r in rows]
 
+class ZlecenieRequest(BaseModel):
+    numer: str
+    nazwa: str
+    opis: Optional[str] = ""
+    status: Optional[str] = "nowe"
+    termin: Optional[str] = None
+    ilosc_sztuk: Optional[int] = 1
+    cena_brutto_szt: Optional[float] = 0
+    material_od_klienta: Optional[int] = 0
 
-@app.get("/api/zlecenia/{zid}/operacje")
-def get_operacje(zid: int, _=Depends(verify_key)):
+@app.post("/api/zlecenia", dependencies=[Depends(verify_key)])
+def create_zlecenie(req: ZlecenieRequest):
+    import uuid
+    qr = "ZL-" + str(uuid.uuid4())[:8].upper()
+    with get_db() as conn:
+        try:
+            cur = conn.execute(
+                """INSERT INTO zlecenia (numer,nazwa,opis,status,termin,ilosc_sztuk,
+                   cena_brutto_szt,material_od_klienta,qr_code)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (req.numer, req.nazwa, req.opis, req.status, req.termin,
+                 req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta, qr)
+            )
+            return {"id": cur.lastrowid, "qr_code": qr}
+        except sqlite3.IntegrityError:
+            raise HTTPException(400, "Zlecenie o tym numerze już istnieje")
+
+@app.put("/api/zlecenia/{zid}", dependencies=[Depends(verify_key)])
+def update_zlecenie(zid: int, req: ZlecenieRequest):
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE zlecenia SET numer=?,nazwa=?,opis=?,status=?,termin=?,
+               ilosc_sztuk=?,cena_brutto_szt=?,material_od_klienta=? WHERE id=?""",
+            (req.numer, req.nazwa, req.opis, req.status, req.termin,
+             req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta, zid)
+        )
+    return {"ok": True}
+
+@app.delete("/api/zlecenia/{zid}", dependencies=[Depends(verify_key)])
+def delete_zlecenie(zid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM operacje WHERE zlecenie_id=?", (zid,))
+        conn.execute("DELETE FROM zlecenia WHERE id=?", (zid,))
+    return {"ok": True}
+
+@app.patch("/api/zlecenia/{zid}/status", dependencies=[Depends(verify_key)])
+def change_zlecenie_status(zid: int, body: dict):
+    status = body.get("status")
+    if status not in ("nowe","w_toku","zakonczone","anulowane"):
+        raise HTTPException(400, "Nieprawidłowy status")
+    with get_db() as conn:
+        conn.execute("UPDATE zlecenia SET status=? WHERE id=?", (status, zid))
+    return {"ok": True}
+
+
+# ─── Operacje CRUD ────────────────────────────────────────────────────────────
+@app.get("/api/zlecenia/{zid}/operacje", dependencies=[Depends(verify_key)])
+def get_operacje(zid: int):
     with get_db() as conn:
         rows = conn.execute(
             "SELECT * FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc", (zid,)
         ).fetchall()
     return [dict(r) for r in rows]
 
+class OperacjaRequest(BaseModel):
+    zlecenie_id: int
+    nazwa: str
+    kolejnosc: Optional[int] = 0
+    czas_norma: Optional[float] = 0
+    stanowisko: Optional[str] = ""
+    opis_czynnosci: Optional[str] = ""
 
-@app.get("/api/operacje/aktywne")
-def get_aktywne_operacje(_=Depends(verify_key)):
-    """Operacje dostępne do pracy (oczekuje lub w_toku)"""
+@app.post("/api/operacje", dependencies=[Depends(verify_key)])
+def create_operacja(req: OperacjaRequest):
+    import uuid
+    qr = "OP-" + str(uuid.uuid4())[:8].upper()
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO operacje (zlecenie_id,nazwa,kolejnosc,czas_norma,
+               stanowisko,opis_czynnosci,qr_code)
+               VALUES (?,?,?,?,?,?,?)""",
+            (req.zlecenie_id, req.nazwa, req.kolejnosc, req.czas_norma,
+             req.stanowisko, req.opis_czynnosci, qr)
+        )
+        return {"id": cur.lastrowid, "qr_code": qr}
+
+@app.put("/api/operacje/{oid}", dependencies=[Depends(verify_key)])
+def update_operacja(oid: int, req: OperacjaRequest):
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE operacje SET nazwa=?,kolejnosc=?,czas_norma=?,
+               stanowisko=?,opis_czynnosci=? WHERE id=?""",
+            (req.nazwa, req.kolejnosc, req.czas_norma,
+             req.stanowisko, req.opis_czynnosci, oid)
+        )
+    return {"ok": True}
+
+@app.delete("/api/operacje/{oid}", dependencies=[Depends(verify_key)])
+def delete_operacja(oid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM operacje WHERE id=?", (oid,))
+    return {"ok": True}
+
+@app.get("/api/operacje/aktywne", dependencies=[Depends(verify_key)])
+def get_aktywne_operacje():
     with get_db() as conn:
         rows = conn.execute("""
             SELECT o.*, z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk
@@ -181,10 +282,8 @@ def get_aktywne_operacje(_=Depends(verify_key)):
         """).fetchall()
     return [dict(r) for r in rows]
 
-
-@app.get("/api/operacje/zakonczone-do-transportu")
-def get_zakonczone_transport(_=Depends(verify_key)):
-    """Dla magazyniera – operacje zakończone czekające na transport"""
+@app.get("/api/operacje/zakonczone-do-transportu", dependencies=[Depends(verify_key)])
+def get_zakonczone_transport():
     with get_db() as conn:
         rows = conn.execute("""
             SELECT o.*, z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk
@@ -197,77 +296,132 @@ def get_zakonczone_transport(_=Depends(verify_key)):
     return [dict(r) for r in rows]
 
 
-# Sesje pracy
+# ─── Sesje pracy (z pauzami + równoległe + praca nieprodukcyjna) ──────────────
 class StartSesjaRequest(BaseModel):
-    operacja_id: int
+    operacja_id: Optional[int] = None
     user_id: int
-    typ: str = "operacja"
+    typ: str = "operacja"   # operacja | nieprodukcyjna
+    opis_nieprodukcyjnej: Optional[str] = ""
 
 class StopSesjaRequest(BaseModel):
     sesja_id: int
     ilosc_sztuk: int
     uwagi: Optional[str] = ""
 
+class PauzaRequest(BaseModel):
+    sesja_id: int
+    powod: Optional[str] = ""
+
 @app.post("/api/sesje/start", dependencies=[Depends(verify_key)])
 def start_sesja(req: StartSesjaRequest):
     import datetime
     now = datetime.datetime.now().isoformat()
     with get_db() as conn:
-        # Sprawdź czy nie ma aktywnej sesji dla tego użytkownika
-        existing = conn.execute(
-            "SELECT id FROM sesje_pracy WHERE user_id=? AND status='aktywna'",
-            (req.user_id,)
-        ).fetchone()
-        if existing:
-            raise HTTPException(400, "Masz już aktywną sesję. Zakończ ją najpierw.")
+        # Dla pracy nieprodukcyjnej pozwalamy na równoległe sesje
+        if req.typ == "operacja" and req.operacja_id:
+            # sprawdź czy ta konkretna operacja nie jest już aktywna przez tego usera
+            existing = conn.execute(
+                "SELECT id FROM sesje_pracy WHERE user_id=? AND operacja_id=? AND status='aktywna'",
+                (req.user_id, req.operacja_id)
+            ).fetchone()
+            if existing:
+                raise HTTPException(400, "Masz już aktywną sesję tej operacji.")
 
         cur = conn.execute(
-            "INSERT INTO sesje_pracy (operacja_id, user_id, typ, start_time, status) VALUES (?,?,?,?,?)",
-            (req.operacja_id, req.user_id, req.typ, now, "aktywna")
+            """INSERT INTO sesje_pracy (operacja_id, user_id, typ, start_time, status, uwagi)
+               VALUES (?,?,?,?,?,?)""",
+            (req.operacja_id, req.user_id, req.typ, now, "aktywna",
+             req.opis_nieprodukcyjnej or "")
         )
         sesja_id = cur.lastrowid
-        # Ustaw operację na 'w_toku'
-        conn.execute(
-            "UPDATE operacje SET status='w_toku' WHERE id=? AND status='oczekuje'",
-            (req.operacja_id,)
-        )
+        if req.operacja_id and req.typ == "operacja":
+            conn.execute(
+                "UPDATE operacje SET status='w_toku' WHERE id=? AND status='oczekuje'",
+                (req.operacja_id,)
+            )
     return {"sesja_id": sesja_id, "start_time": now}
 
+@app.post("/api/sesje/pauza/start", dependencies=[Depends(verify_key)])
+def pauza_start(req: PauzaRequest):
+    import datetime
+    now = datetime.datetime.now().isoformat()
+    with get_db() as conn:
+        sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
+        if not sesja:
+            raise HTTPException(404, "Sesja nie znaleziona")
+        pauzy = json.loads(sesja["pauzy"] or "[]")
+        # sprawdź czy nie ma otwartej pauzy
+        if pauzy and pauzy[-1].get("koniec") is None:
+            raise HTTPException(400, "Pauza już aktywna")
+        pauzy.append({"start": now, "koniec": None, "powod": req.powod or ""})
+        conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
+                     (json.dumps(pauzy), req.sesja_id))
+    return {"ok": True, "pauza_start": now}
+
+@app.post("/api/sesje/pauza/stop", dependencies=[Depends(verify_key)])
+def pauza_stop(req: PauzaRequest):
+    import datetime
+    now = datetime.datetime.now().isoformat()
+    with get_db() as conn:
+        sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
+        if not sesja:
+            raise HTTPException(404, "Sesja nie znaleziona")
+        pauzy = json.loads(sesja["pauzy"] or "[]")
+        if not pauzy or pauzy[-1].get("koniec") is not None:
+            raise HTTPException(400, "Brak aktywnej pauzy")
+        pauzy[-1]["koniec"] = now
+        conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
+                     (json.dumps(pauzy), req.sesja_id))
+    return {"ok": True, "pauza_koniec": now}
 
 @app.post("/api/sesje/stop", dependencies=[Depends(verify_key)])
 def stop_sesja(req: StopSesjaRequest):
     import datetime
     now = datetime.datetime.now().isoformat()
     with get_db() as conn:
-        sesja = conn.execute(
-            "SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)
-        ).fetchone()
+        sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
         if not sesja:
             raise HTTPException(404, "Sesja nie znaleziona")
 
+        # zamknij ewentualną otwartą pauzę
+        pauzy = json.loads(sesja["pauzy"] or "[]")
+        if pauzy and pauzy[-1].get("koniec") is None:
+            pauzy[-1]["koniec"] = now
+
         conn.execute(
-            "UPDATE sesje_pracy SET end_time=?, ilosc_sztuk=?, uwagi=?, status='zakonczona' WHERE id=?",
-            (now, req.ilosc_sztuk, req.uwagi, req.sesja_id)
+            "UPDATE sesje_pracy SET end_time=?, ilosc_sztuk=?, uwagi=?, status='zakonczona', pauzy=? WHERE id=?",
+            (now, req.ilosc_sztuk, req.uwagi, json.dumps(pauzy), req.sesja_id)
         )
-        # Zaktualizuj ilosc_wykonana w operacji
-        conn.execute(
-            "UPDATE operacje SET ilosc_wykonana = ilosc_wykonana + ? WHERE id=?",
-            (req.ilosc_sztuk, sesja["operacja_id"])
-        )
-        # Sprawdź czy operacja jest ukończona
-        op = conn.execute(
-            "SELECT o.ilosc_wykonana, z.ilosc_sztuk FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?",
-            (sesja["operacja_id"],)
-        ).fetchone()
-        if op and op[0] >= op[1]:
+        if sesja["operacja_id"] and sesja["typ"] == "operacja":
             conn.execute(
-                "UPDATE operacje SET status='zakonczona' WHERE id=?",
-                (sesja["operacja_id"],)
+                "UPDATE operacje SET ilosc_wykonana = ilosc_wykonana + ? WHERE id=?",
+                (req.ilosc_sztuk, sesja["operacja_id"])
             )
+            op = conn.execute(
+                "SELECT o.ilosc_wykonana, z.ilosc_sztuk FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?",
+                (sesja["operacja_id"],)
+            ).fetchone()
+            if op and op[0] >= op[1]:
+                conn.execute("UPDATE operacje SET status='zakonczona' WHERE id=?", (sesja["operacja_id"],))
 
     return {"status": "ok", "end_time": now}
 
+@app.get("/api/sesje/aktywne/{user_id}", dependencies=[Depends(verify_key)])
+def get_aktywne_sesje(user_id: int):
+    """Zwraca WSZYSTKIE aktywne sesje użytkownika (może być wiele)"""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT s.*, o.nazwa as op_nazwa, o.stanowisko,
+                   z.numer as zl_numer, z.nazwa as zl_nazwa
+            FROM sesje_pracy s
+            LEFT JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE s.user_id=? AND s.status='aktywna'
+            ORDER BY s.start_time
+        """, (user_id,)).fetchall()
+    return [dict(r) for r in rows]
 
+# backward compat
 @app.get("/api/sesje/aktywna/{user_id}", dependencies=[Depends(verify_key)])
 def get_aktywna_sesja(user_id: int):
     with get_db() as conn:
@@ -275,15 +429,15 @@ def get_aktywna_sesja(user_id: int):
             SELECT s.*, o.nazwa as op_nazwa, o.stanowisko,
                    z.numer as zl_numer, z.nazwa as zl_nazwa
             FROM sesje_pracy s
-            JOIN operacje o ON s.operacja_id = o.id
-            JOIN zlecenia z ON o.zlecenie_id = z.id
+            LEFT JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
             WHERE s.user_id=? AND s.status='aktywna'
+            ORDER BY s.start_time LIMIT 1
         """, (user_id,)).fetchone()
     return dict(row) if row else None
 
-
 @app.get("/api/sesje/historia/{user_id}", dependencies=[Depends(verify_key)])
-def get_historia(user_id: int):
+def get_historia(user_id: int, limit: int = 100):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT s.*, o.nazwa as op_nazwa, o.stanowisko,
@@ -292,20 +446,53 @@ def get_historia(user_id: int):
             LEFT JOIN operacje o ON s.operacja_id = o.id
             LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
             WHERE s.user_id=? AND s.status='zakonczona'
-            ORDER BY s.end_time DESC LIMIT 50
-        """, (user_id,)).fetchall()
+            ORDER BY s.end_time DESC LIMIT ?
+        """, (user_id, limit)).fetchall()
     return [dict(r) for r in rows]
 
 
-# Stawki
+# ─── Stawki CRUD ──────────────────────────────────────────────────────────────
 @app.get("/api/stawki", dependencies=[Depends(verify_key)])
 def get_stawki():
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM stawki ORDER BY stanowisko").fetchall()
     return [dict(r) for r in rows]
 
+class StawkaRequest(BaseModel):
+    stanowisko: str
+    stawka_godz: float
+    czas_norma_min: Optional[float] = 0
+    opis: Optional[str] = ""
 
-# Użytkownicy (admin)
+@app.post("/api/stawki", dependencies=[Depends(verify_key)])
+def create_stawka(req: StawkaRequest):
+    with get_db() as conn:
+        try:
+            cur = conn.execute(
+                "INSERT INTO stawki (stanowisko,stawka_godz,czas_norma_min,opis) VALUES (?,?,?,?)",
+                (req.stanowisko, req.stawka_godz, req.czas_norma_min, req.opis)
+            )
+            return {"id": cur.lastrowid}
+        except sqlite3.IntegrityError:
+            raise HTTPException(400, "Stanowisko już istnieje")
+
+@app.put("/api/stawki/{sid}", dependencies=[Depends(verify_key)])
+def update_stawka(sid: int, req: StawkaRequest):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE stawki SET stanowisko=?,stawka_godz=?,czas_norma_min=?,opis=? WHERE id=?",
+            (req.stanowisko, req.stawka_godz, req.czas_norma_min, req.opis, sid)
+        )
+    return {"ok": True}
+
+@app.delete("/api/stawki/{sid}", dependencies=[Depends(verify_key)])
+def delete_stawka(sid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM stawki WHERE id=?", (sid,))
+    return {"ok": True}
+
+
+# ─── Użytkownicy CRUD ─────────────────────────────────────────────────────────
 @app.get("/api/users", dependencies=[Depends(verify_key)])
 def get_users():
     with get_db() as conn:
@@ -313,7 +500,6 @@ def get_users():
             "SELECT id, username, full_name, role FROM users ORDER BY full_name"
         ).fetchall()
     return [dict(r) for r in rows]
-
 
 class NewUserRequest(BaseModel):
     username: str
@@ -333,8 +519,254 @@ def create_user(req: NewUserRequest):
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Użytkownik już istnieje")
 
+class EditUserRequest(BaseModel):
+    full_name: str
+    role: str
+    password: Optional[str] = None
 
-# Powiadomienia
+@app.put("/api/users/{uid}", dependencies=[Depends(verify_key)])
+def update_user(uid: int, req: EditUserRequest):
+    with get_db() as conn:
+        if req.password:
+            conn.execute(
+                "UPDATE users SET full_name=?,role=?,password=? WHERE id=?",
+                (req.full_name, req.role, _hash(req.password), uid)
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET full_name=?,role=? WHERE id=?",
+                (req.full_name, req.role, uid)
+            )
+    return {"ok": True}
+
+@app.delete("/api/users/{uid}", dependencies=[Depends(verify_key)])
+def delete_user(uid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM users WHERE id=?", (uid,))
+    return {"ok": True}
+
+
+# ─── Katalog produktów CRUD ──────────────────────────────────────────────────
+@app.get("/api/katalog", dependencies=[Depends(verify_key)])
+def get_katalog():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM katalog_produktow ORDER BY nazwa").fetchall()
+    return [dict(r) for r in rows]
+
+class KatalogRequest(BaseModel):
+    nazwa: str
+    opis: Optional[str] = ""
+    ilosc_domyslna: Optional[int] = 1
+    cena_szt: Optional[float] = 0.0
+
+@app.post("/api/katalog", dependencies=[Depends(verify_key)])
+def create_produkt(req: KatalogRequest):
+    with get_db() as conn:
+        try:
+            cur = conn.execute(
+                "INSERT INTO katalog_produktow (nazwa,opis,ilosc_domyslna,cena_szt) VALUES (?,?,?,?)",
+                (req.nazwa, req.opis, req.ilosc_domyslna, req.cena_szt)
+            )
+            return {"id": cur.lastrowid}
+        except sqlite3.IntegrityError:
+            raise HTTPException(400, "Produkt już istnieje")
+
+@app.put("/api/katalog/{kid}", dependencies=[Depends(verify_key)])
+def update_produkt(kid: int, req: KatalogRequest):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE katalog_produktow SET nazwa=?,opis=?,ilosc_domyslna=?,cena_szt=? WHERE id=?",
+            (req.nazwa, req.opis, req.ilosc_domyslna, req.cena_szt, kid)
+        )
+    return {"ok": True}
+
+@app.delete("/api/katalog/{kid}", dependencies=[Depends(verify_key)])
+def delete_produkt(kid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM katalog_produktow WHERE id=?", (kid,))
+    return {"ok": True}
+
+
+# ─── QR Code generation ──────────────────────────────────────────────────────
+@app.get("/api/qr/{kod}", dependencies=[Depends(verify_key)])
+def generate_qr(kod: str):
+    """Generuje QR code PNG dla podanego kodu"""
+    try:
+        import qrcode
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data(kod)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return StreamingResponse(buf, media_type="image/png",
+                                 headers={"Content-Disposition": f"inline; filename=\"{kod}.png\""})
+    except ImportError:
+        raise HTTPException(500, "Brak biblioteki qrcode. Zainstaluj: pip install qrcode[pil]")
+
+
+# ─── Statystyki dla majstra (rozszerzone) ─────────────────────────────────────
+@app.get("/api/stats/majster", dependencies=[Depends(verify_key)])
+def majster_stats():
+    with get_db() as conn:
+        aktywne = conn.execute("""
+            SELECT s.start_time, s.pauzy, s.id as sesja_id, s.typ,
+                   u.full_name, u.id as user_id,
+                   o.nazwa as op_nazwa, o.stanowisko, o.czas_norma,
+                   o.ilosc_wykonana, o.id as op_id,
+                   z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            LEFT JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE s.status='aktywna'
+            ORDER BY s.start_time
+        """).fetchall()
+
+        dzis = conn.execute("""
+            SELECT COUNT(*) as cnt, COALESCE(SUM(s.ilosc_sztuk),0) as sztuki,
+                   COALESCE(SUM(
+                     (strftime('%s', COALESCE(s.end_time, datetime('now'))) -
+                      strftime('%s', s.start_time)) / 3600.0
+                   ), 0) as godz
+            FROM sesje_pracy s
+            WHERE s.status='zakonczona' AND date(s.end_time) = date('now')
+              AND s.typ = 'operacja'
+        """).fetchone()
+
+        # postęp zleceń z detalami operacji
+        zlecenia = conn.execute("""
+            SELECT z.id, z.numer, z.nazwa, z.status, z.ilosc_sztuk, z.termin,
+                   z.cena_brutto_szt,
+                   COUNT(o.id) as op_total,
+                   SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done,
+                   SUM(o.ilosc_wykonana) as sztuki_wykonane
+            FROM zlecenia z
+            LEFT JOIN operacje o ON o.zlecenie_id = z.id
+            WHERE z.status IN ('nowe','w_toku')
+            GROUP BY z.id
+            ORDER BY z.numer
+        """).fetchall()
+
+        # alerty norm (sesje przekraczające normę)
+        alerty = conn.execute("""
+            SELECT s.id as sesja_id, u.full_name, o.nazwa as op_nazwa,
+                   o.czas_norma, s.start_time, s.pauzy,
+                   z.numer as zl_numer
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            JOIN operacje o ON s.operacja_id = o.id
+            JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE s.status='aktywna' AND o.czas_norma > 0
+        """).fetchall()
+
+        import datetime
+        alert_list = []
+        for a in alerty:
+            elapsed_min = (datetime.datetime.now() - datetime.datetime.fromisoformat(a["start_time"])).total_seconds() / 60
+            # odejmij pauzy
+            pauzy = json.loads(a["pauzy"] or "[]")
+            for p in pauzy:
+                if p.get("koniec"):
+                    pause_sec = (datetime.datetime.fromisoformat(p["koniec"]) -
+                                 datetime.datetime.fromisoformat(p["start"])).total_seconds()
+                    elapsed_min -= pause_sec / 60
+            if elapsed_min > a["czas_norma"] * 1.2:  # alert przy 120% normy
+                alert_list.append({
+                    "sesja_id": a["sesja_id"],
+                    "pracownik": a["full_name"],
+                    "operacja": a["op_nazwa"],
+                    "zlecenie": a["zl_numer"],
+                    "norma_min": a["czas_norma"],
+                    "elapsed_min": round(elapsed_min, 1),
+                    "przekroczenie_pct": round((elapsed_min / a["czas_norma"] - 1) * 100)
+                })
+
+        # podsumowanie kosztów dzisiaj
+        koszty = conn.execute("""
+            SELECT s.user_id, u.full_name, o.stanowisko,
+                   SUM((strftime('%s', COALESCE(s.end_time, datetime('now'))) -
+                        strftime('%s', s.start_time)) / 3600.0 * st.stawka_godz) as koszt,
+                   SUM((strftime('%s', COALESCE(s.end_time, datetime('now'))) -
+                        strftime('%s', s.start_time)) / 3600.0) as godz
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            LEFT JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
+            WHERE date(s.start_time) = date('now') AND s.typ='operacja'
+            GROUP BY s.user_id, o.stanowisko
+        """).fetchall()
+
+    return {
+        "aktywne_sesje": [dict(r) for r in aktywne],
+        "dzis_sesji": dzis[0] if dzis else 0,
+        "dzis_sztuk": dzis[1] or 0,
+        "dzis_godz": round(dzis[2] or 0, 2),
+        "zlecenia": [dict(r) for r in zlecenia],
+        "alerty_norm": alert_list,
+        "koszty_dzis": [dict(r) for r in koszty],
+    }
+
+
+# ─── Podsumowanie kosztów zlecenia ────────────────────────────────────────────
+@app.get("/api/zlecenia/{zid}/koszty", dependencies=[Depends(verify_key)])
+def koszty_zlecenia(zid: int):
+    with get_db() as conn:
+        zl = conn.execute("SELECT * FROM zlecenia WHERE id=?", (zid,)).fetchone()
+        if not zl:
+            raise HTTPException(404, "Zlecenie nie znalezione")
+
+        sesje = conn.execute("""
+            SELECT s.*, u.full_name, o.stanowisko, o.nazwa as op_nazwa, o.czas_norma,
+                   st.stawka_godz
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
+            WHERE o.zlecenie_id=? AND s.status='zakonczona'
+        """, (zid,)).fetchall()
+
+        total_koszt = 0
+        total_godz = 0
+        rows = []
+        for s in sesje:
+            import datetime
+            elapsed = (datetime.datetime.fromisoformat(s["end_time"]) -
+                       datetime.datetime.fromisoformat(s["start_time"])).total_seconds() / 3600
+            # odejmij pauzy
+            pauzy = json.loads(s["pauzy"] or "[]")
+            for p in pauzy:
+                if p.get("koniec"):
+                    pause_sec = (datetime.datetime.fromisoformat(p["koniec"]) -
+                                 datetime.datetime.fromisoformat(p["start"])).total_seconds()
+                    elapsed -= pause_sec / 3600
+            koszt = elapsed * (s["stawka_godz"] or 0)
+            total_koszt += koszt
+            total_godz += elapsed
+            rows.append({
+                "sesja_id": s["id"],
+                "pracownik": s["full_name"],
+                "operacja": s["op_nazwa"],
+                "stanowisko": s["stanowisko"],
+                "godz": round(elapsed, 2),
+                "stawka_godz": s["stawka_godz"],
+                "koszt": round(koszt, 2),
+                "ilosc_sztuk": s["ilosc_sztuk"],
+            })
+
+        przychod = (zl["cena_brutto_szt"] or 0) * (zl["ilosc_sztuk"] or 0)
+        return {
+            "zlecenie": dict(zl),
+            "sesje": rows,
+            "total_godz": round(total_godz, 2),
+            "total_koszt": round(total_koszt, 2),
+            "przychod": round(przychod, 2),
+            "marza": round(przychod - total_koszt, 2),
+        }
+
+
+# ─── Powiadomienia ────────────────────────────────────────────────────────────
 @app.get("/api/powiadomienia/{rola}", dependencies=[Depends(verify_key)])
 def get_powiadomienia(rola: str):
     with get_db() as conn:
@@ -348,7 +780,6 @@ def get_powiadomienia(rola: str):
         """, (rola,)).fetchall()
     return [dict(r) for r in rows]
 
-
 @app.post("/api/powiadomienia/{pid}/przeczytaj", dependencies=[Depends(verify_key)])
 def mark_read(pid: int):
     with get_db() as conn:
@@ -356,54 +787,8 @@ def mark_read(pid: int):
     return {"ok": True}
 
 
-# Statystyki dla majstra
-@app.get("/api/stats/majster", dependencies=[Depends(verify_key)])
-def majster_stats():
-    with get_db() as conn:
-        # Aktywne sesje
-        aktywne = conn.execute("""
-            SELECT s.start_time, u.full_name, o.nazwa as op_nazwa,
-                   o.stanowisko, z.numer as zl_numer, z.nazwa as zl_nazwa,
-                   s.id as sesja_id
-            FROM sesje_pracy s
-            JOIN users u ON s.user_id = u.id
-            JOIN operacje o ON s.operacja_id = o.id
-            JOIN zlecenia z ON o.zlecenie_id = z.id
-            WHERE s.status='aktywna'
-            ORDER BY s.start_time
-        """).fetchall()
-
-        # Dzisiaj ukończone
-        dzis = conn.execute("""
-            SELECT COUNT(*) as cnt, SUM(s.ilosc_sztuk) as sztuki
-            FROM sesje_pracy s
-            WHERE s.status='zakonczona'
-              AND date(s.end_time) = date('now')
-        """).fetchone()
-
-        # Postęp zleceń
-        zlecenia = conn.execute("""
-            SELECT z.numer, z.nazwa, z.status, z.ilosc_sztuk,
-                   COUNT(o.id) as op_total,
-                   SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done
-            FROM zlecenia z
-            LEFT JOIN operacje o ON o.zlecenie_id = z.id
-            WHERE z.status IN ('nowe','w_toku')
-            GROUP BY z.id
-            ORDER BY z.numer
-        """).fetchall()
-
-    return {
-        "aktywne_sesje": [dict(r) for r in aktywne],
-        "dzis_sesji": dzis[0] if dzis else 0,
-        "dzis_sztuk": dzis[1] or 0,
-        "zlecenia": [dict(r) for r in zlecenia]
-    }
-
-
 # ─── Inicjalizacja bazy danych ────────────────────────────────────────────────
 def init_db_on_start():
-    """Tworzy tabele i dane startowe przy pierwszym uruchomieniu."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
@@ -494,7 +879,7 @@ def init_db_on_start():
     print(f"✓ Baza danych gotowa: {DB_PATH}")
 
 
-# ─── Serwowanie aplikacji mobilnej ────────────────────────────────────────────
+# ─── Serwowanie aplikacji ──────────────────────────────────────────────────────
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
@@ -505,7 +890,7 @@ if os.path.exists(os.path.join(STATIC_DIR, "index.html")):
 def root():
     return """
     <html><body style="font-family:monospace;background:#1a1f2e;color:#e8eaf0;padding:40px">
-    <h2>⚙ Produkcja API v3.0</h2>
+    <h2>⚙ Produkcja API v4.0</h2>
     <p>Status: <span style="color:#27ae60">● online</span></p>
     <p><a href="/docs" style="color:#e8a020">/docs</a> – dokumentacja API</p>
     <p><a href="/app" style="color:#e8a020">/app</a> – aplikacja mobilna</p>
@@ -519,15 +904,7 @@ def health():
 
 # ─── Start ─────────────────────────────────────────────────────────────────────
 init_db_on_start()
-@app.get("/debug")
-def debug():
-    import os
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    return {
-        "static_dir": static_dir,
-        "exists": os.path.exists(static_dir),
-        "files": os.listdir(static_dir) if os.path.exists(static_dir) else []
-    }
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)

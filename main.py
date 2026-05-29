@@ -709,6 +709,160 @@ def majster_stats():
     }
 
 
+# ─── Wydajność pracowników ────────────────────────────────────────────────────
+@app.get("/api/stats/wydajnosc", dependencies=[Depends(verify_key)])
+def stats_wydajnosc(okres: str = "dzis"):
+    import datetime
+    if okres == "tydzien":
+        filter_sql = "s.end_time >= datetime('now', '-7 days')"
+    elif okres == "miesiac":
+        filter_sql = "s.end_time >= datetime('now', '-30 days')"
+    else:
+        filter_sql = "date(s.end_time) = date('now')"
+
+    with get_db() as conn:
+        users_rows = conn.execute(f"""
+            SELECT u.id, u.full_name,
+                   COUNT(s.id) as sesji,
+                   COALESCE(SUM(s.ilosc_sztuk), 0) as sztuki,
+                   COALESCE(SUM(
+                     (strftime('%s', s.end_time) - strftime('%s', s.start_time)) / 60.0
+                   ), 0) as min_total
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.status='zakonczona' AND s.typ='operacja' AND {filter_sql}
+            GROUP BY u.id ORDER BY sztuki DESC
+        """).fetchall()
+
+        wyniki = []
+        for r in users_rows:
+            sesje = conn.execute(f"""
+                SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
+                       o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
+                       z.numer as zl_numer
+                FROM sesje_pracy s
+                JOIN operacje o ON s.operacja_id = o.id
+                JOIN zlecenia z ON o.zlecenie_id = z.id
+                WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja'
+                  AND {filter_sql}
+                ORDER BY s.end_time DESC LIMIT 30
+            """, (r["id"],)).fetchall()
+
+            sesje_list = []
+            normy_ok = 0
+            normy_total = 0
+            for s in sesje:
+                elapsed = (datetime.datetime.fromisoformat(s["end_time"]) -
+                           datetime.datetime.fromisoformat(s["start_time"])).total_seconds() / 60
+                pauzy = json.loads(s["pauzy"] or "[]")
+                for p in pauzy:
+                    if p.get("koniec"):
+                        elapsed -= (datetime.datetime.fromisoformat(p["koniec"]) -
+                                    datetime.datetime.fromisoformat(p["start"])).total_seconds() / 60
+                elapsed = max(0.1, elapsed)
+                wyd_pct = round(s["czas_norma"] / elapsed * 100) if s["czas_norma"] else None
+                if wyd_pct is not None:
+                    normy_total += 1
+                    if wyd_pct >= 90:
+                        normy_ok += 1
+                sesje_list.append({
+                    "op_nazwa": s["op_nazwa"],
+                    "stanowisko": s["stanowisko"],
+                    "zl_numer": s["zl_numer"],
+                    "ilosc_sztuk": s["ilosc_sztuk"],
+                    "czas_min": round(elapsed, 1),
+                    "norma_min": s["czas_norma"],
+                    "wyd_pct": wyd_pct,
+                })
+
+            wyniki.append({
+                "user_id": r["id"],
+                "full_name": r["full_name"],
+                "sesji": r["sesji"],
+                "sztuki": r["sztuki"],
+                "godz": round(r["min_total"] / 60, 2),
+                "normy_ok": normy_ok,
+                "normy_total": normy_total,
+                "sesje": sesje_list,
+            })
+
+    return {"okres": okres, "pracownicy": wyniki}
+
+
+# ─── Wydajność jednego pracownika (historia + statystyki) ─────────────────────
+@app.get("/api/stats/wydajnosc/{user_id}", dependencies=[Depends(verify_key)])
+def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
+    import datetime
+    if okres == "dzis":
+        filter_sql = "date(s.end_time) = date('now')"
+    elif okres == "miesiac":
+        filter_sql = "s.end_time >= datetime('now', '-30 days')"
+    else:
+        filter_sql = "s.end_time >= datetime('now', '-7 days')"
+
+    with get_db() as conn:
+        summary = conn.execute(f"""
+            SELECT COUNT(s.id) as sesji,
+                   COALESCE(SUM(s.ilosc_sztuk), 0) as sztuki,
+                   COALESCE(SUM(
+                     (strftime('%s', s.end_time) - strftime('%s', s.start_time)) / 60.0
+                   ), 0) as min_total
+            FROM sesje_pracy s
+            WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja' AND {filter_sql}
+        """, (user_id,)).fetchone()
+
+        sesje = conn.execute(f"""
+            SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
+                   o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
+                   z.numer as zl_numer, z.nazwa as zl_nazwa
+            FROM sesje_pracy s
+            JOIN operacje o ON s.operacja_id = o.id
+            JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja'
+              AND {filter_sql}
+            ORDER BY s.end_time DESC
+        """, (user_id,)).fetchall()
+
+    sesje_list = []
+    normy_ok = 0
+    normy_total = 0
+    for s in sesje:
+        elapsed = (datetime.datetime.fromisoformat(s["end_time"]) -
+                   datetime.datetime.fromisoformat(s["start_time"])).total_seconds() / 60
+        pauzy = json.loads(s["pauzy"] or "[]")
+        for p in pauzy:
+            if p.get("koniec"):
+                elapsed -= (datetime.datetime.fromisoformat(p["koniec"]) -
+                            datetime.datetime.fromisoformat(p["start"])).total_seconds() / 60
+        elapsed = max(0.1, elapsed)
+        wyd_pct = round(s["czas_norma"] / elapsed * 100) if s["czas_norma"] else None
+        if wyd_pct is not None:
+            normy_total += 1
+            if wyd_pct >= 90:
+                normy_ok += 1
+        sesje_list.append({
+            "op_nazwa": s["op_nazwa"],
+            "stanowisko": s["stanowisko"],
+            "zl_numer": s["zl_numer"],
+            "zl_nazwa": s["zl_nazwa"],
+            "ilosc_sztuk": s["ilosc_sztuk"],
+            "czas_min": round(elapsed, 1),
+            "norma_min": s["czas_norma"],
+            "wyd_pct": wyd_pct,
+            "end_time": s["end_time"],
+        })
+
+    return {
+        "okres": okres,
+        "sesji": summary["sesji"] if summary else 0,
+        "sztuki": summary["sztuki"] if summary else 0,
+        "godz": round((summary["min_total"] or 0) / 60, 2),
+        "normy_ok": normy_ok,
+        "normy_total": normy_total,
+        "sesje": sesje_list,
+    }
+
+
 # ─── Podsumowanie kosztów zlecenia ────────────────────────────────────────────
 @app.get("/api/zlecenia/{zid}/koszty", dependencies=[Depends(verify_key)])
 def koszty_zlecenia(zid: int):

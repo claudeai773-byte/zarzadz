@@ -128,6 +128,51 @@ def login(req: LoginRequest):
     return {"id": row[0], "username": row[1], "full_name": row[2], "role": row[3]}
 
 
+@app.get("/api/status/produkcja", dependencies=[Depends(verify_key)])
+def status_produkcja():
+    """Publiczny podgląd statusu produkcji dla ekranu logowania – zakończone, aktywne i kolejne operacje"""
+    with get_db() as conn:
+        # Zakończone – do odbioru przez magazyn
+        zakonczone = conn.execute("""
+            SELECT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.ilosc_wykonana, o.ilosc_sztuk,
+                   z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk as zl_ilosc
+            FROM operacje o
+            JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE o.status = 'zakonczona'
+              AND z.status IN ('nowe','w_toku')
+            ORDER BY z.numer, o.kolejnosc
+        """).fetchall()
+
+        # Aktywne sesje / operacje w toku
+        aktywne = conn.execute("""
+            SELECT DISTINCT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.ilosc_wykonana,
+                   z.ilosc_sztuk, z.numer as zl_numer, z.nazwa as zl_nazwa, o.czas_norma
+            FROM sesje_pracy s
+            JOIN operacje o ON s.operacja_id = o.id
+            JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE s.status = 'aktywna' AND s.typ = 'operacja'
+            ORDER BY z.numer, o.kolejnosc
+        """).fetchall()
+
+        # Następne operacje – oczekujące w aktywnych zleceniach (nie w toku, nie zakończone)
+        nastepne = conn.execute("""
+            SELECT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.ilosc_wykonana,
+                   z.ilosc_sztuk, z.numer as zl_numer, z.nazwa as zl_nazwa, o.czas_norma
+            FROM operacje o
+            JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE o.status = 'oczekuje'
+              AND z.status IN ('nowe','w_toku')
+            ORDER BY z.numer, o.kolejnosc
+            LIMIT 10
+        """).fetchall()
+
+    return {
+        "zakonczone": [dict(r) for r in zakonczone],
+        "aktywne":    [dict(r) for r in aktywne],
+        "nastepne":   [dict(r) for r in nastepne],
+    }
+
+
 # ─── QR Code scan ─────────────────────────────────────────────────────────────
 @app.get("/api/scan/{qr}", dependencies=[Depends(verify_key)])
 def scan_qr(qr: str):

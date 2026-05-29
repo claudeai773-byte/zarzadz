@@ -398,11 +398,22 @@ def stop_sesja(req: StopSesjaRequest):
                 (req.ilosc_sztuk, sesja["operacja_id"])
             )
             op = conn.execute(
-                "SELECT o.ilosc_wykonana, z.ilosc_sztuk FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?",
+                "SELECT o.ilosc_wykonana, z.ilosc_sztuk, o.zlecenie_id FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?",
                 (sesja["operacja_id"],)
             ).fetchone()
             if op and op[0] >= op[1]:
                 conn.execute("UPDATE operacje SET status='zakonczona' WHERE id=?", (sesja["operacja_id"],))
+                # Sprawdź czy wszystkie operacje zlecenia są zakończone → auto-zakończ zlecenie
+                zlecenie_id = op[2]
+                pozostale = conn.execute(
+                    "SELECT COUNT(*) FROM operacje WHERE zlecenie_id=? AND status NOT IN ('zakonczona','anulowane')",
+                    (zlecenie_id,)
+                ).fetchone()[0]
+                if pozostale == 0:
+                    conn.execute(
+                        "UPDATE zlecenia SET status='zakonczone' WHERE id=? AND status NOT IN ('zakonczone','anulowane')",
+                        (zlecenie_id,)
+                    )
 
     return {"status": "ok", "end_time": now}
 
@@ -635,7 +646,7 @@ def majster_stats():
               AND s.typ = 'operacja'
         """).fetchone()
 
-        # postęp zleceń z detalami operacji
+        # postęp zleceń z detalami operacji - aktywne
         zlecenia = conn.execute("""
             SELECT z.id, z.numer, z.nazwa, z.status, z.ilosc_sztuk, z.termin,
                    z.cena_brutto_szt,
@@ -647,6 +658,19 @@ def majster_stats():
             WHERE z.status IN ('nowe','w_toku')
             GROUP BY z.id
             ORDER BY z.numer
+        """).fetchall()
+
+        # wszystkie zlecenia (do historii)
+        wszystkie_zlecenia = conn.execute("""
+            SELECT z.id, z.numer, z.nazwa, z.status, z.ilosc_sztuk, z.termin,
+                   z.cena_brutto_szt, z.created_at,
+                   COUNT(o.id) as op_total,
+                   SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done,
+                   SUM(o.ilosc_wykonana) as sztuki_wykonane
+            FROM zlecenia z
+            LEFT JOIN operacje o ON o.zlecenie_id = z.id
+            GROUP BY z.id
+            ORDER BY z.created_at DESC
         """).fetchall()
 
         # alerty norm (sesje przekraczające normę)
@@ -704,6 +728,7 @@ def majster_stats():
         "dzis_sztuk": dzis[1] or 0,
         "dzis_godz": round(dzis[2] or 0, 2),
         "zlecenia": [dict(r) for r in zlecenia],
+        "wszystkie_zlecenia": [dict(r) for r in wszystkie_zlecenia],
         "alerty_norm": alert_list,
         "koszty_dzis": [dict(r) for r in koszty],
     }
@@ -861,6 +886,25 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
         "normy_total": normy_total,
         "sesje": sesje_list,
     }
+
+
+@app.get("/api/zlecenia/{zid}/sesje", dependencies=[Depends(verify_key)])
+def get_zlecenie_sesje(zid: int):
+    """Zwraca szczegóły sesji pracy dla zlecenia (historia operacji)"""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT s.id, s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi, s.typ,
+                   u.full_name, u.id as user_id,
+                   o.nazwa as op_nazwa, o.stanowisko, o.kolejnosc,
+                   z.numer as zl_numer
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            LEFT JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE o.zlecenie_id=? AND s.status='zakonczona'
+            ORDER BY s.end_time DESC
+        """, (zid,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ─── Podsumowanie kosztów zlecenia ────────────────────────────────────────────

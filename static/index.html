@@ -2016,6 +2016,24 @@ async function loadKoszty(zlecenieId) {
   } catch(e) { setState({loading:false}); alert(e.message); }
 }
 
+function renderKosztyProdukty(k) {
+  if (!k.koszt_produktow || k.koszt_produktow <= 0) return '';
+  let html = '<div style="background:var(--entry);border-radius:8px;padding:10px;margin-bottom:12px">'
+    + '<div class="section-hdr" style="margin-bottom:8px">🛒 Produkty / Zakupy</div>';
+  (k.produkty||[]).forEach(p => {
+    html += '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid rgba(46,53,72,.3)">'
+          + '<span>' + p.nazwa + '</span>'
+          + '<span style="color:var(--dim)">' + p.ilosc + ' szt. × ' + fmtPLN(p.cena) + '</span>'
+          + '<span style="color:var(--accent);font-weight:600">' + fmtPLN(p.ilosc*p.cena) + '</span>'
+          + '</div>';
+  });
+  html += '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:6px">'
+        + '<span>Suma produktów</span><span style="color:var(--accent)">' + fmtPLN(k.koszt_produktow) + '</span>'
+        + '</div></div>';
+  return html;
+}
+
+
 function renderKosztyModal() {
   const k = state.zlecenieKoszty;
   if (!k) return '';
@@ -2030,15 +2048,7 @@ function renderKosztyModal() {
         <div class="stat-box"><div class="stat-val" style="font-size:20px;color:${k.marza>=0?'var(--green)':'var(--red)'}">${fmtPLN(k.marza)}</div><div class="stat-lbl">Zysk / Marża</div></div>
         <div class="stat-box"><div class="stat-val">${k.total_godz}h</div><div class="stat-lbl">Godz. pracy</div></div>
       </div>
-      ${k.koszt_produktow > 0 ? \`<div style="background:var(--entry);border-radius:8px;padding:10px;margin-bottom:12px">
-        <div class="section-hdr" style="margin-bottom:8px">🛒 Produkty / Zakupy</div>
-        \${(k.produkty||[]).map(p => \`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid rgba(46,53,72,.3)">
-          <span>\${p.nazwa}</span><span style="color:var(--dim)">\${p.ilosc} szt. × \${fmtPLN(p.cena)}</span>
-          <span style="color:var(--accent);font-weight:600">\${fmtPLN(p.ilosc*p.cena)}</span></div>\`).join('')}
-        <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:6px">
-          <span>Suma produktów</span><span style="color:var(--accent)">\${fmtPLN(k.koszt_produktow)}</span>
-        </div>
-      </div>\` : ''}
+      ${renderKosztyProdukty(k)}
       <div class="section-hdr">Sesje pracy</div>
       ${k.sesje.map(s => `
       <div class="card" style="padding:10px;margin-bottom:6px">

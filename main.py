@@ -9,8 +9,17 @@ from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
-import sqlite3, os, json, hashlib, time, io
+import sqlite3, os, json, hashlib, time, io, datetime as _dt
 from contextlib import contextmanager
+
+def _now():
+    """Bieżący czas UTC jako ISO string z 'Z' (JS-kompatybilny)."""
+    return _dt.datetime.utcnow().isoformat() + "Z"
+
+def _parse(s):
+    """Parsuje ISO datetime string (obsługuje 'Z', Python <3.11)."""
+    if not s: return _dt.datetime.utcnow()
+    return _dt.datetime.fromisoformat(str(s).replace("Z","").replace("+00:00",""))
 
 # ─── Konfiguracja ──────────────────────────────────────────────────────────────
 DB_PATH  = os.environ.get("DB_PATH",  "/data/produkcja.db")
@@ -127,6 +136,52 @@ def login(req: LoginRequest):
         raise HTTPException(401, "Nieprawidłowy login lub hasło")
     return {"id": row[0], "username": row[1], "full_name": row[2], "role": row[3]}
 
+
+
+@app.get("/api/status/produkcja", dependencies=[Depends(verify_key)])
+def status_produkcja():
+    """Status produkcji na ekran logowania – zakończone/aktywne/następne operacje."""
+    with get_db() as conn:
+        zakonczone = conn.execute("""
+            SELECT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.ilosc_wykonana,
+                   z.ilosc_sztuk, z.numer as zl_numer, z.nazwa as zl_nazwa,
+                   o.czas_norma, z.id as zlecenie_id
+            FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id
+            WHERE o.status='zakonczona' AND z.status IN ('nowe','w_toku')
+            ORDER BY z.numer, o.kolejnosc
+        """).fetchall()
+        aktywne = conn.execute("""
+            SELECT DISTINCT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.ilosc_wykonana,
+                   z.ilosc_sztuk, z.numer as zl_numer, z.nazwa as zl_nazwa, o.czas_norma
+            FROM sesje_pracy s
+            JOIN operacje o ON s.operacja_id=o.id
+            JOIN zlecenia z ON o.zlecenie_id=z.id
+            WHERE s.status='aktywna' AND s.typ IN ('operacja','inne_zlecenie')
+            ORDER BY z.numer, o.kolejnosc
+        """).fetchall()
+        nastepne = conn.execute("""
+            SELECT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.ilosc_wykonana,
+                   z.ilosc_sztuk, z.numer as zl_numer, z.nazwa as zl_nazwa, o.czas_norma
+            FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id
+            WHERE o.status='oczekuje' AND z.status IN ('nowe','w_toku')
+            ORDER BY z.numer, o.kolejnosc LIMIT 15
+        """).fetchall()
+        # Dla każdej zakończonej op – następna w zleceniu
+        next_map = {}
+        for op in zakonczone:
+            nxt = conn.execute("""
+                SELECT nazwa, kolejnosc, stanowisko, czas_norma FROM operacje
+                WHERE zlecenie_id=? AND kolejnosc>? AND status!='anulowane'
+                ORDER BY kolejnosc LIMIT 1
+            """, (op["zlecenie_id"], op["kolejnosc"])).fetchone()
+            if nxt:
+                next_map[str(op["id"])] = dict(nxt)
+    return {
+        "zakonczone": [dict(r) for r in zakonczone],
+        "aktywne":    [dict(r) for r in aktywne],
+        "nastepne":   [dict(r) for r in nastepne],
+        "next_map":   next_map,
+    }
 
 # ─── QR Code scan ─────────────────────────────────────────────────────────────
 @app.get("/api/scan/{qr}", dependencies=[Depends(verify_key)])
@@ -314,11 +369,10 @@ class PauzaRequest(BaseModel):
 
 @app.post("/api/sesje/start", dependencies=[Depends(verify_key)])
 def start_sesja(req: StartSesjaRequest):
-    import datetime
-    now = datetime.datetime.now().isoformat()
+    now = _now()
     with get_db() as conn:
         # Dla pracy nieprodukcyjnej pozwalamy na równoległe sesje
-        if req.typ == "operacja" and req.operacja_id:
+        if req.typ in ("operacja", "inne_zlecenie") and req.operacja_id:
             # sprawdź czy ta konkretna operacja nie jest już aktywna przez tego usera
             existing = conn.execute(
                 "SELECT id FROM sesje_pracy WHERE user_id=? AND operacja_id=? AND status='aktywna'",
@@ -334,7 +388,7 @@ def start_sesja(req: StartSesjaRequest):
              req.opis_nieprodukcyjnej or "")
         )
         sesja_id = cur.lastrowid
-        if req.operacja_id and req.typ == "operacja":
+        if req.operacja_id and req.typ in ("operacja", "inne_zlecenie"):
             conn.execute(
                 "UPDATE operacje SET status='w_toku' WHERE id=? AND status='oczekuje'",
                 (req.operacja_id,)
@@ -343,8 +397,7 @@ def start_sesja(req: StartSesjaRequest):
 
 @app.post("/api/sesje/pauza/start", dependencies=[Depends(verify_key)])
 def pauza_start(req: PauzaRequest):
-    import datetime
-    now = datetime.datetime.now().isoformat()
+    now = _now()
     with get_db() as conn:
         sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
         if not sesja:
@@ -360,8 +413,7 @@ def pauza_start(req: PauzaRequest):
 
 @app.post("/api/sesje/pauza/stop", dependencies=[Depends(verify_key)])
 def pauza_stop(req: PauzaRequest):
-    import datetime
-    now = datetime.datetime.now().isoformat()
+    now = _now()
     with get_db() as conn:
         sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
         if not sesja:
@@ -376,8 +428,7 @@ def pauza_stop(req: PauzaRequest):
 
 @app.post("/api/sesje/stop", dependencies=[Depends(verify_key)])
 def stop_sesja(req: StopSesjaRequest):
-    import datetime
-    now = datetime.datetime.now().isoformat()
+    now = _now()
     with get_db() as conn:
         sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (req.sesja_id,)).fetchone()
         if not sesja:
@@ -392,7 +443,7 @@ def stop_sesja(req: StopSesjaRequest):
             "UPDATE sesje_pracy SET end_time=?, ilosc_sztuk=?, uwagi=?, status='zakonczona', pauzy=? WHERE id=?",
             (now, req.ilosc_sztuk, req.uwagi, json.dumps(pauzy), req.sesja_id)
         )
-        if sesja["operacja_id"] and sesja["typ"] == "operacja":
+        if sesja["operacja_id"] and sesja["typ"] in ("operacja", "inne_zlecenie"):
             conn.execute(
                 "UPDATE operacje SET ilosc_wykonana = ilosc_wykonana + ? WHERE id=?",
                 (req.ilosc_sztuk, sesja["operacja_id"])
@@ -403,6 +454,16 @@ def stop_sesja(req: StopSesjaRequest):
             ).fetchone()
             if op and op[0] >= op[1]:
                 conn.execute("UPDATE operacje SET status='zakonczona' WHERE id=?", (sesja["operacja_id"],))
+                zl_id = conn.execute("SELECT zlecenie_id FROM operacje WHERE id=?", (sesja["operacja_id"],)).fetchone()[0]
+                pozostale = conn.execute(
+                    "SELECT COUNT(*) FROM operacje WHERE zlecenie_id=? AND status NOT IN ('zakonczona','anulowane')",
+                    (zl_id,)
+                ).fetchone()[0]
+                if pozostale == 0:
+                    conn.execute(
+                        "UPDATE zlecenia SET status='zakonczone' WHERE id=? AND status NOT IN ('zakonczone','anulowane')",
+                        (zl_id,)
+                    )
 
     return {"status": "ok", "end_time": now}
 
@@ -660,17 +721,15 @@ def majster_stats():
             JOIN zlecenia z ON o.zlecenie_id = z.id
             WHERE s.status='aktywna' AND o.czas_norma > 0
         """).fetchall()
-
-        import datetime
         alert_list = []
         for a in alerty:
-            elapsed_min = (datetime.datetime.now() - datetime.datetime.fromisoformat(a["start_time"])).total_seconds() / 60
+            elapsed_min = (_dt.datetime.utcnow() - _parse(a["start_time"])).total_seconds() / 60
             # odejmij pauzy
             pauzy = json.loads(a["pauzy"] or "[]")
             for p in pauzy:
                 if p.get("koniec"):
-                    pause_sec = (datetime.datetime.fromisoformat(p["koniec"]) -
-                                 datetime.datetime.fromisoformat(p["start"])).total_seconds()
+                    pause_sec = (_parse(p["koniec"]) -
+                                 _parse(p["start"])).total_seconds()
                     elapsed_min -= pause_sec / 60
             if elapsed_min > a["czas_norma"] * 1.2:  # alert przy 120% normy
                 alert_list.append({
@@ -712,7 +771,6 @@ def majster_stats():
 # ─── Wydajność pracowników ────────────────────────────────────────────────────
 @app.get("/api/stats/wydajnosc", dependencies=[Depends(verify_key)])
 def stats_wydajnosc(okres: str = "dzis"):
-    import datetime
     if okres == "tydzien":
         filter_sql = "s.end_time >= datetime('now', '-7 days')"
     elif okres == "miesiac":
@@ -730,7 +788,7 @@ def stats_wydajnosc(okres: str = "dzis"):
                    ), 0) as min_total
             FROM sesje_pracy s
             JOIN users u ON s.user_id = u.id
-            WHERE s.status='zakonczona' AND s.typ='operacja' AND {filter_sql}
+            WHERE s.status='zakonczona' AND s.typ IN ('operacja','inne_zlecenie') AND {filter_sql}
             GROUP BY u.id ORDER BY sztuki DESC
         """).fetchall()
 
@@ -752,13 +810,13 @@ def stats_wydajnosc(okres: str = "dzis"):
             normy_ok = 0
             normy_total = 0
             for s in sesje:
-                elapsed = (datetime.datetime.fromisoformat(s["end_time"]) -
-                           datetime.datetime.fromisoformat(s["start_time"])).total_seconds() / 60
+                elapsed = (_parse(s["end_time"]) -
+                           _parse(s["start_time"])).total_seconds() / 60
                 pauzy = json.loads(s["pauzy"] or "[]")
                 for p in pauzy:
                     if p.get("koniec"):
-                        elapsed -= (datetime.datetime.fromisoformat(p["koniec"]) -
-                                    datetime.datetime.fromisoformat(p["start"])).total_seconds() / 60
+                        elapsed -= (_parse(p["koniec"]) -
+                                    _parse(p["start"])).total_seconds() / 60
                 elapsed = max(0.1, elapsed)
                 wyd_pct = round(s["czas_norma"] / elapsed * 100) if s["czas_norma"] else None
                 if wyd_pct is not None:
@@ -792,7 +850,6 @@ def stats_wydajnosc(okres: str = "dzis"):
 # ─── Wydajność jednego pracownika (historia + statystyki) ─────────────────────
 @app.get("/api/stats/wydajnosc/{user_id}", dependencies=[Depends(verify_key)])
 def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
-    import datetime
     if okres == "dzis":
         filter_sql = "date(s.end_time) = date('now')"
     elif okres == "miesiac":
@@ -808,7 +865,7 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
                      (strftime('%s', s.end_time) - strftime('%s', s.start_time)) / 60.0
                    ), 0) as min_total
             FROM sesje_pracy s
-            WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja' AND {filter_sql}
+            WHERE s.user_id=? AND s.status='zakonczona' AND s.typ IN ('operacja','inne_zlecenie') AND {filter_sql}
         """, (user_id,)).fetchone()
 
         sesje = conn.execute(f"""
@@ -827,13 +884,13 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
     normy_ok = 0
     normy_total = 0
     for s in sesje:
-        elapsed = (datetime.datetime.fromisoformat(s["end_time"]) -
-                   datetime.datetime.fromisoformat(s["start_time"])).total_seconds() / 60
+        elapsed = (_parse(s["end_time"]) -
+                   _parse(s["start_time"])).total_seconds() / 60
         pauzy = json.loads(s["pauzy"] or "[]")
         for p in pauzy:
             if p.get("koniec"):
-                elapsed -= (datetime.datetime.fromisoformat(p["koniec"]) -
-                            datetime.datetime.fromisoformat(p["start"])).total_seconds() / 60
+                elapsed -= (_parse(p["koniec"]) -
+                            _parse(p["start"])).total_seconds() / 60
         elapsed = max(0.1, elapsed)
         wyd_pct = round(s["czas_norma"] / elapsed * 100) if s["czas_norma"] else None
         if wyd_pct is not None:
@@ -863,6 +920,22 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
     }
 
 
+
+@app.get("/api/zlecenia/{zid}/sesje", dependencies=[Depends(verify_key)])
+def get_zlecenie_sesje(zid: int):
+    """Historia sesji pracy dla zlecenia (szczegóły dla majstra)."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT s.id, s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi, s.typ,
+                   u.full_name, o.nazwa as op_nazwa, o.stanowisko, o.kolejnosc
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id=u.id
+            LEFT JOIN operacje o ON s.operacja_id=o.id
+            WHERE o.zlecenie_id=? AND s.status='zakonczona'
+            ORDER BY s.end_time DESC
+        """, (zid,)).fetchall()
+    return [dict(r) for r in rows]
+
 # ─── Podsumowanie kosztów zlecenia ────────────────────────────────────────────
 @app.get("/api/zlecenia/{zid}/koszty", dependencies=[Depends(verify_key)])
 def koszty_zlecenia(zid: int):
@@ -885,15 +958,14 @@ def koszty_zlecenia(zid: int):
         total_godz = 0
         rows = []
         for s in sesje:
-            import datetime
-            elapsed = (datetime.datetime.fromisoformat(s["end_time"]) -
-                       datetime.datetime.fromisoformat(s["start_time"])).total_seconds() / 3600
+            elapsed = (_parse(s["end_time"]) -
+                       _parse(s["start_time"])).total_seconds() / 3600
             # odejmij pauzy
             pauzy = json.loads(s["pauzy"] or "[]")
             for p in pauzy:
                 if p.get("koniec"):
-                    pause_sec = (datetime.datetime.fromisoformat(p["koniec"]) -
-                                 datetime.datetime.fromisoformat(p["start"])).total_seconds()
+                    pause_sec = (_parse(p["koniec"]) -
+                                 _parse(p["start"])).total_seconds()
                     elapsed -= pause_sec / 3600
             koszt = elapsed * (s["stawka_godz"] or 0)
             total_koszt += koszt

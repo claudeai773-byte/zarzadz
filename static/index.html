@@ -1095,6 +1095,26 @@ function renderMajster() {
 
   if (state.majsterSubTab === 'zlecenia') {
     html += `<div class="section-hdr">📋 Zlecenia w toku</div>`;
+    // Show all started operations (even multiple from same zlecenie)
+    const wTokuOps = (stats.aktywne_sesje || []).filter(s => s.op_nazwa);
+    if (wTokuOps.length) {
+      html += `<div class="section-hdr" style="margin-top:8px;color:var(--green)">▶ Aktywne operacje (${wTokuOps.length})</div>`;
+      wTokuOps.forEach(s => {
+        const pauzy = JSON.parse(s.pauzy||'[]');
+        const hasPauza = pauzy.length > 0 && !pauzy[pauzy.length-1].koniec;
+        html += `<div class="card" style="border-color:var(--green);margin-bottom:6px">
+          <div class="card-header">
+            <div style="flex:1;min-width:0">
+              <div class="card-title" style="font-size:13px">${s.op_nazwa||'—'} ${hasPauza?'<span class="badge badge-orange">PAUZA</span>':''}</div>
+              <div class="card-sub">📋 ${s.zl_numer||'—'} – ${s.zl_nazwa||''}</div>
+              <div class="card-sub">👤 ${s.full_name||'—'}</div>
+            </div>
+            ${s.czas_norma?`<div style="font-size:11px;color:var(--dim);text-align:right">norma: ${s.czas_norma}min</div>`:''}
+          </div>
+        </div>`;
+      });
+      html += `<div class="section-hdr" style="margin-top:10px">📋 Postęp zleceń</div>`;
+    }
     if (!stats.zlecenia.length) {
       html += `<div class="empty">Brak aktywnych zleceń</div>`;
     } else {
@@ -1578,12 +1598,18 @@ function renderMajsterPodsumowanie(stats) {
                 + '</div></div>';
           op.sesje.forEach(s => {
             const dt = s.end_time ? (s.end_time||'').substring(0,16).replace('T',' ') : '—';
-            html += '<div style="padding:7px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">'
-                  + '<div><div style="font-size:13px;font-weight:500">' + (s.full_name||'—') + '</div>'
+            const normMin = s.czas_norma || op.sesje[0]?.czas_norma || 0;
+            const elapsedMin = s.elapsed_sec / 60;
+            const czasPrzekroczony = normMin > 0 && elapsedMin > normMin;
+            const timeColor = czasPrzekroczony ? 'var(--red)' : 'var(--green)';
+            const rowBg = czasPrzekroczony ? 'background:rgba(231,76,60,0.08);' : '';
+            html += '<div style="padding:7px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;' + rowBg + '">'
+                  + '<div><div style="font-size:13px;font-weight:500">' + (s.full_name||'—') + (czasPrzekroczony?' <span style="font-size:10px;color:var(--red);font-weight:700">⚠ PRZEKROCZONO</span>':'') + '</div>'
                   + '<div style="font-size:11px;color:var(--dim)">🕐 ' + dt + '</div>'
                   + (s.uwagi?'<div style="font-size:11px;color:var(--orange)">💬 '+s.uwagi+'</div>':'')
                   + '</div><div style="text-align:right">'
-                  + '<div style="font-family:Consolas;color:var(--green);font-size:13px">' + fmtTime(Math.round(s.elapsed_sec)) + '</div>'
+                  + '<div style="font-family:Consolas;color:' + timeColor + ';font-size:13px">' + fmtTime(Math.round(s.elapsed_sec)) + '</div>'
+                  + (normMin?'<div style="font-size:10px;color:var(--dim)">norma: ' + normMin + ' min</div>':'')
                   + '<div style="font-size:11px;color:var(--dim)">' + (s.ilosc_sztuk||0) + ' szt.</div>'
                   + (s.koszt_sesji?'<div style="font-size:11px;color:var(--accent)">'+fmtPLN(s.koszt_sesji)+'</div>':'')
                   + '</div></div>';
@@ -1594,7 +1620,7 @@ function renderMajsterPodsumowanie(stats) {
         html += '<div class="empty">Brak zarejestrowanych sesji dla tego zlecenia</div>';
       }
     }
-    const canDelete = state.user?.rola === 'admin' || state.user?.rola === 'majster';
+    const canDelete = state.user?.role === 'admin' || state.user?.role === 'majster';
     html += '<div style="display:flex;gap:8px;margin-top:12px">';
     if (canDelete) {
       html += '<button class="btn btn-red" style="flex:1" onclick="deleteZlecenieFromModal(' + m.id + ')">🗑 Usuń zlecenie</button>';
@@ -2046,13 +2072,13 @@ function renderOperacjeModal() {
       <div class="section-hdr" style="margin-bottom:10px">+ Dodaj operację</div>
       <div class="field"><label>Nazwa</label><input id="op-nazwa" type="text" placeholder="np. Toczenie wału"></div>
       <div class="field"><label>Kolejność</label><input id="op-kol" type="number" value="${ops.length+1}" min="1"></div>
-      <div class="field"><label>Stanowisko</label>
+      <div class="field"><label>Stanowisko/Operacja</label>
         <select id="op-stan">
           <option value="">— wybierz —</option>
           ${(state.stawki||[]).map(s=>`<option value="${s.stanowisko}">${s.stanowisko}</option>`).join('')}
         </select>
       </div>
-      <div class="field"><label>Norma (min)</label><input id="op-norma" type="number" step="0.5" value="0" min="0"></div>
+      <div class="field"><label>Czas (min)</label><input id="op-norma" type="number" step="0.5" value="0" min="0"></div>
       <div class="field"><label>Opis czynności</label><textarea id="op-opis" style="min-height:60px"></textarea></div>
       <button class="btn btn-green" onclick="addOperacja(${zl.id})">+ Dodaj operację</button>
     </div>`;

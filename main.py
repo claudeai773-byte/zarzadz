@@ -219,7 +219,6 @@ def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
         result = []
         for z in rows:
             zd = dict(z)
-            # Oblicz koszty robocizny i zysk dla zlecenia
             sesje_z = conn.execute("""
                 SELECT s.start_time, s.end_time, s.pauzy, st.stawka_godz
                 FROM sesje_pracy s
@@ -228,7 +227,6 @@ def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
                 WHERE o.zlecenie_id=? AND s.status='zakonczona'
                   AND s.typ IN ('operacja','inne')
             """, (z["id"],)).fetchall()
-
             total_koszt = 0.0
             for s in sesje_z:
                 if not s["end_time"] or not s["start_time"]:
@@ -241,12 +239,10 @@ def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
                         elapsed -= (datetime.datetime.fromisoformat(p["koniec"].replace('Z','')) -
                                     datetime.datetime.fromisoformat(p["start"].replace('Z',''))).total_seconds() / 3600
                 total_koszt += max(0, elapsed) * (s["stawka_godz"] or 0)
-
             przychod = (z["cena_brutto_szt"] or 0) * (z["ilosc_sztuk"] or 0)
-            marza = przychod - total_koszt
             zd["total_koszt"] = round(total_koszt, 2)
             zd["przychod"]    = round(przychod, 2)
-            zd["marza"]       = round(marza, 2)
+            zd["marza"]       = round(przychod - total_koszt, 2)
             result.append(zd)
     return result
 

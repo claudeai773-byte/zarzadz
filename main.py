@@ -235,8 +235,15 @@ def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
                 zbrojenie = op["czas_zbrojenia_min"] or 0
                 if norma:
                     pozostale_min += norma * max(0, ilosc - wykonano)
+                # zbrojenie: dolicz tylko jeśli nie zostało jeszcze wykonane
                 if zbrojenie:
-                    pozostale_min += zbrojenie  # zbrojenie raz na operację
+                    # sprawdź czy dla tej operacji jest zakończona sesja zbrojenia
+                    zbr_done = conn.execute(
+                        "SELECT COUNT(*) FROM sesje_pracy WHERE operacja_id=? AND typ='zbrojenie' AND status='zakonczona'",
+                        (op["id"],)
+                    ).fetchone()[0]
+                    if not zbr_done:
+                        pozostale_min += zbrojenie
             zd["pozostale_min"] = round(pozostale_min, 1)
             result.append(zd)
     return result
@@ -396,14 +403,22 @@ def start_sesja(req: StartSesjaRequest):
     now = _now()
     with get_db() as conn:
         # Dla pracy nieprodukcyjnej pozwalamy na równoległe sesje
-        if req.typ in ("operacja", "inne_zlecenie") and req.operacja_id:
-            # sprawdź czy ta konkretna operacja nie jest już aktywna przez tego usera
+        if req.typ in ("operacja", "inne_zlecenie", "zbrojenie") and req.operacja_id:
+            # sprawdź czy ta konkretna operacja nie jest już aktywna przez KOGOKOLWIEK (operacja lub zbrojenie)
             existing = conn.execute(
-                "SELECT id FROM sesje_pracy WHERE user_id=? AND operacja_id=? AND status='aktywna'",
-                (req.user_id, req.operacja_id)
+                "SELECT id, typ FROM sesje_pracy WHERE operacja_id=? AND status='aktywna'",
+                (req.operacja_id,)
             ).fetchone()
             if existing:
-                raise HTTPException(400, "Masz już aktywną sesję tej operacji.")
+                typ_blok = existing["typ"]
+                if req.typ == "zbrojenie" and typ_blok == "zbrojenie":
+                    raise HTTPException(400, "Zbrojenie tej operacji jest już aktywne.")
+                elif req.typ == "operacja" and typ_blok == "zbrojenie":
+                    raise HTTPException(400, "Najpierw zakończ zbrojenie tej operacji.")
+                elif req.typ == "zbrojenie" and typ_blok in ("operacja", "inne_zlecenie"):
+                    raise HTTPException(400, "Operacja jest już w toku – nie można uruchomić zbrojenia.")
+                elif req.typ == req.typ:
+                    raise HTTPException(400, "Ta operacja jest już aktywna.")
 
         cur = conn.execute(
             """INSERT INTO sesje_pracy (operacja_id, user_id, typ, start_time, status, uwagi, zlecenie_id_inne)
@@ -473,6 +488,7 @@ def stop_sesja(req: StopSesjaRequest):
                 "UPDATE operacje SET ilosc_wykonana = ilosc_wykonana + ? WHERE id=?",
                 (req.ilosc_sztuk, sesja["operacja_id"])
             )
+        # dla zbrojenia – nic nie zmieniamy w operacji (nie liczy się jako sztuki)
             op = conn.execute(
                 "SELECT o.ilosc_wykonana, z.ilosc_sztuk FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?",
                 (sesja["operacja_id"],)
@@ -883,7 +899,7 @@ def stats_wydajnosc(okres: str = "dzis"):
                     "op_nazwa": s["op_nazwa"],
                     "stanowisko": s["stanowisko"],
                     "zl_numer": s["zl_numer"],
-                    "zl_nazwa": s.get("zl_nazwa") or s["zl_numer"],
+                    "zl_nazwa": (dict(s).get("zl_nazwa") or s["zl_numer"]),
                     "ilosc_sztuk": s["ilosc_sztuk"],
                     "czas_min": round(elapsed, 1),
                     "norma_min": czas_norma,
@@ -1087,26 +1103,34 @@ def koszty_zlecenia(zid: int):
         total_koszt = 0
         total_godz = 0
         rows = []
-        # pobierz operacje z danymi zbrojenia i stawki zbrojenia
-        operacje_zbrojenie = conn.execute("""
-            SELECT o.id, o.czas_zbrojenia_min, st.zbrojenie_stawka_godz, st.zbrojenie_aktywne
-            FROM operacje o
+        # Pobierz sesje zbrojenia (osobne sesje typ='zbrojenie') dla tego zlecenia
+        sesje_zbrojenie = conn.execute("""
+            SELECT s.start_time, s.end_time, s.pauzy,
+                   COALESCE(o.nazwa,'—') as op_nazwa,
+                   COALESCE(st.zbrojenie_stawka_godz, 0) as zbr_stawka
+            FROM sesje_pracy s
+            LEFT JOIN operacje o ON s.operacja_id = o.id
             LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
-            WHERE o.zlecenie_id=?
+            WHERE o.zlecenie_id=? AND s.typ='zbrojenie' AND s.status='zakonczona'
         """, (zid,)).fetchall()
-        zbrojenie_map = {r["id"]: dict(r) for r in operacje_zbrojenie}
 
-        # Koszt zbrojenia - raz na operację
         koszt_zbrojenia_total = 0.0
         zbrojenia_info = []
-        for op in operacje_zbrojenie:
-            zb_min = op["czas_zbrojenia_min"] or 0
-            zb_stawka = op["zbrojenie_stawka_godz"] or 0
-            zb_aktywne = op["zbrojenie_aktywne"] or 0
-            if zb_aktywne and zb_min > 0 and zb_stawka > 0:
-                koszt_zb = (zb_min / 60.0) * zb_stawka
-                koszt_zbrojenia_total += koszt_zb
-                zbrojenia_info.append({"czas_min": zb_min, "stawka_godz": zb_stawka, "koszt": round(koszt_zb, 2)})
+        for sz in sesje_zbrojenie:
+            if not sz["end_time"]: continue
+            elapsed_zb = (_parse(sz["end_time"]) - _parse(sz["start_time"])).total_seconds() / 3600
+            for p in json.loads(sz["pauzy"] or "[]"):
+                if p.get("koniec"):
+                    elapsed_zb -= (_parse(p["koniec"]) - _parse(p["start"])).total_seconds() / 3600
+            elapsed_zb = max(0, elapsed_zb)
+            koszt_zb = elapsed_zb * (sz["zbr_stawka"] or 0)
+            koszt_zbrojenia_total += koszt_zb
+            zbrojenia_info.append({
+                "op_nazwa": sz["op_nazwa"],
+                "czas_min": round(elapsed_zb * 60, 1),
+                "stawka_godz": sz["zbr_stawka"],
+                "koszt": round(koszt_zb, 2)
+            })
 
         for s in sesje:
             elapsed = (_parse(s["end_time"]) -

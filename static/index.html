@@ -120,7 +120,9 @@
 //  CONFIG
 // ══════════════════════════════════════════════════════════════
 let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
-let SERVER_URL = CONFIG.server_url || '';
+// Auto-wykryj URL serwera gdy app jest serwowana z tego samego serwera
+const _autoUrl = (() => { try { const o = window.location.origin; return (o && o !== 'null' && !o.startsWith('file')) ? o : ''; } catch(_) { return ''; } })();
+let SERVER_URL = CONFIG.server_url || _autoUrl || '';
 let API_KEY    = CONFIG.api_key    || '';
 const HEADERS  = () => ({'Content-Type':'application/json','x-api-key':API_KEY});
 
@@ -709,6 +711,7 @@ function saveConfig() {
 // ══════════════════════════════════════════════════════════════
 function renderLogin() {
   const wi = state.warehouseInfo;
+  const needsApiKey = !API_KEY;
   return `
   <div style="padding:16px;max-width:480px;margin:0 auto">
     ${wi ? renderWarehouseLoginPanel(wi) : (SERVER_URL ? `
@@ -719,6 +722,12 @@ function renderLogin() {
       <h2>⚙ PRODUKCJA</h2>
       <p class="subtitle">System Zarządzania Produkcją v5.0</p>
       ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
+      ${needsApiKey ? `
+      <div class="field">
+        <label style="color:var(--orange)">🔑 Klucz API (wymagany)</label>
+        <input id="lg-apikey" type="password" placeholder="klucz-api" autocomplete="off"
+               onkeydown="if(event.key==='Enter')document.getElementById('lg-user').focus()">
+      </div>` : ''}
       <div class="field">
         <label>Login</label>
         <input id="lg-user" type="text" placeholder="np. piotr.p" autocomplete="username"
@@ -727,16 +736,27 @@ function renderLogin() {
       <div class="field">
         <label>Hasło</label>
         <input id="lg-pass" type="password" autocomplete="current-password"
-               onkeydown="if(event.key==='Enter')doLogin(document.getElementById('lg-user').value,this.value)">
+               onkeydown="if(event.key==='Enter')doLoginWithKey()">
       </div>
       <button class="btn btn-accent" style="margin-top:8px"
-              onclick="doLogin(document.getElementById('lg-user').value,document.getElementById('lg-pass').value)"
+              onclick="doLoginWithKey()"
               ${state.loading?'disabled':''}>
         ${state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się'}
       </button>
       <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">⚙ Zmień serwer</button>
     </div>
   </div>`;
+}
+
+function doLoginWithKey() {
+  const keyEl = document.getElementById('lg-apikey');
+  if (keyEl && keyEl.value.trim()) {
+    API_KEY = keyEl.value.trim();
+    localStorage.setItem('produkcja_config', JSON.stringify({server_url: SERVER_URL, api_key: API_KEY}));
+    if (_loginInfoInterval) clearInterval(_loginInfoInterval);
+    startLoginInfoRefresh();
+  }
+  doLogin(document.getElementById('lg-user').value, document.getElementById('lg-pass').value);
 }
 
 function renderWarehouseLoginPanel(wi) {
@@ -1563,6 +1583,12 @@ function renderZlecenia() {
             <div class="card-sub">${z.nazwa}</div>
             ${z.termin ? `<div class="card-sub">📅 ${fmtDate(z.termin)}</div>` : ''}
             <div class="card-sub">📦 ${z.ilosc_sztuk} szt. ${z.cena_brutto_szt ? '| '+fmtPLN(z.cena_brutto_szt)+'/szt' : ''}</div>
+            ${z.przychod > 0 ? `
+            <div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;font-size:12px">
+              <span style="color:var(--dim)">Przychód: <span style="color:var(--blue);font-weight:600">${fmtPLN(z.przychod)}</span></span>
+              <span style="color:var(--dim)">Koszty: <span style="color:var(--orange);font-weight:600">${fmtPLN(z.total_koszt)}</span></span>
+              <span style="color:var(--dim)">Zysk: <span style="color:${z.marza >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700">${z.marza >= 0 ? '+' : ''}${fmtPLN(z.marza)}</span></span>
+            </div>` : (z.cena_brutto_szt > 0 ? `<div style="font-size:11px;color:var(--dim);margin-top:3px">⏳ Brak zakończonych sesji – zysk niedostępny</div>` : '')}
           </div>
           ${statusBadge(z.status)}
         </div>

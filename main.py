@@ -813,9 +813,10 @@ def stats_wydajnosc(okres: str = "dzis"):
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
                        z.numer as zl_numer, z.nazwa as zl_nazwa
                 FROM sesje_pracy s
-                JOIN operacje o ON s.operacja_id = o.id
-                JOIN zlecenia z ON o.zlecenie_id = z.id
+                LEFT JOIN operacje o ON s.operacja_id = o.id
+                LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
                 WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja'
+                  AND s.start_time IS NOT NULL AND s.end_time IS NOT NULL
                   AND {filter_sql}
                 ORDER BY s.end_time DESC LIMIT 30
             """, (r["id"],)).fetchall()
@@ -824,8 +825,11 @@ def stats_wydajnosc(okres: str = "dzis"):
             normy_ok = 0
             normy_total = 0
             for s in sesje:
-                elapsed = (_parse(s["end_time"]) -
-                           _parse(s["start_time"])).total_seconds() / 60
+                try:
+                    elapsed = (_parse(s["end_time"]) -
+                               _parse(s["start_time"])).total_seconds() / 60
+                except Exception:
+                    continue
                 pauzy = json.loads(s["pauzy"] or "[]")
                 for p in pauzy:
                     if p.get("koniec"):
@@ -891,9 +895,10 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
                    o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
                    z.numer as zl_numer, z.nazwa as zl_nazwa
             FROM sesje_pracy s
-            JOIN operacje o ON s.operacja_id = o.id
-            JOIN zlecenia z ON o.zlecenie_id = z.id
+            LEFT JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
             WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja'
+              AND s.start_time IS NOT NULL AND s.end_time IS NOT NULL
               AND {filter_sql}
             ORDER BY s.end_time DESC
         """, (user_id,)).fetchall()
@@ -902,8 +907,11 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
     normy_ok = 0
     normy_total = 0
     for s in sesje:
-        elapsed = (_parse(s["end_time"]) -
-                   _parse(s["start_time"])).total_seconds() / 60
+        try:
+            elapsed = (_parse(s["end_time"]) -
+                       _parse(s["start_time"])).total_seconds() / 60
+        except Exception:
+            continue
         pauzy = json.loads(s["pauzy"] or "[]")
         for p in pauzy:
             if p.get("koniec"):

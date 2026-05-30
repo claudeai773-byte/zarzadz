@@ -205,9 +205,6 @@ let state = {
   printModal: null,
   printOps: [],
   warehouseInfo: null,
-  zlecenieDetailsModal: null,
-  qrInneMode: false,
-  qrManualMode: false,
 };
 
 function setState(p, noRender) {
@@ -229,14 +226,14 @@ function startTimerFor(sesja) {
     if (!el) return;
     const paused = isPaused();
     // calc elapsed minus pauses
-    const start = parseLocalDT(sesja.start_time);
+    const start = new Date(sesja.start_time);
     let elapsed = Math.floor((Date.now() - start) / 1000);
     const pauzy = JSON.parse(sesja.pauzy || '[]');
     for (const p of pauzy) {
       if (p.koniec) {
-        elapsed -= Math.floor((parseLocalDT(p.koniec) - parseLocalDT(p.start)) / 1000);
+        elapsed -= Math.floor((new Date(p.koniec) - new Date(p.start)) / 1000);
       } else {
-        elapsed -= Math.floor((Date.now() - parseLocalDT(p.start)) / 1000);
+        elapsed -= Math.floor((Date.now() - new Date(p.start)) / 1000);
       }
     }
     el.textContent = fmtTime(Math.max(0,elapsed));
@@ -259,16 +256,6 @@ function fmtTime(sec) {
   const m = String(Math.floor((sec%3600)/60)).padStart(2,'0');
   const s = String(sec%60).padStart(2,'0');
   return `${h}:${m}:${s}`;
-}
-
-// Serwer zapisuje czas lokalny bez 'Z' – przeglądarka traktuje to jako UTC co daje +2h offset.
-// Funkcja parsuje datetime z serwera jako czas lokalny (nie UTC).
-function parseLocalDT(dtStr) {
-  if (!dtStr) return new Date(NaN);
-  // Jeśli już ma 'Z' lub offset, parsuj normalnie
-  if (/Z|[+-]\d{2}:\d{2}$/.test(dtStr)) return new Date(dtStr);
-  // Bez timezone – traktuj jako czas lokalny (zastąp spację przez 'T' jeśli potrzeba)
-  return new Date(dtStr.replace(' ','T'));
 }
 
 function isPaused(sesja) {
@@ -436,12 +423,9 @@ async function scanQR(kod) {
 function showQRResult(res) {
   if (res.type === 'operacja') {
     const op = res.data;
-    // Pokaż modal wyboru: rozpocznij operację lub "Inne"
-    setState({qrZleceniePickerModal: {
-      zlecenie: {numer: op.zl_numer, nazwa: op.zl_nazwa, id: op.zlecenie_id},
-      operacje: [op],
-      singleOp: true
-    }});
+    if (confirm(`Operacja: ${op.nazwa}\nZlecenie: ${op.zl_numer}\nStatus: ${op.status}\n\nRozpocząć tę operację?`)) {
+      startSesja(op.id);
+    }
   } else if (res.type === 'zlecenie') {
     setState({qrZleceniePickerModal: {zlecenie: res.data, operacje: res.operacje}});
   }
@@ -459,9 +443,8 @@ function renderQRZleceniePickerModal() {
       <button class="modal-close" onclick="setState({qrZleceniePickerModal:null})">×</button>
       <h3>📋 ${z.numer}</h3>
       <div style="color:var(--dim);font-size:13px;margin-bottom:16px">${z.nazwa}</div>`;
-
   if (!dostepne.length) {
-    html += `<div class="empty" style="margin-bottom:12px">Brak dostępnych operacji do rozpoczęcia</div>`;
+    html += `<div class="empty">Brak dostępnych operacji do rozpoczęcia</div>`;
   } else {
     html += `<div style="color:var(--dim);font-size:12px;margin-bottom:10px">Wybierz operację do rozpoczęcia:</div>`;
     dostepne.forEach(op => {
@@ -476,54 +459,18 @@ function renderQRZleceniePickerModal() {
           </div>
           <div>
             ${czyAktywna
-              ? `<span class="badge badge-orange">▶ W toku</span>`
+              ? `<span class="badge badge-yellow">▶ W toku</span>`
               : `<span class="badge" style="background:var(--accent);color:#000">${statusBadge_txt(op.status)}</span>`}
           </div>
         </div>
       </div>`;
     });
   }
-
-  // Opcja "INNE" – zawsze widoczna po zeskanowaniu QR
-  if (!state.qrInneMode) {
-    html += `
-    <div class="card" style="padding:12px;margin-bottom:8px;cursor:pointer;border-color:var(--purple)"
-         onclick="setState({qrInneMode:true})">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-weight:600;color:var(--purple)">⚡ Inne</div>
-          <div style="font-size:12px;color:var(--dim)">Wpisz co robisz i rozpocznij rejestrację</div>
-        </div>
-        <span class="badge badge-purple">+</span>
-      </div>
-    </div>`;
-  } else {
-    html += `
-    <div class="card" style="padding:12px;margin-bottom:8px;border-color:var(--purple)">
-      <div style="font-weight:600;color:var(--purple);margin-bottom:10px">⚡ Inne – wpisz co robisz</div>
-      <div class="field" style="margin-bottom:10px">
-        <input id="qr-inne-opis" type="text" placeholder="Np. Ustawianie maszyny, regulacja, naprawa..."
-               autofocus onkeydown="if(event.key==='Enter')startQRInne()">
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-purple" onclick="startQRInne()">▶ Start</button>
-        <button class="btn btn-outline" onclick="setState({qrInneMode:false})">Anuluj</button>
-      </div>
-    </div>`;
-  }
-
   html += `
-      <button class="btn btn-outline" style="margin-top:8px" onclick="setState({qrZleceniePickerModal:null, qrInneMode:false})">Anuluj</button>
+      <button class="btn btn-outline" style="margin-top:8px" onclick="setState({qrZleceniePickerModal:null})">Anuluj</button>
     </div>
   </div>`;
   return html;
-}
-
-async function startQRInne() {
-  const opis = document.getElementById('qr-inne-opis')?.value?.trim();
-  if (!opis) { alert('Wpisz co robisz'); return; }
-  setState({qrZleceniePickerModal:null, qrInneMode:false});
-  await startNieprodukcyjna(opis);
 }
 
 function statusBadge_txt(s) {
@@ -878,32 +825,14 @@ function renderPracaGlowna() {
   // QR skaner
   if (state.qrScanMode) {
     const hist = JSON.parse(localStorage.getItem('qr_historia')||'[]');
-    const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     html += `
     <div class="card" style="border-color:var(--blue)">
-      <div class="section-hdr" style="margin-bottom:12px">📷 Skaner QR</div>`;
-
-    if (isMobile && !state.qrManualMode) {
-      // Tryb aparatu na urządzeniu mobilnym
-      html += `
-      <div id="qr-camera-wrap" style="position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;margin-bottom:10px">
-        <video id="qr-video" style="width:100%;display:block;border-radius:10px" playsinline autoplay muted></video>
-        <canvas id="qr-canvas" style="display:none"></canvas>
-        <div id="qr-scan-status" style="text-align:center;color:var(--dim);font-size:13px;padding:8px">Uruchamiam aparat...</div>
-      </div>
-      <button class="btn-outline" style="margin-bottom:8px" onclick="setState({qrManualMode:true})">⌨ Wpisz kod ręcznie</button>`;
-    } else {
-      // Tryb ręcznego wpisywania (komputer lub wybór użytkownika)
-      html += `
+      <div class="section-hdr" style="margin-bottom:12px">📷 Skaner QR</div>
       <div class="qr-input-row field" style="margin-bottom:10px">
-        <input id="qr-input" type="text" placeholder="Wpisz kod QR i naciśnij Enter"
+        <input id="qr-input" type="text" placeholder="Skanuj lub wpisz kod QR"
                autofocus onkeydown="if(event.key==='Enter')scanQR(this.value)">
         <button class="btn-sm btn-accent" onclick="scanQR(document.getElementById('qr-input').value)">▶</button>
       </div>
-      ${isMobile ? `<button class="btn-outline" style="margin-bottom:8px" onclick="setState({qrManualMode:false})">📷 Użyj aparatu</button>` : ''}`;
-    }
-
-    html += `
       ${hist.length ? `
       <div class="section-hdr">Historia QR</div>
       ${hist.map(c => `
@@ -912,12 +841,12 @@ function renderPracaGlowna() {
           <button class="btn-sm btn-blue" onclick="scanQR('${c}')">Użyj</button>
         </div>`).join('')}
       ` : ''}
-      <button class="btn-outline" style="margin-top:10px" onclick="stopQRCamera();setState({qrScanMode:false,qrManualMode:false})">✕ Zamknij</button>
+      <button class="btn-outline" style="margin-top:10px" onclick="setState({qrScanMode:false})">✕ Zamknij</button>
     </div>`;
   } else {
     html += `
     <div class="btn-row" style="margin-bottom:12px">
-      <button class="btn btn-blue" onclick="setState({qrScanMode:true, qrManualMode:false})">📷 Skanuj QR</button>
+      <button class="btn btn-blue" onclick="setState({qrScanMode:true})">📷 Skanuj QR</button>
       <button class="btn btn-purple" onclick="setState({nieprodukcyjnaModal:true})">⏸ Nieprodukcyjna</button>
     </div>`;
   }
@@ -1065,12 +994,12 @@ function renderMajster() {
       stats.aktywne_sesje.forEach(s => {
         const pauzList = JSON.parse(s.pauzy||'[]');
         const hasPauza = pauzList.length > 0 && !pauzList[pauzList.length-1].koniec;
-        let elapsed = Math.floor((Date.now() - parseLocalDT(s.start_time))/1000);
+        let elapsed = Math.floor((Date.now() - new Date(s.start_time))/1000);
         for (const p of pauzList) {
           if (p.koniec) {
-            elapsed -= Math.floor((parseLocalDT(p.koniec) - parseLocalDT(p.start))/1000);
+            elapsed -= Math.floor((new Date(p.koniec) - new Date(p.start))/1000);
           } else {
-            elapsed -= Math.floor((Date.now() - parseLocalDT(p.start))/1000);
+            elapsed -= Math.floor((Date.now() - new Date(p.start))/1000);
           }
         }
         elapsed = Math.max(0, elapsed);
@@ -1193,8 +1122,9 @@ function switchMajsterTab(tab) {
 }
 
 function renderMajsterPodsumowanie(stats) {
-  const wszystkie = (stats?.wszystkie_zlecenia || []);
-  const aktywne = wszystkie.filter(z => ['nowe','w_toku'].includes(z.status));
+  const zlecenia = (stats?.zlecenia || []);
+  const wszystkie = state.zlecenia || [];
+  const aktywne = zlecenia;
   const zakonczone = wszystkie.filter(z => z.status === 'zakonczone');
   const anulowane = wszystkie.filter(z => z.status === 'anulowane');
 
@@ -1205,107 +1135,54 @@ function renderMajsterPodsumowanie(stats) {
     <div class="stat-box"><div class="stat-val" style="color:var(--red)">${anulowane.length}</div><div class="stat-lbl">Anulowanych</div></div>
     <div class="stat-box"><div class="stat-val">${stats.dzis_sztuk||0}</div><div class="stat-lbl">Sztuk dziś</div></div>
   </div>
-  <div class="section-hdr">📋 Historia zleceń – wszystkie (kliknij po szczegóły)</div>`;
+  <div class="section-hdr">📋 Wszystkie aktywne zlecenia – szczegóły</div>`;
 
-  if (!wszystkie.length) {
-    html += `<div class="empty">Brak zleceń</div>`;
+  if (!aktywne.length) {
+    html += `<div class="empty">Brak aktywnych zleceń</div>`;
   } else {
-    wszystkie.forEach(z => {
+    aktywne.forEach(z => {
       const prog = z.op_total > 0 ? Math.round((z.op_done/z.op_total)*100) : 0;
-      const przeterminowane = z.termin && new Date(z.termin) < new Date() && z.status !== 'zakonczone';
-      const isZakonczone = z.status === 'zakonczone';
-      const isAnulowane = z.status === 'anulowane';
-      const borderColor = przeterminowane ? 'var(--red)' : isZakonczone ? 'var(--green)' : isAnulowane ? 'var(--dim)' : '';
-      const safeNumer = (z.numer||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-      const safeNazwa = (z.nazwa||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      const sztProg = z.ilosc_sztuk > 0 ? Math.round(((z.sztuki_wykonane||0)/z.ilosc_sztuk)*100) : 0;
+      const przeterminowane = z.termin && new Date(z.termin) < new Date();
+      const wartość = (z.cena_brutto_szt||0) * (z.ilosc_sztuk||0);
 
       html += `
-      <div class="card" style="cursor:pointer;${borderColor?'border-color:'+borderColor:''}"
-           onclick="openZlecenieDetails(${z.id}, '${safeNumer}', '${safeNazwa}')">
+      <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
         <div class="card-header">
           <div>
             <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">⚠ TERMIN</span>':''}</div>
             <div class="card-sub">${z.nazwa}</div>
             ${z.termin?`<div class="card-sub">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
           </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-            ${statusBadge(z.status)}
-            <span style="font-size:11px;color:var(--dim)">${z.op_done||0}/${z.op_total||0} op.</span>
+          ${statusBadge(z.status)}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin:8px 0">
+          <span style="color:var(--dim)">Operacje</span>
+          <span>${z.op_done||0}/${z.op_total||0} (${prog}%)</span>
+          <span style="color:var(--dim)">Sztuki</span>
+          <span>${z.sztuki_wykonane||0}/${z.ilosc_sztuk} (${sztProg}%)</span>
+          ${wartość ? `<span style="color:var(--dim)">Wartość</span><span style="color:var(--accent)">${fmtPLN(wartość)}</span>` : ''}
+        </div>
+        <div style="margin-bottom:4px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:2px">
+            <span>Operacje</span><span>${prog}%</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
           </div>
         </div>
-        <div class="progress-wrap">
-          <div class="progress-bar" style="width:${prog}%;background:${isZakonczone?'var(--green)':prog>=100?'var(--green)':'var(--accent)'}"></div>
-        </div>
-        <div style="font-size:11px;color:var(--dim);margin-top:4px;display:flex;justify-content:space-between">
-          <span>${prog}% • ${z.sztuki_wykonane||0}/${z.ilosc_sztuk} szt.</span>
-          <span style="color:var(--accent)">▶ szczegóły</span>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:2px">
+            <span>Sztuki</span><span>${sztProg}%</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-bar" style="width:${sztProg}%;background:${sztProg>=100?'var(--green)':'var(--blue)'}"></div>
+          </div>
         </div>
       </div>`;
     });
   }
-
-  // Modal szczegółów zlecenia
-  if (state.zlecenieDetailsModal) {
-    const d = state.zlecenieDetailsModal;
-    html += `
-    <div class="modal-overlay" onclick="if(event.target===this)setState({zlecenieDetailsModal:null})">
-      <div class="modal" style="max-height:85vh;overflow-y:auto">
-        <button class="modal-close" onclick="setState({zlecenieDetailsModal:null})">×</button>
-        <h3>📋 ${d.numer}</h3>
-        <div style="color:var(--dim);font-size:13px;margin-bottom:14px">${d.nazwa}</div>`;
-
-    if (d.loading) {
-      html += `<div class="spinner">⏳</div>`;
-    } else if (d.sesje && d.sesje.length) {
-      html += `<div class="section-hdr">Historia operacji (${d.sesje.length} sesji)</div>`;
-      d.sesje.forEach(s => {
-        const start = parseLocalDT(s.start_time);
-        const end = s.end_time ? parseLocalDT(s.end_time) : null;
-        let elapsed = end ? (end - start) / 1000 : 0;
-        const pauzy = JSON.parse(s.pauzy || '[]');
-        for (const p of pauzy) {
-          if (p.koniec) elapsed -= (parseLocalDT(p.koniec) - parseLocalDT(p.start)) / 1000;
-        }
-        elapsed = Math.max(0, Math.round(elapsed));
-        const dateStr = s.end_time ? s.end_time.substring(0,16).replace('T',' ') : '—';
-        html += `
-        <div style="border-bottom:1px solid var(--border);padding:8px 0">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <div>
-              <div style="font-weight:600;font-size:13px">${s.kolejnosc ? s.kolejnosc+'. ' : ''}${s.op_nazwa || '—'}</div>
-              <div style="font-size:12px;color:var(--dim)">👤 ${s.full_name}</div>
-              <div style="font-size:11px;color:var(--dim)">🕐 ${dateStr}</div>
-              ${s.stanowisko?`<div style="font-size:11px;color:var(--dim)">🏭 ${s.stanowisko}</div>`:''}
-            </div>
-            <div style="text-align:right">
-              <div style="font-family:Consolas;color:var(--green);font-size:14px">${fmtTime(elapsed)}</div>
-              <div style="font-size:11px;color:var(--dim)">${s.ilosc_sztuk} szt.</div>
-            </div>
-          </div>
-          ${s.uwagi ? `<div style="font-size:11px;color:var(--orange);margin-top:3px">💬 ${s.uwagi}</div>` : ''}
-        </div>`;
-      });
-    } else {
-      html += `<div class="empty">Brak zarejestrowanych sesji dla tego zlecenia</div>`;
-    }
-
-    html += `
-        <button class="btn btn-outline no-print" style="margin-top:16px" onclick="setState({zlecenieDetailsModal:null})">Zamknij</button>
-      </div>
-    </div>`;
-  }
-
   return html;
-}
-
-async function openZlecenieDetails(zid, numer, nazwa) {
-  setState({zlecenieDetailsModal: {id:zid, numer, nazwa, loading:true, sesje:null}});
-  try {
-    const sesje = await get(`/api/zlecenia/${zid}/sesje`);
-    setState({zlecenieDetailsModal: {...state.zlecenieDetailsModal, loading:false, sesje}});
-  } catch(e) {
-    setState({zlecenieDetailsModal: {...state.zlecenieDetailsModal, loading:false, sesje:[]}});
-  }
 }
 
 function renderMajsterWydajnosc() {
@@ -2171,87 +2048,6 @@ function render() {
           img.src = URL.createObjectURL(blob);
         }).catch(() => {});
     }, 80);
-  }
-}
-
-// ══════════════════════════════════════════════════════════════
-//  CAMERA QR SCANNER
-// ══════════════════════════════════════════════════════════════
-let _qrStream = null;
-let _qrAnimFrame = null;
-let _jsQRLoaded = false;
-
-function stopQRCamera() {
-  if (_qrStream) {
-    _qrStream.getTracks().forEach(t => t.stop());
-    _qrStream = null;
-  }
-  if (_qrAnimFrame) {
-    cancelAnimationFrame(_qrAnimFrame);
-    _qrAnimFrame = null;
-  }
-}
-
-async function startQRCamera() {
-  const video = document.getElementById('qr-video');
-  const canvas = document.getElementById('qr-canvas');
-  const status = document.getElementById('qr-scan-status');
-  if (!video) return;
-
-  try {
-    // Załaduj bibliotekę jsQR jeśli nie ma
-    if (!window.jsQR) {
-      await new Promise((res, rej) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
-        s.onload = res; s.onerror = rej;
-        document.head.appendChild(s);
-      });
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: {ideal:1280}, height: {ideal:720} }
-    });
-    _qrStream = stream;
-    video.srcObject = stream;
-    await video.play();
-    if (status) status.style.display = 'none';
-
-    const ctx = canvas.getContext('2d');
-    function tick() {
-      if (!document.getElementById('qr-video')) { stopQRCamera(); return; }
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = window.jsQR(imageData.data, imageData.width, imageData.height, {inversionAttempts:'dontInvert'});
-        if (code && code.data) {
-          stopQRCamera();
-          scanQR(code.data);
-          return;
-        }
-      }
-      _qrAnimFrame = requestAnimationFrame(tick);
-    }
-    tick();
-  } catch(err) {
-    if (status) {
-      status.textContent = 'Brak dostępu do aparatu. Wpisz kod ręcznie.';
-      status.style.display = 'block';
-    }
-    setState({qrManualMode: true});
-  }
-}
-
-// Uruchom kamerę po renderze jeśli jesteśmy w trybie aparatu
-const _origRender = render;
-function render() {
-  stopQRCamera();
-  _origRender();
-  // Jeśli QR scan mode aktywny i nie manual mode – uruchom kamerę
-  if (state.qrScanMode && !state.qrManualMode && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-    setTimeout(startQRCamera, 100);
   }
 }
 

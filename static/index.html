@@ -396,6 +396,16 @@ async function startSesja(operacjaId) {
   }
 }
 
+async function startZbrojenie(operacjaId) {
+  try {
+    await post('/api/sesje/start', {operacja_id:operacjaId, user_id:state.user.id, typ:'zbrojenie'});
+    setState({qrZleceniePickerModal:null});
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
 async function startNieprodukcyjna(opis) {
   try {
     await post('/api/sesje/start', {user_id:state.user.id, typ:'nieprodukcyjna', opis_nieprodukcyjnej:opis});
@@ -428,6 +438,21 @@ async function stopSesja(sesjaId, ilosc, uwagi) {
   } catch(e) {
     alert('Błąd: ' + e.message);
   }
+}
+
+function stopSesjaModal() {
+  const s = state.stopModal;
+  if (!s) return;
+  const isZbrojenie = s.typ === 'zbrojenie';
+  const isNieprod = s.typ === 'nieprodukcyjna';
+  const ilosc = (isZbrojenie || isNieprod) ? 0 : (parseInt(document.getElementById('stop-ilosc')?.value)||0);
+  const uwagi = document.getElementById('stop-uwagi')?.value || '';
+  stopSesja(s.id, ilosc, uwagi);
+}
+
+function clearQRHistory() {
+  localStorage.removeItem('qr_historia');
+  setState({qrLastCodes: []});
 }
 
 async function scanQR(kod) {
@@ -486,37 +511,79 @@ function renderQRZleceniePickerModal() {
   if (!dostepne.length) {
     html += `<div class="empty">Brak dostępnych operacji do rozpoczęcia</div>`;
   } else {
-    html += `<div style="color:var(--dim);font-size:12px;margin-bottom:10px">Wybierz operację do rozpoczęcia:</div>`;
+    html += `<div style="color:var(--dim);font-size:12px;margin-bottom:10px">Wybierz operację:</div>`;
     dostepne.forEach(op => {
-      const czyAktywna = (state.aktywnesje||[]).some(s => s.operacja_id === op.id);
       const opWykonana = op.ilosc_wykonana || 0;
       const opPozostalo = Math.max(0, iloscTotal - opWykonana);
       const opProg = iloscTotal > 0 ? Math.min(100, Math.round(opWykonana / iloscTotal * 100)) : 0;
       const opZbrMin = op.czas_zbrojenia_min || 0;
+
+      // Stan sesji dla tej operacji
+      const sesjaOp = (state.aktywnesje||[]).find(s => s.operacja_id === op.id && s.typ === 'operacja');
+      const sesjaZbr = (state.aktywnesje||[]).find(s => s.operacja_id === op.id && s.typ === 'zbrojenie');
+      const czyOpAktywna = !!sesjaOp;
+      const czyZbrAktywne = !!sesjaZbr;
+
+      // Czy zbrojenie zostało już wykonane (info z serwera - op.zbrojenie_wykonane lub sprawdzamy przez sesje zakonczone)
+      // Skoro nie mamy tej info bezpośrednio, zakładamy: jeśli opZbrMin>0 i nie ma aktywnego zbrojenia to pokaż guzik zbrojenia
+      // Rzeczywisty stan blokady jest po stronie serwera - frontend tylko pokazuje opcje
+
+      html += `<div class="card" style="padding:12px;margin-bottom:10px">`;
+
+      // Nagłówek operacji
       html += `
-      <div class="card" style="padding:12px;margin-bottom:8px;cursor:${czyAktywna?'default':'pointer'}"
-           ${czyAktywna?'':'onclick="pickOperacjaFromQR('+op.id+')"'}>
-        ${opZbrMin>0 ? `<div style="font-size:11px;color:var(--orange);margin-bottom:6px;padding:4px 8px;background:rgba(243,156,18,0.1);border-radius:6px">⚙ Zbrojenie: ${opZbrMin} min (wliczone)</div>` : ''}
-        <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <div style="flex:1">
-            <div style="font-weight:600">${op.kolejnosc}. ${op.nazwa}</div>
-            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min':''}</div>
+            <div style="font-weight:700;font-size:15px">${op.kolejnosc}. ${op.nazwa}</div>
+            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min/szt':''}</div>
             <div style="font-size:12px;margin-top:4px">
               <span style="color:var(--dim)">Wykonano: </span>
-              <span style="color:var(--text);font-weight:600">${opWykonana}/${iloscTotal} szt.</span>
-              ${opPozostalo > 0 ? `<span style="color:var(--accent);margin-left:8px">⟶ zostało: <b>${opPozostalo} szt.</b></span>` : '<span style="color:var(--green);margin-left:8px">✅ ukończona</span>'}
+              <span style="font-weight:600">${opWykonana}/${iloscTotal} szt.</span>
+              ${opPozostalo > 0 ? `<span style="color:var(--accent);margin-left:6px">zostało: <b>${opPozostalo}</b></span>` : '<span style="color:var(--green);margin-left:6px">✅</span>'}
             </div>
-            <div class="progress-wrap" style="height:4px;margin-top:6px">
-              <div class="progress-bar" style="width:${opProg}%;background:${opProg>=100?'var(--green)':'var(--accent)'}"></div>
-            </div>
+            <div class="progress-wrap" style="height:4px;margin-top:6px"><div class="progress-bar" style="width:${opProg}%;background:${opProg>=100?'var(--green)':'var(--accent)'}"></div></div>
           </div>
-          <div style="margin-left:10px">
-            ${czyAktywna
-              ? `<span class="badge badge-orange">▶ W toku</span>`
-              : `<span class="badge" style="background:var(--accent);color:#000">${statusBadge_txt(op.status)}</span>`}
-          </div>
-        </div>
-      </div>`;
+        </div>`;
+
+      // Przyciski akcji - zbrojenie pierwsze jeśli jest
+      if (opZbrMin > 0) {
+        if (czyZbrAktywne) {
+          html += `
+          <div style="background:rgba(243,156,18,0.12);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+            <div style="font-size:12px;color:var(--orange);font-weight:700">⚙ Zbrojenie w toku (${opZbrMin} min)</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">Zakończ zbrojenie, aby uruchomić operację</div>
+          </div>`;
+          html += `<div class="btn-row">
+            <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaZbr).replace(/"/g,'&quot;')}})">⏹ Zakończ zbrojenie</button>
+          </div>`;
+        } else if (czyOpAktywna) {
+          html += `
+          <div style="background:rgba(39,174,96,0.1);border:1px solid var(--green);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+            <div style="font-size:12px;color:var(--green);font-weight:700">▶ Operacja w toku</div>
+          </div>`;
+          html += `<div class="btn-row">
+            <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaOp).replace(/"/g,'&quot;')}})">⏹ Zakończ operację</button>
+          </div>`;
+        } else {
+          // Zbrojenie pierwsze - operacja zablokowana
+          html += `
+          <div style="display:flex;gap:8px;flex-direction:column">
+            <button class="btn btn-accent" style="background:var(--orange);color:#1a1f2e" onclick="startZbrojenie(${op.id})">⚙ Uruchom zbrojenie (${opZbrMin} min)</button>
+            <button class="btn btn-outline" style="opacity:0.4;cursor:not-allowed" disabled title="Najpierw uruchom i zakończ zbrojenie">▶ Uruchom operację (po zbroj.)</button>
+          </div>`;
+        }
+      } else {
+        // Brak zbrojenia - normalna operacja
+        if (czyOpAktywna) {
+          html += `<div class="btn-row">
+            <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaOp).replace(/"/g,'&quot;')}})">⏹ Zakończ operację</button>
+          </div>`;
+        } else {
+          html += `<button class="btn btn-green" onclick="pickOperacjaFromQR(${op.id})">▶ Uruchom operację</button>`;
+        }
+      }
+
+      html += `</div>`;
     });
   }
   // Opcja INNE
@@ -993,12 +1060,17 @@ function renderPracaGlowna() {
     }
     html += `
       ${hist.length ? `
-      <div class="section-hdr" style="margin-top:10px">Historia QR</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+        <div class="section-hdr" style="margin-bottom:0">Historia QR</div>
+        <button class="btn-sm btn-red" onclick="clearQRHistory()" style="font-size:11px">🗑 Wyczyść</button>
+      </div>
+      <div style="margin-top:8px">
       ${hist.map(c => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
           <span class="tag">${c}</span>
           <button class="btn-sm btn-blue" onclick="scanQR('${c}')">Użyj</button>
         </div>`).join('')}
+      </div>
       ` : ''}
       <button class="btn btn-outline" style="margin-top:10px"
               onclick="stopQRCamera();setState({qrScanMode:false,qrManualMode:false})">✕ Zamknij</button>
@@ -1017,19 +1089,25 @@ function renderPracaGlowna() {
     state.aktywnesje.forEach(sesja => {
       const paused = isPaused(sesja);
       const isNieprod = sesja.typ === 'nieprodukcyjna';
+      const isZbrojenie = sesja.typ === 'zbrojenie';
+      const cardStyle = isZbrojenie
+        ? 'background:linear-gradient(135deg,#2e2a1a,#2a2510);border:2px solid var(--orange)'
+        : (isNieprod ? '' : '');
+      const labelTxt = isZbrojenie ? '⚙ ZBROJENIE' : (isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : (paused ? '⏸ PAUZA' : '⏱ AKTYWNA'));
+      const timerColor = isZbrojenie ? 'var(--orange)' : (paused ? 'var(--orange)' : 'var(--green)');
       html += `
-      <div class="timer-card ${paused?'paused':''} ${isNieprod?'nieprodukcyjna-card':''}">
-        <div class="timer-label">${isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : (paused ? '⏸ PAUZA' : '⏱ AKTYWNA')}</div>
-        <div class="timer-display" id="timer-${sesja.id}">00:00:00</div>
+      <div class="timer-card ${paused?'paused':''} ${isNieprod?'nieprodukcyjna-card':''}" ${cardStyle?`style="${cardStyle}"`:''}> 
+        <div class="timer-label" style="${isZbrojenie?'color:var(--orange)':''}">${labelTxt}</div>
+        <div class="timer-display" id="timer-${sesja.id}" style="color:${timerColor}">00:00:00</div>
         <div class="timer-op">${sesja.op_nazwa || sesja.uwagi || '—'}</div>
         ${sesja.zl_numer ? `<div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>` : ''}
         <div style="color:var(--dim);font-size:12px;margin:4px 0 12px">${sesja.stanowisko||''}</div>
         <div class="btn-row">
-          ${!isNieprod ? `<button class="btn ${paused?'btn-green':'btn-accent'}" onclick="togglePauza(${JSON.stringify(sesja).replace(/"/g,'&quot;')})">
+          ${!isNieprod && !isZbrojenie ? `<button class="btn ${paused?'btn-green':'btn-accent'}" onclick="togglePauza(${JSON.stringify(sesja).replace(/"/g,'&quot;')})">
             ${paused ? '▶ Wznów' : '⏸ Pauza'}
           </button>` : ''}
           <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesja).replace(/"/g,'&quot;')}})">
-            ⏹ Zakończ
+            ⏹ Zakończ ${isZbrojenie?'zbrojenie':''}
           </button>
         </div>
       </div>`;
@@ -1053,7 +1131,11 @@ function renderPracaGlowna() {
         <button class="modal-close" onclick="setState({stopModal:null})">×</button>
         <h3>⏹ Zakończ sesję</h3>
         <p style="color:var(--dim);font-size:13px;margin-bottom:16px">${s.op_nazwa || s.uwagi || '—'}</p>
-        ${s.typ !== 'nieprodukcyjna' ? `
+        ${s.typ === 'zbrojenie' ? `
+        <div style="background:rgba(243,156,18,0.1);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:var(--orange)">
+          ⚙ Zakończenie zbrojenia – po potwierdzeniu będzie możliwe uruchomienie operacji
+        </div>` : ''}
+        ${s.typ !== 'nieprodukcyjna' && s.typ !== 'zbrojenie' ? `
         <div class="field">
           <label>Liczba wykonanych sztuk</label>
           <input type="number" id="stop-ilosc" value="1" min="0">
@@ -1062,7 +1144,7 @@ function renderPracaGlowna() {
           <label>Uwagi</label>
           <textarea id="stop-uwagi" placeholder="opcjonalnie..."></textarea>
         </div>
-        <button class="btn btn-red" onclick="stopSesja(${s.id}, document.getElementById('stop-ilosc')?.value||0, document.getElementById('stop-uwagi').value)">
+        <button class="btn btn-red" onclick="stopSesjaModal()">
           ✅ Potwierdź zakończenie
         </button>
       </div>
@@ -1113,9 +1195,14 @@ function szacowanyKoniec(z, ops) {
       const wykonano = op.ilosc_wykonana || 0;
       const pozostaloSztuk = Math.max(0, ilosc - wykonano);
       if (norma) pozostaleMin += norma * pozostaloSztuk;
-      // zbrojenie raz na operację (niezależnie od ilości sztuk)
+      // zbrojenie: dolicz tylko jeśli nie ma aktywnej/zakończonej sesji zbrojenia dla tej op
       const zbrMin = op.czas_zbrojenia_min || 0;
-      if (zbrMin) pozostaleMin += zbrMin;
+      if (zbrMin) {
+        // Sprawdź czy zbrojenie jest już aktywne lub wykonane (przez aktywne sesje)
+        const zbrJuzAkt = (state.aktywnesje||[]).some(s => s.operacja_id === op.id && s.typ === 'zbrojenie');
+        // Jeśli nie aktywne, zakładamy że zbrojenie jest do zrobienia (serwer weryfikuje czy zakończone)
+        if (!zbrJuzAkt) pozostaleMin += zbrMin;
+      }
     });
     if (pozostaleMin <= 0) return null;
     const koniec = new Date(Date.now() + pozostaleMin * 60 * 1000);
@@ -1181,7 +1268,7 @@ function renderMajster() {
           <div class="card-header">
             <div>
               <div class="card-title">👤 ${s.full_name} ${hasPauza?'<span class="badge badge-orange">PAUZA</span>':''}</div>
-              <div class="card-sub">${s.typ==='nieprodukcyjna'?'⏸ Nieprodukcyjna':s.typ==='inne_zlecenie'?'🔧 Inne: '+(s.uwagi||s.op_nazwa||'—'):'🔧 '+s.op_nazwa}</div>
+              <div class="card-sub">${s.typ==='nieprodukcyjna'?'⏸ Nieprodukcyjna':s.typ==='zbrojenie'?'⚙ Zbrojenie: '+(s.op_nazwa||'—'):s.typ==='inne_zlecenie'?'🔧 Inne: '+(s.uwagi||s.op_nazwa||'—'):'🔧 '+s.op_nazwa}</div>
               ${s.zl_numer?`<div class="card-sub">📋 ${s.zl_numer} – ${s.zl_nazwa}</div>`:''}
             </div>
             <div style="text-align:right">

@@ -196,7 +196,13 @@ def scan_qr(qr: str):
             WHERE o.qr_code=?
         """, (qr,)).fetchone()
         if op:
-            return {"type": "operacja", "data": dict(op)}
+            od = dict(op)
+            zbr_done = conn.execute(
+                "SELECT COUNT(*) FROM sesje_pracy WHERE operacja_id=? AND typ='zbrojenie' AND status='zakonczona'",
+                (op["id"],)
+            ).fetchone()[0]
+            od["zbrojenie_wykonane"] = bool(zbr_done)
+            return {"type": "operacja", "data": od}
 
         # szukaj zlecenia
         zl = conn.execute("SELECT * FROM zlecenia WHERE qr_code=?", (qr,)).fetchone()
@@ -204,7 +210,16 @@ def scan_qr(qr: str):
             ops = conn.execute(
                 "SELECT * FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc", (zl["id"],)
             ).fetchall()
-            return {"type": "zlecenie", "data": dict(zl), "operacje": [dict(o) for o in ops]}
+            ops_list = []
+            for o in ops:
+                od = dict(o)
+                zbr_done = conn.execute(
+                    "SELECT COUNT(*) FROM sesje_pracy WHERE operacja_id=? AND typ='zbrojenie' AND status='zakonczona'",
+                    (o["id"],)
+                ).fetchone()[0]
+                od["zbrojenie_wykonane"] = bool(zbr_done)
+                ops_list.append(od)
+            return {"type": "zlecenie", "data": dict(zl), "operacje": ops_list}
 
     raise HTTPException(404, "Nie znaleziono kodu QR: " + qr)
 
@@ -807,18 +822,23 @@ def majster_stats():
                     "przekroczenie_pct": round((elapsed_min / norma_calkowita - 1) * 100)
                 })
 
-        # podsumowanie kosztów dzisiaj
+        # podsumowanie kosztów dzisiaj (operacje + zbrojenia)
         koszty = conn.execute("""
             SELECT s.user_id, u.full_name, o.stanowisko,
-                   SUM((strftime('%s', COALESCE(s.end_time, datetime('now'))) -
-                        strftime('%s', s.start_time)) / 3600.0 * st.stawka_godz) as koszt,
+                   SUM(CASE WHEN s.typ='operacja' THEN
+                     (strftime('%s', COALESCE(s.end_time, datetime('now'))) -
+                      strftime('%s', s.start_time)) / 3600.0 * COALESCE(st.stawka_godz,0)
+                   ELSE
+                     (strftime('%s', COALESCE(s.end_time, datetime('now'))) -
+                      strftime('%s', s.start_time)) / 3600.0 * COALESCE(st.zbrojenie_stawka_godz,0)
+                   END) as koszt,
                    SUM((strftime('%s', COALESCE(s.end_time, datetime('now'))) -
                         strftime('%s', s.start_time)) / 3600.0) as godz
             FROM sesje_pracy s
             JOIN users u ON s.user_id = u.id
             LEFT JOIN operacje o ON s.operacja_id = o.id
             LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
-            WHERE date(s.start_time) = date('now') AND s.typ='operacja'
+            WHERE date(s.start_time) = date('now') AND s.typ IN ('operacja','zbrojenie')
             GROUP BY s.user_id, o.stanowisko
         """).fetchall()
 
@@ -863,11 +883,14 @@ def stats_wydajnosc(okres: str = "dzis"):
             sesje = conn.execute(f"""
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
-                       z.numer as zl_numer, z.nazwa as zl_nazwa
+                       z.numer as zl_numer, z.nazwa as zl_nazwa, s.typ,
+                       COALESCE(st.stawka_godz,0) as stawka_godz,
+                       COALESCE(st.zbrojenie_stawka_godz,0) as zbrojenie_stawka_godz
                 FROM sesje_pracy s
                 LEFT JOIN operacje o ON s.operacja_id = o.id
                 LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
-                WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja'
+                LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
+                WHERE s.user_id=? AND s.status='zakonczona' AND s.typ IN ('operacja','zbrojenie')
                   AND s.start_time IS NOT NULL AND s.end_time IS NOT NULL
                   AND {filter_sql}
                 ORDER BY s.end_time DESC LIMIT 30
@@ -876,6 +899,7 @@ def stats_wydajnosc(okres: str = "dzis"):
             sesje_list = []
             normy_ok = 0
             normy_total = 0
+            koszt_pracy = 0.0; koszt_zbrojenia = 0.0
             for s in sesje:
                 try:
                     elapsed = (_parse(s["end_time"]) -
@@ -890,11 +914,15 @@ def stats_wydajnosc(okres: str = "dzis"):
                 elapsed = max(0.1, elapsed)
                 czas_norma = s["czas_norma"]
                 ilosc = s["ilosc_sztuk"] or 1
-                wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
+                wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma and s["typ"] == "operacja" else None
                 if wyd_pct is not None:
                     normy_total += 1
                     if wyd_pct >= 90:
                         normy_ok += 1
+                if s["typ"] == "operacja":
+                    koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
+                elif s["typ"] == "zbrojenie":
+                    koszt_zbrojenia += (elapsed / 60.0) * float(s["zbrojenie_stawka_godz"] or 0)
                 sesje_list.append({
                     "op_nazwa": s["op_nazwa"],
                     "stanowisko": s["stanowisko"],
@@ -915,6 +943,9 @@ def stats_wydajnosc(okres: str = "dzis"):
                 "godz": round(r["min_total"] / 60, 2),
                 "normy_ok": normy_ok,
                 "normy_total": normy_total,
+                "koszt_pracy": round(koszt_pracy, 2),
+                "koszt_zbrojenia": round(koszt_zbrojenia, 2),
+                "koszt_total": round(koszt_pracy + koszt_zbrojenia, 2),
                 "sesje": sesje_list,
             })
 
@@ -1275,16 +1306,20 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
             sesje = conn.execute(f"""
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
-                       z.numer as zl_numer
+                       z.numer as zl_numer,
+                       COALESCE(st.stawka_godz, 0) as stawka_godz,
+                       COALESCE(st.zbrojenie_stawka_godz, 0) as zbrojenie_stawka_godz
                 FROM sesje_pracy s
                 LEFT JOIN operacje o ON s.operacja_id = o.id
                 LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+                LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
                 WHERE s.user_id=? AND s.status='zakonczona' AND {filter_sql}
                 ORDER BY s.end_time DESC
             """, (r["id"],)).fetchall()
 
             sesje_list = []
             normy_ok = 0; normy_total = 0
+            koszt_pracy = 0.0; koszt_zbrojenia = 0.0
             for s in sesje:
                 elapsed = (_parse(s["end_time"]) - _parse(s["start_time"])).total_seconds() / 60
                 pauzy = json.loads(s["pauzy"] or "[]")
@@ -1295,9 +1330,14 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                 czas_norma = s["czas_norma"]
                 ilosc = s["ilosc_sztuk"] or 1
                 wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
-                if wyd_pct is not None:
+                if wyd_pct is not None and s["typ"] in ("operacja", "inne_zlecenie"):
                     normy_total += 1
                     if wyd_pct >= 90: normy_ok += 1
+                # Koszt sesji
+                if s["typ"] in ("operacja", "inne_zlecenie"):
+                    koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
+                elif s["typ"] == "zbrojenie":
+                    koszt_zbrojenia += (elapsed / 60.0) * float(s["zbrojenie_stawka_godz"] or 0)
                 sesje_list.append({
                     "op_nazwa": s["op_nazwa"] or "—",
                     "stanowisko": s["stanowisko"] or "—",
@@ -1321,6 +1361,9 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                 "dni_pracy": r["dni_pracy"],
                 "normy_ok": normy_ok,
                 "normy_total": normy_total,
+                "koszt_pracy": round(koszt_pracy, 2),
+                "koszt_zbrojenia": round(koszt_zbrojenia, 2),
+                "koszt_total": round(koszt_pracy + koszt_zbrojenia, 2),
                 "sesje": sesje_list,
             })
     return {"data_od": data_od, "data_do": data_do, "pracownicy": wyniki}
@@ -1354,7 +1397,8 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
                        COALESCE(o.kolejnosc, 999) as kolejnosc,
                        COALESCE(o.stanowisko, '') as stanowisko,
                        COALESCE(o.czas_norma, 0) as czas_norma,
-                       COALESCE(st.stawka_godz,0) as stawka_godz
+                       COALESCE(st.stawka_godz,0) as stawka_godz,
+                       COALESCE(st.zbrojenie_stawka_godz,0) as zbrojenie_stawka_godz
                 FROM sesje_pracy s
                 JOIN users u ON s.user_id=u.id
                 LEFT JOIN operacje o ON s.operacja_id=o.id
@@ -1365,6 +1409,7 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
 
             sesje_list = []
             koszt_pracy = 0
+            koszt_zbrojenia = 0.0
             for s in sesje:
                 elapsed = (_parse(s["end_time"]) - _parse(s["start_time"])).total_seconds() / 3600
                 pauzy = json.loads(s["pauzy"] or "[]")
@@ -1372,12 +1417,17 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
                     if p.get("koniec"):
                         elapsed -= (_parse(p["koniec"]) - _parse(p["start"])).total_seconds() / 3600
                 elapsed = max(0, elapsed)
-                koszt = round(elapsed * s["stawka_godz"], 2)
-                koszt_pracy += koszt
+                if s["typ"] == "zbrojenie":
+                    koszt = round(elapsed * float(s["zbrojenie_stawka_godz"] or 0), 2)
+                    koszt_zbrojenia += koszt
+                else:
+                    koszt = round(elapsed * float(s["stawka_godz"] or 0), 2)
+                    koszt_pracy += koszt
                 sesje_list.append({
                     "pracownik": s["full_name"],
                     "operacja": s["op_nazwa"],
                     "kolejnosc": s["kolejnosc"],
+                    "typ": s["typ"],
                     "data": (s["end_time"] or "")[:16].replace("T"," "),
                     "czas_min": round(elapsed * 60, 1),
                     "ilosc_sztuk": s["ilosc_sztuk"],
@@ -1392,7 +1442,8 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
             produkty_list = [dict(p) for p in produkty]
             koszt_produktow = sum(float(p["ilosc"])*float(p["cena"]) for p in produkty_list)
             wartosc = (z["cena_brutto_szt"] or 0) * (z["ilosc_sztuk"] or 0)
-            zysk = wartosc - koszt_pracy - koszt_produktow
+            koszt_total = koszt_pracy + koszt_zbrojenia + koszt_produktow
+            zysk = wartosc - koszt_total
 
             result.append({
                 "id": zid,
@@ -1406,8 +1457,9 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
                 "sesje": sesje_list,
                 "produkty": produkty_list,
                 "koszt_pracy": round(koszt_pracy, 2),
+                "koszt_zbrojenia": round(koszt_zbrojenia, 2),
                 "koszt_produktow": round(koszt_produktow, 2),
-                "koszt_total": round(koszt_pracy + koszt_produktow, 2),
+                "koszt_total": round(koszt_total, 2),
                 "zysk": round(zysk, 2),
             })
     return {"data_od": data_od, "data_do": data_do, "zlecenia": result}

@@ -522,7 +522,6 @@ def get_stawki():
 class StawkaRequest(BaseModel):
     stanowisko: str
     stawka_godz: float
-    czas_norma_min: Optional[float] = 0
     opis: Optional[str] = ""
 
 @app.post("/api/stawki", dependencies=[Depends(verify_key)])
@@ -530,8 +529,8 @@ def create_stawka(req: StawkaRequest):
     with get_db() as conn:
         try:
             cur = conn.execute(
-                "INSERT INTO stawki (stanowisko,stawka_godz,czas_norma_min,opis) VALUES (?,?,?,?)",
-                (req.stanowisko, req.stawka_godz, req.czas_norma_min, req.opis)
+                "INSERT INTO stawki (stanowisko,stawka_godz,opis) VALUES (?,?,?)",
+                (req.stanowisko, req.stawka_godz, req.opis)
             )
             return {"id": cur.lastrowid}
         except sqlite3.IntegrityError:
@@ -541,8 +540,8 @@ def create_stawka(req: StawkaRequest):
 def update_stawka(sid: int, req: StawkaRequest):
     with get_db() as conn:
         conn.execute(
-            "UPDATE stawki SET stanowisko=?,stawka_godz=?,czas_norma_min=?,opis=? WHERE id=?",
-            (req.stanowisko, req.stawka_godz, req.czas_norma_min, req.opis, sid)
+            "UPDATE stawki SET stanowisko=?,stawka_godz=?,opis=? WHERE id=?",
+            (req.stanowisko, req.stawka_godz, req.opis, sid)
         )
     return {"ok": True}
 
@@ -964,13 +963,14 @@ def get_zlecenie_szczegoly(zid: int):
         # Sesje dla wszystkich operacji tego zlecenia
         sesje = conn.execute("""
             SELECT s.id, s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi, s.typ,
-                   u.full_name, u.stawka_godz,
+                   u.full_name, COALESCE(st.stawka_godz, 0) as stawka_godz,
                    o.nazwa as op_nazwa, o.kolejnosc, o.stanowisko, o.czas_norma,
                    z2.numer as zl_numer
             FROM sesje_pracy s
             JOIN users u ON s.user_id=u.id
             LEFT JOIN operacje o ON s.operacja_id=o.id
             LEFT JOIN zlecenia z2 ON o.zlecenie_id=z2.id
+            LEFT JOIN stawki st ON o.stanowisko=st.stanowisko
             WHERE o.zlecenie_id=? AND s.status='zakonczona'
             ORDER BY o.kolejnosc, s.end_time
         """, (zid,)).fetchall()
@@ -994,9 +994,19 @@ def get_zlecenie_szczegoly(zid: int):
             koszt_total += koszt
             result_sesje.append(sd)
 
+        # Produkty zlecenia
+        produkty = conn.execute(
+            "SELECT * FROM produkty_zlecenia WHERE zlecenie_id=? ORDER BY id",
+            (zid,)
+        ).fetchall()
+        produkty_list = [dict(p) for p in produkty]
+        koszt_produktow = sum(float(p['ilosc']) * float(p['cena']) for p in produkty_list)
+
     return {
         "sesje": result_sesje,
         "koszt_total": round(koszt_total, 2),
+        "koszt_produktow": round(koszt_produktow, 2),
+        "produkty": produkty_list,
         "wartosc": float(zlecenie['wartosc_total'] or 0),
     }
 
@@ -1046,13 +1056,22 @@ def koszty_zlecenia(zid: int):
             })
 
         przychod = (zl["cena_brutto_szt"] or 0) * (zl["ilosc_sztuk"] or 0)
+        produkty = conn.execute(
+            "SELECT * FROM produkty_zlecenia WHERE zlecenie_id=? ORDER BY id", (zid,)
+        ).fetchall()
+        produkty_list = [dict(p) for p in produkty]
+        koszt_produktow = sum(float(p['ilosc']) * float(p['cena']) for p in produkty_list)
+        total_koszty = total_koszt + koszt_produktow
         return {
             "zlecenie": dict(zl),
             "sesje": rows,
+            "produkty": produkty_list,
             "total_godz": round(total_godz, 2),
             "total_koszt": round(total_koszt, 2),
+            "koszt_produktow": round(koszt_produktow, 2),
+            "total_koszty": round(total_koszty, 2),
             "przychod": round(przychod, 2),
-            "marza": round(przychod - total_koszt, 2),
+            "marza": round(przychod - total_koszty, 2),
         }
 
 
@@ -1074,6 +1093,47 @@ def get_powiadomienia(rola: str):
 def mark_read(pid: int):
     with get_db() as conn:
         conn.execute("UPDATE powiadomienia SET odczytane=1 WHERE id=?", (pid,))
+    return {"ok": True}
+
+
+
+# ─── Produkty zlecenia (zakupy/narzędzia) ────────────────────────────────────
+class ProduktZleceniaRequest(BaseModel):
+    zlecenie_id: int
+    nazwa: str
+    ilosc: float = 1
+    cena: float = 0
+
+@app.get("/api/zlecenia/{zid}/produkty", dependencies=[Depends(verify_key)])
+def get_produkty_zlecenia(zid: int):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM produkty_zlecenia WHERE zlecenie_id=? ORDER BY id", (zid,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+@app.post("/api/zlecenia/{zid}/produkty", dependencies=[Depends(verify_key)])
+def add_produkt_zlecenia(zid: int, req: ProduktZleceniaRequest):
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO produkty_zlecenia (zlecenie_id, nazwa, ilosc, cena) VALUES (?,?,?,?)",
+            (zid, req.nazwa, req.ilosc, req.cena)
+        )
+        return {"id": cur.lastrowid}
+
+@app.put("/api/zlecenia/{zid}/produkty/{pid}", dependencies=[Depends(verify_key)])
+def update_produkt_zlecenia(zid: int, pid: int, req: ProduktZleceniaRequest):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE produkty_zlecenia SET nazwa=?, ilosc=?, cena=? WHERE id=? AND zlecenie_id=?",
+            (req.nazwa, req.ilosc, req.cena, pid, zid)
+        )
+    return {"ok": True}
+
+@app.delete("/api/zlecenia/{zid}/produkty/{pid}", dependencies=[Depends(verify_key)])
+def delete_produkt_zlecenia(zid: int, pid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM produkty_zlecenia WHERE id=? AND zlecenie_id=?", (pid, zid))
     return {"ok": True}
 
 
@@ -1121,6 +1181,15 @@ def init_db_on_start():
         nazwa TEXT UNIQUE NOT NULL, opis TEXT,
         ilosc_domyslna INTEGER DEFAULT 1, cena_szt REAL DEFAULT 0.0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS produkty_zlecenia (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        zlecenie_id INTEGER NOT NULL,
+        nazwa TEXT NOT NULL,
+        ilosc REAL DEFAULT 1,
+        cena REAL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id))""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS opcje_zlecen (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

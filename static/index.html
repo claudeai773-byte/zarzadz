@@ -120,8 +120,7 @@
 //  CONFIG
 // ══════════════════════════════════════════════════════════════
 let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
-// Auto-wykryj URL serwera gdy app jest serwowana z tego samego serwera
-const _autoUrl = (() => { try { const o = window.location.origin; return (o && o !== 'null' && !o.startsWith('file')) ? o : ''; } catch(_) { return ''; } })();
+const _autoUrl = (() => { try { const o = window.location.origin; return (o && o !== 'null' && !o.startsWith('file')) ? o : ''; } catch(e) { return ''; } })();
 let SERVER_URL = CONFIG.server_url || _autoUrl || '';
 let API_KEY    = CONFIG.api_key    || '';
 const HEADERS  = () => ({'Content-Type':'application/json','x-api-key':API_KEY});
@@ -147,7 +146,7 @@ const patch= (p,b) => api(p, {method:'PATCH', body:JSON.stringify(b)});
 //  STATE
 // ══════════════════════════════════════════════════════════════
 let state = {
-  screen: SERVER_URL ? 'login' : 'config',
+  screen: 'login',
   user: null,
   activeTab: 'praca',
   loading: false,
@@ -708,50 +707,42 @@ function saveConfig() {
 
 // ══════════════════════════════════════════════════════════════
 //  SCREEN: LOGIN
-// ══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 function renderLogin() {
   const wi = state.warehouseInfo;
-  const needsApiKey = !API_KEY;
-  return `
-  <div style="padding:16px;max-width:480px;margin:0 auto">
-    ${wi ? renderWarehouseLoginPanel(wi) : (SERVER_URL ? `
-    <div style="text-align:center;padding:20px 0 8px;color:var(--dim);font-size:12px">
-      ⏳ Ładowanie statusu produkcji...
-    </div>` : '')}
-    <div class="login-card">
-      <h2>⚙ PRODUKCJA</h2>
-      <p class="subtitle">System Zarządzania Produkcją v5.0</p>
-      ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
-      ${needsApiKey ? `
-      <div class="field">
-        <label style="color:var(--orange)">🔑 Klucz API (wymagany)</label>
-        <input id="lg-apikey" type="password" placeholder="klucz-api" autocomplete="off"
-               onkeydown="if(event.key==='Enter')document.getElementById('lg-user').focus()">
-      </div>` : ''}
-      <div class="field">
-        <label>Login</label>
-        <input id="lg-user" type="text" placeholder="np. piotr.p" autocomplete="username"
-               onkeydown="if(event.key==='Enter')document.getElementById('lg-pass').focus()">
-      </div>
-      <div class="field">
-        <label>Hasło</label>
-        <input id="lg-pass" type="password" autocomplete="current-password"
-               onkeydown="if(event.key==='Enter')doLoginWithKey()">
-      </div>
-      <button class="btn btn-accent" style="margin-top:8px"
-              onclick="doLoginWithKey()"
-              ${state.loading?'disabled':''}>
-        ${state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się'}
-      </button>
-      <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">⚙ Zmień serwer</button>
-    </div>
-  </div>`;
+  const missingUrl = !SERVER_URL;
+  const missingKey = !API_KEY;
+  const showSetup  = missingUrl || missingKey;
+  let html = '<div style="padding:16px;max-width:480px;margin:0 auto">';
+  if (wi && !showSetup) html += renderWarehouseLoginPanel(wi);
+  else if (SERVER_URL && !showSetup) html += '<div style="text-align:center;padding:20px 0 8px;color:var(--dim);font-size:12px">⏳ Ładowanie statusu produkcji...</div>';
+  html += '<div class="login-card">';
+  html += '<h2>⚙ PRODUKCJA</h2>';
+  html += '<p class="subtitle">System Zarządzania Produkcją v5.0</p>';
+  if (state.error) html += '<div class="error-banner">⚠ ' + state.error + '</div>';
+  if (showSetup) {
+    html += '<div style="background:var(--entry);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px">';
+    html += '<div style="font-size:11px;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">⚙ Konfiguracja połączenia</div>';
+    if (missingUrl) html += '<div class="field" style="margin-bottom:8px"><label>URL Serwera</label><input id="lg-url" type="url" placeholder="https://produkcja-xxx.railway.app" value="' + SERVER_URL + '" autocomplete="off"></div>';
+    if (missingKey) html += '<div class="field" style="margin-bottom:0"><label>Klucz API</label><input id="lg-apikey" type="password" placeholder="klucz-api" autocomplete="off"></div>';
+    html += '</div>';
+  }
+  html += '<div class="field"><label>Login</label><input id="lg-user" type="text" placeholder="np. piotr.p" autocomplete="username" onkeydown="if(event.key===\'Enter\')document.getElementById(\'lg-pass\').focus()"></div>';
+  html += '<div class="field"><label>Hasło</label><input id="lg-pass" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')doLoginWithKey()"></div>';
+  html += '<button class="btn btn-accent" style="margin-top:8px" onclick="doLoginWithKey()"' + (state.loading ? ' disabled' : '') + '>';
+  html += state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się';
+  html += '</button>';
+  html += '<button class="btn-outline" style="margin-top:10px" onclick="setState({screen:\'config\'})">&#x2699; Zmień serwer</button>';
+  html += '</div></div>';
+  return html;
 }
 
 function doLoginWithKey() {
+  const urlEl = document.getElementById('lg-url');
   const keyEl = document.getElementById('lg-apikey');
-  if (keyEl && keyEl.value.trim()) {
-    API_KEY = keyEl.value.trim();
+  if (urlEl && urlEl.value.trim()) SERVER_URL = urlEl.value.trim();
+  if (keyEl && keyEl.value.trim()) API_KEY    = keyEl.value.trim();
+  if (SERVER_URL && API_KEY) {
     localStorage.setItem('produkcja_config', JSON.stringify({server_url: SERVER_URL, api_key: API_KEY}));
     if (_loginInfoInterval) clearInterval(_loginInfoInterval);
     startLoginInfoRefresh();
@@ -1583,12 +1574,7 @@ function renderZlecenia() {
             <div class="card-sub">${z.nazwa}</div>
             ${z.termin ? `<div class="card-sub">📅 ${fmtDate(z.termin)}</div>` : ''}
             <div class="card-sub">📦 ${z.ilosc_sztuk} szt. ${z.cena_brutto_szt ? '| '+fmtPLN(z.cena_brutto_szt)+'/szt' : ''}</div>
-            ${z.przychod > 0 ? `
-            <div style="margin-top:4px;display:flex;gap:8px;flex-wrap:wrap;font-size:12px">
-              <span style="color:var(--dim)">Przychód: <span style="color:var(--blue);font-weight:600">${fmtPLN(z.przychod)}</span></span>
-              <span style="color:var(--dim)">Koszty: <span style="color:var(--orange);font-weight:600">${fmtPLN(z.total_koszt)}</span></span>
-              <span style="color:var(--dim)">Zysk: <span style="color:${z.marza >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700">${z.marza >= 0 ? '+' : ''}${fmtPLN(z.marza)}</span></span>
-            </div>` : (z.cena_brutto_szt > 0 ? `<div style="font-size:11px;color:var(--dim);margin-top:3px">⏳ Brak zakończonych sesji – zysk niedostępny</div>` : '')}
+            ${z.przychod > 0 ? '<div style="margin-top:4px;font-size:12px;display:flex;gap:8px;flex-wrap:wrap"><span style="color:var(--dim)">Przychód: <b style="color:var(--blue)">' + fmtPLN(z.przychod) + '</b></span> <span style="color:var(--dim)">Koszty: <b style="color:var(--orange)">' + fmtPLN(z.total_koszt) + '</b></span> <span style="color:var(--dim)">Zysk: <b style="color:' + (z.marza >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (z.marza >= 0 ? '+' : '') + fmtPLN(z.marza) + '</b></span></div>' : ''}
           </div>
           ${statusBadge(z.status)}
         </div>

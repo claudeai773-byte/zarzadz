@@ -202,6 +202,7 @@ let state = {
   wydajnoscOkres: 'dzis',
   majsterExpandedUser: null,
   majsterExpandedZlecenie: null,  // id zlecenia rozwiniętego w tab Zlecenia
+  majsterOpsCache: {},            // {zid: [operacje]} - cache operacji dla majstra
   raportOkres: {od:"", do:""},
   raportWydOkres: {od:"", do:""},
   raportWydTyp: "skrocony",
@@ -302,7 +303,7 @@ async function loadPracownik() {
 }
 
 async function loadMajster() {
-  setState({loading:true, error:null});
+  setState({loading:true, error:null, majsterOpsCache:{}});
   try {
     const stats = await get('/api/stats/majster');
     setState({majsterStats:stats, loading:false});
@@ -1177,8 +1178,9 @@ function renderMajster() {
         const sztProg = z.ilosc_sztuk > 0 ? Math.round(((z.sztuki_wykonane||0)/z.ilosc_sztuk)*100) : 0;
         const przeterminowane = z.termin && new Date(z.termin) < new Date();
         const expanded = state.majsterExpandedZlecenie === z.id;
-        // Pobierz operacje z stats lub załaduj
-        const ops = (state['zlecenieOps_' + z.id]) || null;
+        // Pobierz operacje z cache
+        const ops = (state.majsterOpsCache && state.majsterOpsCache[z.id] !== undefined)
+          ? state.majsterOpsCache[z.id] : null;
         html += `
         <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
           <div class="card-header" style="cursor:pointer" onclick="toggleMajsterZlecenie(${z.id})">
@@ -1305,13 +1307,16 @@ async function toggleMajsterZlecenie(zid) {
     return;
   }
   setState({majsterExpandedZlecenie: zid});
-  // Load operations if not cached
-  if (!state['zlecenieOps_' + zid]) {
+  // Jeśli brak w cache – załaduj (zawsze przeładuj przy rozwijaniu dla aktualnych danych)
+  const cache = state.majsterOpsCache || {};
+  if (cache[zid] === undefined) {
     try {
       const ops = await get('/api/zlecenia/' + zid + '/operacje');
-      setState({['zlecenieOps_' + zid]: ops});
+      const newCache = {...(state.majsterOpsCache || {}), [zid]: ops};
+      setState({majsterOpsCache: newCache});
     } catch(e) {
-      setState({['zlecenieOps_' + zid]: []});
+      const newCache = {...(state.majsterOpsCache || {}), [zid]: []};
+      setState({majsterOpsCache: newCache});
     }
   }
 }
@@ -2077,28 +2082,31 @@ function filterZleceniaSearch(query) {
 function autofillZlecenie(id) {
   const z = (state.zlecenia||[]).find(x => x.id === id);
   if (!z) return;
-  const setVal = (elId, val) => { const el = document.getElementById(elId); if (el) el.value = val; };
-  // Numer: sugeruj nowy numer na podstawie wzorca (z sufiksem -K lub kolejnym numerem)
-  const baseNumer = z.numer || '';
-  const numerSufx = baseNumer.replace(/-K\d*$/, '') + '-K' + (Date.now()%1000);
-  setVal('zl-numer', numerSufx);
-  setVal('zl-nazwa', z.nazwa || '');
-  setVal('zl-opis',  z.opis  || '');
-  setVal('zl-termin', z.termin ? z.termin.substring(0,10) : '');
-  setVal('zl-ilosc', z.ilosc_sztuk || 1);
-  setVal('zl-cena',  z.cena_brutto_szt || 0);
-  const matEl = document.getElementById('zl-mat');
-  if (matEl) matEl.value = z.material_od_klienta ? '1' : '0';
-  // wyczyść wyszukiwarkę
-  const search = document.getElementById('zl-search');
-  if (search) search.value = '';
-  const results = document.getElementById('zl-search-results');
-  if (results) results.innerHTML = '';
-  // załaduj operacje z wzorcowego zlecenia
-  setState({autofillSourceId: id, autofillOperacje: []}, true);
+  // Numer: sugeruj nowy numer na podstawie wzorca (z sufiksem -K)
+  const baseNumer = (z.numer || '').replace(/-K[0-9]*$/, '');
+  const numerSufx = baseNumer + '-K' + (Date.now()%1000);
+  // Zapisz dane autouzupełnienia do state.zlecenieModal – dzięki temu
+  // po re-renderze (np. po załadowaniu operacji) pola nie zostaną wyczyszczone
+  const autofillData = {
+    numer: numerSufx,
+    nazwa: z.nazwa || '',
+    opis: z.opis || '',
+    termin: z.termin ? z.termin.substring(0,10) : '',
+    ilosc_sztuk: z.ilosc_sztuk || 1,
+    cena_brutto_szt: z.cena_brutto_szt || 0,
+    material_od_klienta: z.material_od_klienta || 0,
+  };
+  // Aktualizuj zlecenieModal (bez id – to nowe zlecenie) tak aby re-render
+  // użył tych wartości zamiast pustych
+  setState({
+    zlecenieModal: autofillData,
+    autofillSourceId: id,
+    autofillOperacje: [],
+  });
+  // Focus na polu numeru po renderze
+  setTimeout(() => { const el = document.getElementById('zl-numer'); if (el) { el.focus(); el.select(); } }, 80);
+  // Załaduj operacje z wzorcowego zlecenia
   fetchAutofillOperacje(id);
-  // Ustaw focus na polu numeru
-  setTimeout(() => { const el = document.getElementById('zl-numer'); if (el) { el.focus(); el.select(); } }, 100);
 }
 
 async function fetchAutofillOperacje(zid) {

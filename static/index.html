@@ -431,10 +431,28 @@ async function togglePauza(sesja) {
 }
 
 async function stopSesja(sesjaId, ilosc, uwagi) {
+  const sesja = state.stopModal;
+  const wasZbrojenie = sesja && sesja.typ === 'zbrojenie';
+  const zbrojOpId = sesja && sesja.operacja_id;
   try {
     await post('/api/sesje/stop', {sesja_id:sesjaId, ilosc_sztuk:parseInt(ilosc)||0, uwagi:uwagi||''});
     setState({stopModal:null});
     await loadPracownik();
+    // Po zakończeniu zbrojenia: odśwież dane operacji w otwartym QR modal
+    if (wasZbrojenie && state.qrZleceniePickerModal) {
+      const m = state.qrZleceniePickerModal;
+      const zl = m.zlecenie;
+      // Pobierz świeżą listę operacji i oznacz zbrojenie jako wykonane
+      try {
+        const ops = await get(`/api/zlecenia/${zl.id}/operacje`);
+        // Uzupełnij zbrojenie_wykonane: jeśli op nie ma aktywnej sesji zbrojenia, a miała czas_zbrojenia_min, uznaj za wykonane
+        const updatedOps = ops.map(op => ({
+          ...op,
+          zbrojenie_wykonane: op.id === zbrojOpId ? true : (op.zbrojenie_wykonane || false),
+        }));
+        setState({qrZleceniePickerModal: {...m, operacje: updatedOps}});
+      } catch(e2) {}
+    }
   } catch(e) {
     alert('Błąd: ' + e.message);
   }
@@ -524,9 +542,8 @@ function renderQRZleceniePickerModal() {
       const czyOpAktywna = !!sesjaOp;
       const czyZbrAktywne = !!sesjaZbr;
 
-      // Czy zbrojenie zostało już wykonane (info z serwera - op.zbrojenie_wykonane lub sprawdzamy przez sesje zakonczone)
-      // Skoro nie mamy tej info bezpośrednio, zakładamy: jeśli opZbrMin>0 i nie ma aktywnego zbrojenia to pokaż guzik zbrojenia
-      // Rzeczywisty stan blokady jest po stronie serwera - frontend tylko pokazuje opcje
+      // Czy zbrojenie zostało już wykonane (flaga z serwera)
+      const zbrWykonane = !!op.zbrojenie_wykonane;
 
       html += `<div class="card" style="padding:12px;margin-bottom:10px">`;
 
@@ -545,8 +562,8 @@ function renderQRZleceniePickerModal() {
           </div>
         </div>`;
 
-      // Przyciski akcji - zbrojenie pierwsze jeśli jest
-      if (opZbrMin > 0) {
+      // Przyciski akcji - zbrojenie pierwsze jeśli jest i nie zostało wykonane
+      if (opZbrMin > 0 && !zbrWykonane) {
         if (czyZbrAktywne) {
           html += `
           <div style="background:rgba(243,156,18,0.12);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:8px">
@@ -678,6 +695,7 @@ async function saveZlecenie(data) {
     if (data.id) {
       await put(`/api/zlecenia/${data.id}`, data);
       setState({zlecenieModal:null});
+      await loadZlecenia();
     } else {
       const result = await post('/api/zlecenia', data);
       const newId = result.id;
@@ -693,13 +711,15 @@ async function saveZlecenie(data) {
               czas_norma: op.czas_norma,
               stanowisko: op.stanowisko || '',
               opis_czynnosci: op.opis_czynnosci || '',
+              czas_zbrojenia_min: op.czas_zbrojenia_min || 0,
             });
           } catch(e2) { console.error('Błąd kopiowania operacji:', e2); }
         }
       }
+      // Najpierw odśwież listę zleceń, potem zamknij modal
+      await loadZlecenia();
       setState({zlecenieModal:null, autofillSourceId:null, autofillOperacje:[]});
     }
-    await loadZlecenia();
   } catch(e) {
     alert('Błąd: ' + e.message);
   }
@@ -1505,10 +1525,11 @@ function printRaportZlecenia(data, od, doDt) {
         </div>
         <span style="background:${statusColor[z.status]||'#888'};color:#fff;font-size:11px;padding:2px 10px;border-radius:99px;font-weight:600">${z.status||''}</span>
       </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid #ddd">
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid #ddd">
         <div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ILOŚĆ</div>${z.ilosc_sztuk||0} szt.</div>
         <div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">WARTOŚĆ</div>${fmtPLNr(z.wartosc)}</div>
-        <div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">KOSZT ŁĄCZNY</div>${fmtPLNr(z.koszt_total)}</div>
+        <div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">KOSZT PRACY</div>${fmtPLNr(z.koszt_pracy)}</div>
+        ${z.koszt_zbrojenia>0?`<div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#e67e00;font-size:10px">⚙ ZBROJENIE</div>${fmtPLNr(z.koszt_zbrojenia)}</div>`:`<div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">KOSZT ŁĄCZNY</div>${fmtPLNr(z.koszt_total)}</div>`}
         <div style="padding:8px 12px;font-size:12px"><div style="color:#888;font-size:10px">ZYSK</div><span style="color:${isZysk?'#1e8a4c':'#c0392b'};font-weight:700">${fmtPLNr(z.zysk)}</span></div>
       </div>`;
     if (Object.keys(sesjeByOp).length) {
@@ -1628,11 +1649,13 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         <th style="padding:8px 10px;text-align:center">Nieprodukcyjny (min)</th>
         <th style="padding:8px 10px;text-align:center">Razem (min)</th>
         <th style="padding:8px 10px;text-align:center">Zmian (×450 min)</th>
+        <th style="padding:8px 10px;text-align:center">Koszt łączny</th>
         <th style="padding:8px 10px;text-align:center">Efektywność</th>
       </tr></thead><tbody>`;
     pr.forEach((p,i) => {
       const razem = p.min_roboczy + p.min_zbrojenie + p.min_nieproduktywny;
       const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
+      const kosztTotal = (p.koszt_total || 0);
       // Efektywność: % czasu spędzonego na pracy produkcyjnej vs łącznego czasu zarejestrowanego
       // Jeśli brak czasu nieproduktywnego/zbrojenia – pokazuj na podstawie norm
       const normy_ok = p.normy_ok || 0;
@@ -1650,6 +1673,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#888">${Math.round(p.min_nieproduktywny)}</td>
         <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700">${Math.round(razem)}</td>
         <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center">${zmiany}</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:600;color:#1e8a4c">${kosztTotal.toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</td>
         <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${efKolor}">${efLabel}</td>
       </tr>`;
     });
@@ -1676,7 +1700,8 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ROBOCZY</div><b style="color:#1a73e8">${Math.round(p.min_roboczy)} min</b></div>
           <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ZBROJENIE</div><b style="color:#e67e00">${Math.round(p.min_zbrojenie)} min</b></div>
           <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">NIEPRODUKTYWNY</div><b style="color:#888">${Math.round(p.min_nieproduktywny)} min</b></div>
-          <div style="padding:7px 12px;font-size:12px"><div style="color:#888;font-size:10px">ZMIANY (${ZMIANA_MIN} min)</div><b>${zmiany}</b></div>
+          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ZMIANY (${ZMIANA_MIN} min)</div><b>${zmiany}</b></div>
+          <div style="padding:7px 12px;font-size:12px"><div style="color:#888;font-size:10px">KOSZT ŁĄCZNY</div><b style="color:#1e8a4c">${(p.koszt_total||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</b></div>
         </div>`;
       if (p.sesje && p.sesje.length) {
         tabelaHtml += `<div style="padding:8px 14px">
@@ -1807,7 +1832,8 @@ function renderMajsterPodsumowanie(stats) {
     } else {
       if (m.koszt_total != null) {
         const kosztProd = m.koszt_produktow || 0;
-        const kosztTotal = (m.koszt_total||0) + kosztProd;
+        const kosztZbr = m.koszt_zbrojenia || 0;
+        const kosztTotal = (m.koszt_total||0) + kosztProd + kosztZbr;
         const zysk = (m.wartosc||0) - kosztTotal;
         const kolor = zysk >= 0 ? 'var(--green)' : 'var(--red)';
         html += '<div style="background:var(--entry);border-radius:8px;padding:12px;margin-bottom:14px">'
@@ -1815,8 +1841,9 @@ function renderMajsterPodsumowanie(stats) {
               + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:13px">'
               + '<span style="color:var(--dim)">Wartość zlecenia</span><span style="color:var(--accent);font-weight:700">' + fmtPLN(m.wartosc||0) + '</span>'
               + '<span style="color:var(--dim)">Koszt pracy</span><span>' + fmtPLN(m.koszt_total||0) + '</span>'
+              + (kosztZbr > 0 ? '<span style="color:var(--orange)">⚙ Koszt zbrojenia</span><span style="color:var(--orange)">' + fmtPLN(kosztZbr) + '</span>' : '')
               + (kosztProd > 0 ? '<span style="color:var(--dim)">Koszt produktów</span><span>' + fmtPLN(kosztProd) + '</span>' : '')
-              + (kosztProd > 0 ? '<span style="color:var(--dim)">Koszt łącznie</span><span>' + fmtPLN(kosztTotal) + '</span>' : '')
+              + (kosztTotal !== (m.koszt_total||0) ? '<span style="color:var(--dim)">Koszt łącznie</span><span style="font-weight:700">' + fmtPLN(kosztTotal) + '</span>' : '')
               + '<span style="color:var(--dim)">Zysk</span><span style="color:' + kolor + ';font-weight:700">' + fmtPLN(zysk) + '</span>'
               + '</div></div>';
         // Tabela produktów zlecenia
@@ -1927,6 +1954,7 @@ async function openZlecenieModal(zid) {
     const data = await get('/api/zlecenia/' + zid + '/szczegoly');
     setState({zlecenieModal:{...state.zlecenieModal, loading:false,
       sesje:data.sesje, koszt_total:data.koszt_total, koszt_produktow:data.koszt_produktow||0,
+      koszt_zbrojenia:data.koszt_zbrojenia||0,
       produkty:data.produkty||[], wartosc:data.wartosc||state.zlecenieModal.wartosc}});
   } catch(e) {
     setState({zlecenieModal:{...state.zlecenieModal, loading:false, sesje:[]}});
@@ -1996,6 +2024,7 @@ function renderMajsterWydajnosc() {
           <div style="font-size:12px;color:var(--dim)">
             ${p.sesji} sesji | ${p.sztuki} szt. | ${p.godz}h
             ${wydPct!==null ? ` | normy: <span style="color:${barColor}">${wydPct}%</span>` : ''}
+            ${p.koszt_total ? ` | koszt: <span style="color:var(--green);font-weight:600">${(p.koszt_total).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</span>` : ''}
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:10px">

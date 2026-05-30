@@ -201,6 +201,7 @@ let state = {
   wydajnoscMajster: null,
   wydajnoscOkres: 'dzis',
   majsterExpandedUser: null,
+  majsterExpandedZlecenie: null,  // id zlecenia rozwiniętego w tab Zlecenia
   raportOkres: {od:"", do:""},
   raportWydOkres: {od:"", do:""},
   raportWydTyp: "skrocony",
@@ -353,11 +354,13 @@ async function loadPracownikWydajnosc(okres) {
 
 async function loadWydajnoscMajster(okres) {
   const o = okres || state.wydajnoscOkres;
-  setState({wydajnoscOkres: o});
+  setState({wydajnoscOkres: o, wydajnoscMajster: null});
   try {
     const w = await get(`/api/stats/wydajnosc?okres=${o}`);
     setState({wydajnoscMajster: w});
-  } catch(e) { alert(e.message); }
+  } catch(e) {
+    setState({wydajnoscMajster: {pracownicy: [], error: e.message}});
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -444,7 +447,7 @@ function showQRResult(res) {
   if (res.type === 'operacja') {
     const op = res.data;
     setState({qrZleceniePickerModal: {
-      zlecenie: {numer: op.zl_numer, nazwa: op.zl_nazwa, id: op.zlecenie_id},
+      zlecenie: {numer: op.zl_numer, nazwa: op.zl_nazwa, id: op.zlecenie_id, ilosc_sztuk: op.ilosc_sztuk},
       operacje: [op],
     }});
   } else if (res.type === 'zlecenie') {
@@ -458,29 +461,55 @@ function renderQRZleceniePickerModal() {
   const z = m.zlecenie;
   const ops = m.operacje || [];
   const dostepne = ops.filter(o => o.status !== 'zakonczone' && o.status !== 'anulowane');
+  // Oblicz ile sztuk pozostało do zrobienia
+  const iloscTotal = z.ilosc_sztuk || 0;
+  const iloscWykonana = ops.reduce((sum, op) => sum + (op.ilosc_wykonana||0), 0);
+  const iloscPozostalo = Math.max(0, iloscTotal - (ops.length ? Math.min(...ops.map(op => op.ilosc_wykonana||0)) : 0));
+
   let html = `
   <div class="modal-overlay">
     <div class="modal">
       <button class="modal-close" onclick="setState({qrZleceniePickerModal:null})">×</button>
       <h3>📋 ${z.numer}</h3>
-      <div style="color:var(--dim);font-size:13px;margin-bottom:16px">${z.nazwa}</div>`;
+      <div style="color:var(--dim);font-size:13px;margin-bottom:10px">${z.nazwa}</div>
+      <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:12px;color:var(--dim)">Zlecona ilość:</span>
+          <span style="font-weight:700;font-size:16px;color:var(--text)">${iloscTotal} szt.</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:12px;color:var(--dim)">Do wykonania:</span>
+          <span style="font-weight:700;font-size:20px;color:${iloscPozostalo===0?'var(--green)':'var(--accent)'}">${iloscPozostalo} szt.</span>
+        </div>
+      </div>`;
   if (!dostepne.length) {
     html += `<div class="empty">Brak dostępnych operacji do rozpoczęcia</div>`;
   } else {
     html += `<div style="color:var(--dim);font-size:12px;margin-bottom:10px">Wybierz operację do rozpoczęcia:</div>`;
     dostepne.forEach(op => {
       const czyAktywna = (state.aktywnesje||[]).some(s => s.operacja_id === op.id);
+      const opWykonana = op.ilosc_wykonana || 0;
+      const opPozostalo = Math.max(0, iloscTotal - opWykonana);
+      const opProg = iloscTotal > 0 ? Math.min(100, Math.round(opWykonana / iloscTotal * 100)) : 0;
       html += `
       <div class="card" style="padding:12px;margin-bottom:8px;cursor:${czyAktywna?'default':'pointer'}"
            ${czyAktywna?'':'onclick="pickOperacjaFromQR('+op.id+')"'}>
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <div>
+          <div style="flex:1">
             <div style="font-weight:600">${op.kolejnosc}. ${op.nazwa}</div>
             <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min':''}</div>
+            <div style="font-size:12px;margin-top:4px">
+              <span style="color:var(--dim)">Wykonano: </span>
+              <span style="color:var(--text);font-weight:600">${opWykonana}/${iloscTotal} szt.</span>
+              ${opPozostalo > 0 ? `<span style="color:var(--accent);margin-left:8px">⟶ zostało: <b>${opPozostalo} szt.</b></span>` : '<span style="color:var(--green);margin-left:8px">✅ ukończona</span>'}
+            </div>
+            <div class="progress-wrap" style="height:4px;margin-top:6px">
+              <div class="progress-bar" style="width:${opProg}%;background:${opProg>=100?'var(--green)':'var(--accent)'}"></div>
+            </div>
           </div>
-          <div>
+          <div style="margin-left:10px">
             ${czyAktywna
-              ? `<span class="badge badge-yellow">▶ W toku</span>`
+              ? `<span class="badge badge-orange">▶ W toku</span>`
               : `<span class="badge" style="background:var(--accent);color:#000">${statusBadge_txt(op.status)}</span>`}
           </div>
         </div>
@@ -1147,15 +1176,21 @@ function renderMajster() {
         const prog = z.op_total > 0 ? Math.round((z.op_done/z.op_total)*100) : 0;
         const sztProg = z.ilosc_sztuk > 0 ? Math.round(((z.sztuki_wykonane||0)/z.ilosc_sztuk)*100) : 0;
         const przeterminowane = z.termin && new Date(z.termin) < new Date();
+        const expanded = state.majsterExpandedZlecenie === z.id;
+        // Pobierz operacje z stats lub załaduj
+        const ops = (state['zlecenieOps_' + z.id]) || null;
         html += `
         <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
-          <div class="card-header">
-            <div>
+          <div class="card-header" style="cursor:pointer" onclick="toggleMajsterZlecenie(${z.id})">
+            <div style="flex:1">
               <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
               <div class="card-sub">${z.nazwa}</div>
               ${z.termin?`<div class="card-sub">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
             </div>
-            ${statusBadge(z.status)}
+            <div style="display:flex;align-items:center;gap:8px">
+              ${statusBadge(z.status)}
+              <span style="color:var(--dim);font-size:16px">${expanded?'▲':'▼'}</span>
+            </div>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:4px">
             <span>Operacje: ${z.op_done}/${z.op_total}</span><span>${prog}%</span>
@@ -1164,8 +1199,34 @@ function renderMajster() {
             <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
           </div>
           <div style="font-size:12px;color:var(--dim);margin-top:4px">
-            Sztuki: ${z.sztuki_wykonane||0}/${z.ilosc_sztuk} (${sztProg}%)
+            📦 Sztuki: <b style="color:${sztProg>=100?'var(--green)':'var(--text)'}">${z.sztuki_wykonane||0}/${z.ilosc_sztuk}</b> (${sztProg}%)
           </div>
+          ${expanded ? `
+          <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+            ${ops === null ? '<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">⏳ Ładowanie operacji...</div>' :
+              ops.length === 0 ? '<div style="font-size:12px;color:var(--dim)">Brak operacji</div>' :
+              ops.map(op => {
+                const opProg = z.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana||0)/z.ilosc_sztuk*100) : 0;
+                const stColor = op.status==='zakonczona'?'var(--green)':op.status==='w_toku'?'var(--accent)':'var(--dim)';
+                const stIcon = op.status==='zakonczona'?'✅':op.status==='w_toku'?'▶':'⏳';
+                return `<div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3)">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div style="flex:1">
+                      <div style="font-size:12px;font-weight:600">${stIcon} ${op.kolejnosc}. ${op.nazwa}</div>
+                      <div style="font-size:11px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min':''}</div>
+                    </div>
+                    <div style="text-align:right;margin-left:8px">
+                      <div style="font-size:12px;font-weight:700;color:${stColor}">${op.ilosc_wykonana||0}/${z.ilosc_sztuk} szt.</div>
+                      <div style="font-size:10px;color:var(--dim)">${opProg}%</div>
+                    </div>
+                  </div>
+                  <div class="progress-wrap" style="height:4px;margin:4px 0 0">
+                    <div class="progress-bar" style="width:${Math.min(100,opProg)}%;background:${stColor}"></div>
+                  </div>
+                </div>`;
+              }).join('')
+            }
+          </div>` : ''}
         </div>`;
       });
     }
@@ -1236,6 +1297,23 @@ function switchMajsterTab(tab) {
     loadWydajnoscMajster(state.wydajnoscOkres);
   }
   render();
+}
+
+async function toggleMajsterZlecenie(zid) {
+  if (state.majsterExpandedZlecenie === zid) {
+    setState({majsterExpandedZlecenie: null});
+    return;
+  }
+  setState({majsterExpandedZlecenie: zid});
+  // Load operations if not cached
+  if (!state['zlecenieOps_' + zid]) {
+    try {
+      const ops = await get('/api/zlecenia/' + zid + '/operacje');
+      setState({['zlecenieOps_' + zid]: ops});
+    } catch(e) {
+      setState({['zlecenieOps_' + zid]: []});
+    }
+  }
 }
 
 // ─── Helper date functions ────────────────────────────────────────────────────
@@ -1406,7 +1484,15 @@ function printRaportWydajnosc(data, od, doDt, typ) {
     pr.forEach((p,i) => {
       const razem = p.min_roboczy + p.min_zbrojenie + p.min_nieproduktywny;
       const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
-      const efekt = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : 0;
+      // Efektywność: % czasu spędzonego na pracy produkcyjnej vs łącznego czasu zarejestrowanego
+      // Jeśli brak czasu nieproduktywnego/zbrojenia – pokazuj na podstawie norm
+      const normy_ok = p.normy_ok || 0;
+      const normy_total = p.normy_total || 0;
+      const efektNormy = normy_total > 0 ? Math.round(normy_ok / normy_total * 100) : null;
+      const efektCzas = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
+      // Pokaż efektywność norm jeśli dostępna, inaczej efektywność czasu
+      const efekt = efektNormy !== null ? efektNormy : (efektCzas !== null ? efektCzas : 0);
+      const efLabel = efektNormy !== null ? efekt + '% norm' : (efektCzas !== null ? efekt + '% czasu' : '—');
       const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
       tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
         <td style="padding:7px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
@@ -1415,7 +1501,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#888">${Math.round(p.min_nieproduktywny)}</td>
         <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700">${Math.round(razem)}</td>
         <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center">${zmiany}</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${efKolor}">${efekt}%</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${efKolor}">${efLabel}</td>
       </tr>`;
     });
     tabelaHtml += `</tbody></table>`;
@@ -1424,13 +1510,18 @@ function printRaportWydajnosc(data, od, doDt, typ) {
     pr.forEach(p => {
       const razem = p.min_roboczy + p.min_zbrojenie + p.min_nieproduktywny;
       const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
-      const efekt = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : 0;
+      const normy_ok2 = p.normy_ok || 0;
+      const normy_total2 = p.normy_total || 0;
+      const efektNormy2 = normy_total2 > 0 ? Math.round(normy_ok2 / normy_total2 * 100) : null;
+      const efektCzas2 = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
+      const efekt = efektNormy2 !== null ? efektNormy2 : (efektCzas2 !== null ? efektCzas2 : 0);
+      const efLabel2 = efektNormy2 !== null ? efekt + '% norm (' + normy_ok2 + '/' + normy_total2 + ')' : (efektCzas2 !== null ? efekt + '% czasu' : '—');
       const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
       tabelaHtml += `
       <div style="border:1px solid #ddd;border-radius:6px;margin-bottom:16px;break-inside:avoid;overflow:hidden">
         <div style="background:#2e3548;color:#fff;padding:8px 14px;display:flex;justify-content:space-between;align-items:center">
           <span style="font-weight:700;font-size:14px">${p.full_name}</span>
-          <span style="font-size:12px">${p.sesji} sesji | ${p.sztuki} szt. | efektywność: <b style="color:${efKolor}">${efekt}%</b></span>
+          <span style="font-size:12px">${p.sesji} sesji | ${p.sztuki} szt. | efektywność: <b style="color:${efKolor}">${efLabel2}</b></span>
         </div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #ddd">
           <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ROBOCZY</div><b style="color:#1a73e8">${Math.round(p.min_roboczy)} min</b></div>
@@ -1728,6 +1819,12 @@ function renderMajsterWydajnosc() {
     return html;
   }
 
+  if (w.error) {
+    html += `<div class="error-banner">⚠ Błąd ładowania danych: ${w.error}</div>`;
+    html += `<button class="btn-outline" onclick="loadWydajnoscMajster()">🔄 Spróbuj ponownie</button>`;
+    return html;
+  }
+
   if (!w.pracownicy.length) {
     html += `<div class="empty">Brak danych za wybrany okres</div>`;
     return html;
@@ -1981,7 +2078,10 @@ function autofillZlecenie(id) {
   const z = (state.zlecenia||[]).find(x => x.id === id);
   if (!z) return;
   const setVal = (elId, val) => { const el = document.getElementById(elId); if (el) el.value = val; };
-  setVal('zl-numer', z.numer || '');
+  // Numer: sugeruj nowy numer na podstawie wzorca (z sufiksem -K lub kolejnym numerem)
+  const baseNumer = z.numer || '';
+  const numerSufx = baseNumer.replace(/-K\d*$/, '') + '-K' + (Date.now()%1000);
+  setVal('zl-numer', numerSufx);
   setVal('zl-nazwa', z.nazwa || '');
   setVal('zl-opis',  z.opis  || '');
   setVal('zl-termin', z.termin ? z.termin.substring(0,10) : '');
@@ -1997,6 +2097,8 @@ function autofillZlecenie(id) {
   // załaduj operacje z wzorcowego zlecenia
   setState({autofillSourceId: id, autofillOperacje: []}, true);
   fetchAutofillOperacje(id);
+  // Ustaw focus na polu numeru
+  setTimeout(() => { const el = document.getElementById('zl-numer'); if (el) { el.focus(); el.select(); } }, 100);
 }
 
 async function fetchAutofillOperacje(zid) {

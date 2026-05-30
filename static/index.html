@@ -492,9 +492,11 @@ function renderQRZleceniePickerModal() {
       const opWykonana = op.ilosc_wykonana || 0;
       const opPozostalo = Math.max(0, iloscTotal - opWykonana);
       const opProg = iloscTotal > 0 ? Math.min(100, Math.round(opWykonana / iloscTotal * 100)) : 0;
+      const opZbrMin = op.czas_zbrojenia_min || 0;
       html += `
       <div class="card" style="padding:12px;margin-bottom:8px;cursor:${czyAktywna?'default':'pointer'}"
            ${czyAktywna?'':'onclick="pickOperacjaFromQR('+op.id+')"'}>
+        ${opZbrMin>0 ? `<div style="font-size:11px;color:var(--orange);margin-bottom:6px;padding:4px 8px;background:rgba(243,156,18,0.1);border-radius:6px">⚙ Zbrojenie: ${opZbrMin} min (wliczone)</div>` : ''}
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="flex:1">
             <div style="font-weight:600">${op.kolejnosc}. ${op.nazwa}</div>
@@ -1108,10 +1110,12 @@ function szacowanyKoniec(z, ops) {
     ops.forEach(op => {
       if (op.status === 'zakonczona') return;
       const norma = op.czas_norma || 0;
-      if (!norma) return;
       const wykonano = op.ilosc_wykonana || 0;
       const pozostaloSztuk = Math.max(0, ilosc - wykonano);
-      pozostaleMin += norma * pozostaloSztuk;
+      if (norma) pozostaleMin += norma * pozostaloSztuk;
+      // zbrojenie raz na operację (niezależnie od ilości sztuk)
+      const zbrMin = op.czas_zbrojenia_min || 0;
+      if (zbrMin) pozostaleMin += zbrMin;
     });
     if (pozostaleMin <= 0) return null;
     const koniec = new Date(Date.now() + pozostaleMin * 60 * 1000);
@@ -2285,7 +2289,7 @@ function renderOperacjeModal() {
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div>
             <div style="font-weight:600">${op.kolejnosc}. ${op.nazwa}</div>
-            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'} ${op.czas_norma?'| norma: '+op.czas_norma+'min':''}</div>
+            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'} ${op.czas_norma?'| norma: '+op.czas_norma+' min/szt':''} ${op.czas_zbrojenia_min?'<span style="color:var(--orange)">| ⚙ zbr: '+op.czas_zbrojenia_min+' min</span>':''}</div>
           </div>
           <div style="display:flex;gap:6px">
             <button class="btn-sm btn-blue" onclick="editOperacja(${JSON.stringify(op).replace(/"/g,'&quot;')})">✏</button>
@@ -2301,12 +2305,18 @@ function renderOperacjeModal() {
       <div class="field"><label>Nazwa</label><input id="op-nazwa" type="text" placeholder="np. Toczenie wału"></div>
       <div class="field"><label>Kolejność</label><input id="op-kol" type="number" value="${ops.length+1}" min="1"></div>
       <div class="field"><label>Stanowisko/Operacja</label>
-        <select id="op-stan">
+        <select id="op-stan" onchange="updateZbrojenieField()">
           <option value="">— wybierz —</option>
-          ${(state.stawki||[]).map(s=>`<option value="${s.stanowisko}">${s.stanowisko}</option>`).join('')}
+          ${(state.stawki||[]).map(s=>`<option value="${s.stanowisko}" data-zbr="${s.zbrojenie_aktywne||0}" data-zbr-stawka="${s.zbrojenie_stawka_godz||0}">${s.stanowisko}${s.zbrojenie_aktywne?' ⚙':''}</option>`).join('')}
         </select>
       </div>
-      <div class="field"><label>Czas (min)</label><input id="op-norma" type="number" step="0.5" value="0" min="0"></div>
+      <div class="field"><label>Czas (min/szt)</label><input id="op-norma" type="number" step="0.5" value="0" min="0"></div>
+      <div id="zbrojenie-field-wrap" style="display:none">
+        <div style="background:rgba(243,156,18,0.1);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+          <div style="font-size:12px;color:var(--orange);font-weight:700;margin-bottom:6px">⚙ Zbrojenie (1× na operację, niezależnie od ilości sztuk)</div>
+          <div class="field" style="margin-bottom:0"><label>Czas zbrojenia (min)</label><input id="op-zbrojenie" type="number" step="1" value="0" min="0"></div>
+        </div>
+      </div>
       <div class="field"><label>Opis czynności</label><textarea id="op-opis" style="min-height:60px"></textarea></div>
       <button class="btn btn-green" onclick="addOperacja(${zl.id})">+ Dodaj operację</button>
     </div>`;
@@ -2314,6 +2324,15 @@ function renderOperacjeModal() {
 
   html += `</div></div>`;
   return html;
+}
+
+function updateZbrojenieField() {
+  const s = document.getElementById('op-stan');
+  const wrap = document.getElementById('zbrojenie-field-wrap');
+  if (!s || !wrap) return;
+  const selOpt = s.options[s.selectedIndex];
+  const zbrAkt = selOpt ? selOpt.getAttribute('data-zbr') : '0';
+  wrap.style.display = (zbrAkt === '1') ? 'block' : 'none';
 }
 
 async function addOperacja(zlecenieId) {
@@ -2327,6 +2346,7 @@ async function addOperacja(zlecenieId) {
       stanowisko: document.getElementById('op-stan').value,
       czas_norma: parseFloat(document.getElementById('op-norma').value)||0,
       opis_czynnosci: document.getElementById('op-opis').value,
+      czas_zbrojenia_min: parseFloat(document.getElementById('op-zbrojenie')?.value)||0,
     });
     await openOperacje(state.operacjeModal.zlecenie);
   } catch(e) { alert('Błąd: '+e.message); }
@@ -2531,11 +2551,20 @@ function editOperacja(op) {
   const s = document.getElementById('op-stan');
   const norma = document.getElementById('op-norma');
   const opis = document.getElementById('op-opis');
+  const zbr = document.getElementById('op-zbrojenie');
+  const zbrWrap = document.getElementById('zbrojenie-field-wrap');
   if (n) n.value = op.nazwa;
   if (k) k.value = op.kolejnosc;
-  if (s) s.value = op.stanowisko || '';
+  if (s) { s.value = op.stanowisko || ''; }
   if (norma) norma.value = op.czas_norma || 0;
   if (opis) opis.value = op.opis_czynnosci || '';
+  if (zbr) zbr.value = op.czas_zbrojenia_min || 0;
+  // show zbrojenie field if this stanowisko has zbrojenie active
+  if (zbrWrap && s) {
+    const selOpt = s.options[s.selectedIndex];
+    const zbrAkt = selOpt ? selOpt.getAttribute('data-zbr') : '0';
+    zbrWrap.style.display = (zbrAkt === '1' || op.czas_zbrojenia_min > 0) ? 'block' : 'none';
+  }
   // swap button to update
   const addBtn = document.querySelector('[onclick^="addOperacja"]');
   if (addBtn) {
@@ -2555,6 +2584,7 @@ async function updateOperacja(opId, zlecenieId) {
       stanowisko: document.getElementById('op-stan').value,
       czas_norma: parseFloat(document.getElementById('op-norma').value)||0,
       opis_czynnosci: document.getElementById('op-opis')?.value||'',
+      czas_zbrojenia_min: parseFloat(document.getElementById('op-zbrojenie')?.value)||0,
     });
     await openOperacje(state.operacjeModal.zlecenie);
   } catch(e) { alert('Błąd: '+e.message); }
@@ -2601,6 +2631,18 @@ function renderKosztyModal() {
         <div class="stat-box"><div class="stat-val">${k.total_godz}h</div><div class="stat-lbl">Godz. pracy</div></div>
       </div>
       ${renderKosztyProdukty(k)}
+      ${k.koszt_zbrojenia > 0 ? `
+      <div style="background:rgba(243,156,18,0.1);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div class="section-hdr" style="margin-bottom:8px;color:var(--orange)">⚙ Zbrojenie</div>
+        ${(k.zbrojenia||[]).map(z => `
+        <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0">
+          <span style="color:var(--dim)">${z.czas_min} min @ ${fmtPLN(z.stawka_godz)}/h</span>
+          <span style="color:var(--orange);font-weight:600">${fmtPLN(z.koszt)}</span>
+        </div>`).join('')}
+        <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:6px;border-top:1px solid rgba(243,156,18,0.3);padding-top:6px">
+          <span>Suma zbrojenia</span><span style="color:var(--orange)">${fmtPLN(k.koszt_zbrojenia)}</span>
+        </div>
+      </div>` : ''}
       <div class="section-hdr">Sesje pracy</div>
       ${k.sesje.map(s => `
       <div class="card" style="padding:10px;margin-bottom:6px">
@@ -2684,10 +2726,12 @@ function renderAdmin() {
             <button class="btn-sm btn-red" onclick="deleteStawka(${s.id})">🗑</button>
           </div>
         </div>
+        ${s.zbrojenie_aktywne ? `<div style="margin-top:6px;font-size:12px;color:var(--orange)">⚙ Zbrojenie: ${fmtPLN(s.zbrojenie_stawka_godz)}/h</div>` : ''}
       </div>`;
     });
     if (state.stawkaModal !== null) {
       const s = state.stawkaModal;
+      const zbrAkt = s.zbrojenie_aktywne ? true : false;
       html += `
       <div class="modal-overlay">
         <div class="modal">
@@ -2696,6 +2740,15 @@ function renderAdmin() {
           <div class="field"><label>Stanowisko</label><input id="st-stan" type="text" value="${s.stanowisko||''}"></div>
           <div class="field"><label>Stawka (zł/h)</label><input id="st-stawka" type="number" step="0.5" value="${s.stawka_godz||0}"></div>
           <div class="field"><label>Opis</label><input id="st-opis" type="text" value="${s.opis||''}"></div>
+          <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+              <input type="checkbox" id="st-zbr-akt" ${zbrAkt?'checked':''} onchange="document.getElementById('zbr-stawka-wrap').style.display=this.checked?'block':'none'" style="width:18px;height:18px;cursor:pointer">
+              <label for="st-zbr-akt" style="font-size:14px;cursor:pointer">⚙ Aktywuj zbrojenie</label>
+            </div>
+            <div id="zbr-stawka-wrap" style="display:${zbrAkt?'block':'none'}">
+              <div class="field" style="margin-bottom:0"><label>Stawka zbrojenia (zł/h)</label><input id="st-zbr-stawka" type="number" step="0.5" min="0" value="${s.zbrojenie_stawka_godz||0}"></div>
+            </div>
+          </div>
           <button class="btn btn-accent" onclick="saveStawkaForm(${s.id||0})">💾 Zapisz</button>
         </div>
       </div>`;
@@ -2751,10 +2804,13 @@ function saveUserForm(id) {
   saveUser(data);
 }
 function saveStawkaForm(id) {
+  const zbrAkt = document.getElementById('st-zbr-akt')?.checked ? 1 : 0;
   const data = {
     stanowisko: document.getElementById('st-stan')?.value?.trim(),
     stawka_godz: parseFloat(document.getElementById('st-stawka')?.value)||0,
     opis: document.getElementById('st-opis')?.value||'',
+    zbrojenie_aktywne: zbrAkt,
+    zbrojenie_stawka_godz: zbrAkt ? (parseFloat(document.getElementById('st-zbr-stawka')?.value)||0) : 0,
   };
   if (!data.stanowisko) { alert('Podaj nazwę stanowiska'); return; }
   if (id) data.id = id;

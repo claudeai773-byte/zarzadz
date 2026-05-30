@@ -205,6 +205,9 @@ let state = {
   printModal: null,
   printOps: [],
   warehouseInfo: null,
+  zlecenieDetailsModal: null,
+  qrInneMode: false,
+  qrManualMode: false,
 };
 
 function setState(p, noRender) {
@@ -226,14 +229,14 @@ function startTimerFor(sesja) {
     if (!el) return;
     const paused = isPaused();
     // calc elapsed minus pauses
-    const start = new Date(sesja.start_time);
+    const start = parseServerDT(sesja.start_time);
     let elapsed = Math.floor((Date.now() - start) / 1000);
     const pauzy = JSON.parse(sesja.pauzy || '[]');
     for (const p of pauzy) {
       if (p.koniec) {
-        elapsed -= Math.floor((new Date(p.koniec) - new Date(p.start)) / 1000);
+        elapsed -= Math.floor((parseServerDT(p.koniec) - parseServerDT(p.start)) / 1000);
       } else {
-        elapsed -= Math.floor((Date.now() - new Date(p.start)) / 1000);
+        elapsed -= Math.floor((Date.now() - parseServerDT(p.start)) / 1000);
       }
     }
     el.textContent = fmtTime(Math.max(0,elapsed));
@@ -256,6 +259,13 @@ function fmtTime(sec) {
   const m = String(Math.floor((sec%3600)/60)).padStart(2,'0');
   const s = String(sec%60).padStart(2,'0');
   return `${h}:${m}:${s}`;
+}
+
+// Serwer zwraca UTC z 'Z'. Dla starszych rekordów bez 'Z' – local time.
+function parseServerDT(s) {
+  if (!s) return new Date(NaN);
+  if (/Z$|[+-]\d{2}:\d{2}$/.test(s)) return new Date(s);
+  return new Date(s.replace(' ','T')); // stary rekord – local
 }
 
 function isPaused(sesja) {
@@ -348,6 +358,7 @@ async function doLogin(username, password) {
   setState({loading:true, error:null});
   try {
     const user = await post('/api/login', {username, password});
+    stopWHRefresh();
     const tab = defaultTab(user.role);
     setState({user, screen:'main', loading:false, activeTab:tab});
     loadTabData(tab);
@@ -423,9 +434,10 @@ async function scanQR(kod) {
 function showQRResult(res) {
   if (res.type === 'operacja') {
     const op = res.data;
-    if (confirm(`Operacja: ${op.nazwa}\nZlecenie: ${op.zl_numer}\nStatus: ${op.status}\n\nRozpocząć tę operację?`)) {
-      startSesja(op.id);
-    }
+    setState({qrZleceniePickerModal: {
+      zlecenie: {numer: op.zl_numer, nazwa: op.zl_nazwa, id: op.zlecenie_id},
+      operacje: [op],
+    }});
   } else if (res.type === 'zlecenie') {
     setState({qrZleceniePickerModal: {zlecenie: res.data, operacje: res.operacje}});
   }
@@ -466,11 +478,55 @@ function renderQRZleceniePickerModal() {
       </div>`;
     });
   }
+  // Opcja INNE
+  if (!state.qrInneMode) {
+    html += `
+    <div class="card" style="padding:12px;margin-bottom:8px;cursor:pointer;border-color:var(--accent)"
+         onclick="setState({qrInneMode:true})">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:600;color:var(--accent)">⚡ Inne</div>
+          <div style="font-size:12px;color:var(--dim)">Wpisz co robisz i rozpocznij rejestrację</div>
+        </div>
+        <span style="font-size:20px">+</span>
+      </div>
+    </div>`;
+  } else {
+    html += `
+    <div class="card" style="padding:12px;margin-bottom:8px;border-color:var(--accent)">
+      <div style="font-weight:600;color:var(--accent);margin-bottom:10px">⚡ Inne – wpisz co robisz</div>
+      <div class="field" style="margin-bottom:10px">
+        <input id="qr-inne-opis" type="text" placeholder="Np. ustawianie maszyny, regulacja..."
+               onkeydown="if(event.key==='Enter')startQRInne()">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" onclick="startQRInne()">▶ Start</button>
+        <button class="btn btn-outline" onclick="setState({qrInneMode:false})">Anuluj</button>
+      </div>
+    </div>`;
+  }
+
   html += `
-      <button class="btn btn-outline" style="margin-top:8px" onclick="setState({qrZleceniePickerModal:null})">Anuluj</button>
+      <button class="btn btn-outline" style="margin-top:8px"
+              onclick="setState({qrZleceniePickerModal:null,qrInneMode:false})">Zamknij</button>
     </div>
   </div>`;
   return html;
+}
+
+// INNE – sesja produkcyjna przypisana do zlecenia
+async function startQRInne() {
+  const opis = document.getElementById('qr-inne-opis')?.value?.trim();
+  if (!opis) { alert('Wpisz opis'); return; }
+  const m = state.qrZleceniePickerModal;
+  const zid = m?.zlecenie?.id || null;
+  setState({qrZleceniePickerModal:null, qrInneMode:false});
+  try {
+    const body = {user_id: state.user.id, typ: 'nieprodukcyjna', opis_nieprodukcyjnej: opis};
+    if (zid) { body.typ = 'inne_zlecenie'; body.zlecenie_id_inne = zid; }
+    await post('/api/sesje/start', body);
+    await loadPracownik();
+  } catch(e) { alert('Błąd: ' + (e.message||e)); }
 }
 
 function statusBadge_txt(s) {
@@ -639,13 +695,13 @@ function saveConfig() {
 //  SCREEN: LOGIN
 // ══════════════════════════════════════════════════════════════
 function renderLogin() {
-  const warehouseInfo = state.warehouseInfo;
+  const wi = state.warehouseInfo;
   return `
-  <div style="padding:16px">
-    ${warehouseInfo ? renderWarehouseLoginPanel(warehouseInfo) : ''}
+  <div style="padding:16px;max-width:500px;margin:0 auto">
+    ${wi ? renderWarehouseLoginPanel(wi) : ''}
     <div class="login-card">
       <h2>⚙ PRODUKCJA</h2>
-      <p class="subtitle">System Zarządzania Produkcją v4.0</p>
+      <p class="subtitle">System Zarządzania Produkcją v5.0</p>
       ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
       <div class="field">
         <label>Login</label>
@@ -667,22 +723,63 @@ function renderLogin() {
   </div>`;
 }
 
-function renderWarehouseLoginPanel(info) {
-  if (!info || !info.length) return '';
-  return `
-  <div style="max-width:380px;margin:0 auto 12px">
-    <div style="background:rgba(39,174,96,.12);border:1px solid var(--green);border-radius:12px;padding:14px 16px">
-      <div style="font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
-        📦 Operacje czekające na odbiór (${info.length})
-      </div>
-      ${info.map(op => `
-      <div style="border-bottom:1px solid rgba(39,174,96,.2);padding:7px 0;last-child:border-none">
-        <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
-        <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
-        <div style="font-size:12px;color:var(--dim)">🏭 ${op.stanowisko||'—'} | 📦 ${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</div>
-      </div>`).join('')}
-    </div>
-  </div>`;
+function renderWarehouseLoginPanel(wi) {
+  const zakonczone = wi.zakonczone || [];
+  const aktywne    = wi.aktywne    || [];
+  const nastepne   = wi.nastepne   || [];
+  const next_map   = wi.next_map   || {};
+  let html = '';
+
+  if (zakonczone.length) {
+    html += '<div style="background:rgba(39,174,96,.10);border:1px solid var(--green);border-radius:12px;padding:14px 16px;margin-bottom:10px">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;margin-bottom:10px">📦 Do odbioru (' + zakonczone.length + ')</div>';
+    zakonczone.forEach(op => {
+      const nxt = next_map[op.id];
+      html += '<div style="border-bottom:1px solid rgba(39,174,96,.2);padding:7px 0">';
+      html += '<div style="font-weight:600;font-size:13px">' + op.kolejnosc + '. ' + op.nazwa + '</div>';
+      html += '<div style="font-size:12px;color:var(--dim)">📋 ' + op.zl_numer + ' – ' + op.zl_nazwa + '</div>';
+      html += '<div style="font-size:12px;color:var(--dim)">🏭 ' + (op.stanowisko||'—') + ' | 📦 <b style="color:var(--green)">' + op.ilosc_wykonana + '/' + op.ilosc_sztuk + ' szt.</b></div>';
+      if (nxt) {
+        html += '<div style="font-size:11px;color:var(--accent);margin-top:3px">▶ następna: ' + nxt.kolejnosc + '. ' + nxt.nazwa + (nxt.stanowisko ? ' @ ' + nxt.stanowisko : '') + '</div>';
+      } else {
+        html += '<div style="font-size:11px;color:var(--dim);margin-top:3px">✅ ostatnia operacja w zleceniu</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  if (aktywne.length) {
+    html += '<div style="background:rgba(243,156,18,.10);border:1px solid var(--orange);border-radius:12px;padding:14px 16px;margin-bottom:10px">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--orange);text-transform:uppercase;margin-bottom:10px">🔄 W trakcie (' + aktywne.length + ')</div>';
+    aktywne.forEach(op => {
+      const prog = op.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana/op.ilosc_sztuk)*100) : 0;
+      html += '<div style="border-bottom:1px solid rgba(243,156,18,.2);padding:7px 0">';
+      html += '<div style="font-weight:600;font-size:13px">' + op.kolejnosc + '. ' + op.nazwa + '</div>';
+      html += '<div style="font-size:12px;color:var(--dim)">📋 ' + op.zl_numer + ' – ' + op.zl_nazwa + '</div>';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-top:4px"><div style="flex:1;background:var(--border);border-radius:3px;height:4px;overflow:hidden"><div style="width:' + prog + '%;height:100%;background:var(--orange);border-radius:3px"></div></div><span style="font-size:11px;color:var(--dim)">' + prog + '%</span></div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  if (nastepne.length) {
+    html += '<div style="background:rgba(52,152,219,.10);border:1px solid var(--blue);border-radius:12px;padding:14px 16px;margin-bottom:10px">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;margin-bottom:10px">⏳ Kolejna do wykonania (' + nastepne.length + ')</div>';
+    nastepne.forEach(op => {
+      html += '<div style="border-bottom:1px solid rgba(52,152,219,.2);padding:7px 0">';
+      html += '<div style="font-weight:600;font-size:13px">' + op.kolejnosc + '. ' + op.nazwa + '</div>';
+      html += '<div style="font-size:12px;color:var(--dim)">📋 ' + op.zl_numer + ' – ' + op.zl_nazwa + '</div>';
+      html += '<div style="font-size:12px;color:var(--dim)">🏭 ' + (op.stanowisko||'—') + (op.czas_norma ? ' | ⏱ ' + op.czas_norma + ' min' : '') + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  if (!zakonczone.length && !aktywne.length && !nastepne.length) {
+    html += '<div style="text-align:center;padding:10px;color:var(--dim);font-size:13px">✅ Brak operacji w toku</div>';
+  }
+  return html;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -825,28 +922,41 @@ function renderPracaGlowna() {
   // QR skaner
   if (state.qrScanMode) {
     const hist = JSON.parse(localStorage.getItem('qr_historia')||'[]');
+    const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     html += `
     <div class="card" style="border-color:var(--blue)">
-      <div class="section-hdr" style="margin-bottom:12px">📷 Skaner QR</div>
-      <div class="qr-input-row field" style="margin-bottom:10px">
-        <input id="qr-input" type="text" placeholder="Skanuj lub wpisz kod QR"
+      <div class="section-hdr" style="margin-bottom:12px">📷 Skaner QR</div>`;
+    if (isMobile && !state.qrManualMode) {
+      html += `
+      <video id="qr-video" style="width:100%;border-radius:8px;background:#000;display:block" playsinline autoplay muted></video>
+      <canvas id="qr-canvas" style="display:none"></canvas>
+      <div id="qr-scan-status" style="text-align:center;color:var(--dim);font-size:13px;padding:6px">Uruchamiam aparat...</div>
+      <button class="btn btn-outline" style="margin-top:6px" onclick="setState({qrManualMode:true})">⌨ Wpisz ręcznie</button>`;
+    } else {
+      html += `
+      <div class="field" style="margin-bottom:10px;display:flex;gap:6px">
+        <input id="qr-input" type="text" placeholder="Wpisz kod QR i naciśnij Enter" style="flex:1"
                autofocus onkeydown="if(event.key==='Enter')scanQR(this.value)">
-        <button class="btn-sm btn-accent" onclick="scanQR(document.getElementById('qr-input').value)">▶</button>
+        <button class="btn btn-accent" onclick="scanQR(document.getElementById('qr-input').value)">▶</button>
       </div>
+      ${isMobile ? '<button class="btn btn-outline" style="margin-bottom:8px" onclick="setState({qrManualMode:false})">📷 Użyj aparatu</button>' : ''}`;
+    }
+    html += `
       ${hist.length ? `
-      <div class="section-hdr">Historia QR</div>
+      <div class="section-hdr" style="margin-top:10px">Historia QR</div>
       ${hist.map(c => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
           <span class="tag">${c}</span>
           <button class="btn-sm btn-blue" onclick="scanQR('${c}')">Użyj</button>
         </div>`).join('')}
       ` : ''}
-      <button class="btn-outline" style="margin-top:10px" onclick="setState({qrScanMode:false})">✕ Zamknij</button>
+      <button class="btn btn-outline" style="margin-top:10px"
+              onclick="stopQRCamera();setState({qrScanMode:false,qrManualMode:false})">✕ Zamknij</button>
     </div>`;
   } else {
     html += `
     <div class="btn-row" style="margin-bottom:12px">
-      <button class="btn btn-blue" onclick="setState({qrScanMode:true})">📷 Skanuj QR</button>
+      <button class="btn btn-blue" onclick="setState({qrScanMode:true,qrManualMode:false})">📷 Skanuj QR</button>
       <button class="btn btn-purple" onclick="setState({nieprodukcyjnaModal:true})">⏸ Nieprodukcyjna</button>
     </div>`;
   }
@@ -994,12 +1104,12 @@ function renderMajster() {
       stats.aktywne_sesje.forEach(s => {
         const pauzList = JSON.parse(s.pauzy||'[]');
         const hasPauza = pauzList.length > 0 && !pauzList[pauzList.length-1].koniec;
-        let elapsed = Math.floor((Date.now() - new Date(s.start_time))/1000);
+        let elapsed = Math.floor((Date.now() - parseServerDT(s.start_time))/1000);
         for (const p of pauzList) {
           if (p.koniec) {
-            elapsed -= Math.floor((new Date(p.koniec) - new Date(p.start))/1000);
+            elapsed -= Math.floor((parseServerDT(p.koniec) - parseServerDT(p.start))/1000);
           } else {
-            elapsed -= Math.floor((Date.now() - new Date(p.start))/1000);
+            elapsed -= Math.floor((Date.now() - parseServerDT(p.start))/1000);
           }
         }
         elapsed = Math.max(0, elapsed);
@@ -2021,6 +2131,7 @@ function renderContent() {
 
 function render() {
   document.getElementById('app').innerHTML = renderContent();
+  _afterRender();
   // Restart timerów po re-render
   for (const [sid, t] of Object.entries(state.timers)) {
     if (t.sesja) startTimerFor(t.sesja);
@@ -2051,22 +2162,102 @@ function render() {
   }
 }
 
+
+// ══════════════════════════════════════════════════════════════
+//  CAMERA QR SCANNER
+// ══════════════════════════════════════════════════════════════
+let _qrStream = null;
+let _qrAnimFrame = null;
+
+function stopQRCamera() {
+  if (_qrStream) { _qrStream.getTracks().forEach(t => t.stop()); _qrStream = null; }
+  if (_qrAnimFrame) { cancelAnimationFrame(_qrAnimFrame); _qrAnimFrame = null; }
+}
+
+async function startQRCamera() {
+  const video  = document.getElementById('qr-video');
+  const canvas = document.getElementById('qr-canvas');
+  const status = document.getElementById('qr-scan-status');
+  if (!video) return;
+  try {
+    if (!window.jsQR) {
+      await new Promise((res,rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode:'environment'}
+    });
+    _qrStream = stream;
+    video.srcObject = stream;
+    await video.play();
+    if (status) status.textContent = '🔍 Skanuję...';
+    const ctx = canvas.getContext('2d');
+    function tick() {
+      if (!document.getElementById('qr-video')) { stopQRCamera(); return; }
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = window.jsQR(img.data, img.width, img.height, {inversionAttempts:'dontInvert'});
+        if (code && code.data) {
+          stopQRCamera();
+          scanQR(code.data);
+          return;
+        }
+      }
+      _qrAnimFrame = requestAnimationFrame(tick);
+    }
+    tick();
+  } catch(err) {
+    if (status) status.textContent = 'Brak dostępu do aparatu. Wpisz kod ręcznie.';
+    setState({qrManualMode: true});
+  }
+}
+
+// Wywoływane przez render() aby uruchomić kamerę po re-renderze
+function _afterRender() {
+  stopQRCamera();
+  if (state.qrScanMode && !state.qrManualMode && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+    setTimeout(startQRCamera, 120);
+  }
+}
+
 // ══════════════════════════════════════════════════════════════
 //  INIT
 // ══════════════════════════════════════════════════════════════
 // Wczytaj historię QR
 state.qrLastCodes = JSON.parse(localStorage.getItem('qr_historia')||'[]');
 
-// Załaduj info dla magazyniera na ekran logowania
+// Załaduj info produkcji na ekran logowania
+let _wh_interval = null;
 async function loadWarehouseLoginInfo() {
   if (!SERVER_URL || !API_KEY) return;
   try {
-    const ops = await get('/api/operacje/zakonczone-do-transportu');
-    setState({warehouseInfo: ops}, true);
+    const data = await get('/api/status/produkcja');
+    setState({warehouseInfo: data}, true);
     render();
-  } catch(e) { /* cicho – brak logowania */ }
+  } catch(e) {
+    try {
+      const ops = await get('/api/operacje/zakonczone-do-transportu');
+      setState({warehouseInfo: {zakonczone: ops, aktywne:[], nastepne:[], next_map:{}}}, true);
+      render();
+    } catch(_) {}
+  }
 }
-if (SERVER_URL) loadWarehouseLoginInfo();
+function startWHRefresh() {
+  loadWarehouseLoginInfo();
+  if (_wh_interval) clearInterval(_wh_interval);
+  _wh_interval = setInterval(loadWarehouseLoginInfo, 20000);
+}
+function stopWHRefresh() {
+  if (_wh_interval) { clearInterval(_wh_interval); _wh_interval = null; }
+}
+if (SERVER_URL) startWHRefresh();
 
 // Auto-refresh co 30s
 setInterval(() => {

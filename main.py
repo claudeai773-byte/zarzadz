@@ -224,16 +224,19 @@ def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
             zd = dict(z)
             # Oblicz pozostały czas w minutach na bazie norm operacji
             ops = conn.execute("""
-                SELECT status, czas_norma, ilosc_wykonana FROM operacje WHERE zlecenie_id=?
+                SELECT status, czas_norma, ilosc_wykonana, czas_zbrojenia_min FROM operacje WHERE zlecenie_id=?
             """, (z["id"],)).fetchall()
             ilosc = z["ilosc_sztuk"] or 1
             pozostale_min = 0
             for op in ops:
                 if op["status"] == "zakonczona": continue
                 norma = op["czas_norma"] or 0
-                if not norma: continue
                 wykonano = op["ilosc_wykonana"] or 0
-                pozostale_min += norma * max(0, ilosc - wykonano)
+                zbrojenie = op["czas_zbrojenia_min"] or 0
+                if norma:
+                    pozostale_min += norma * max(0, ilosc - wykonano)
+                if zbrojenie:
+                    pozostale_min += zbrojenie  # zbrojenie raz na operację
             zd["pozostale_min"] = round(pozostale_min, 1)
             result.append(zd)
     return result
@@ -311,6 +314,7 @@ class OperacjaRequest(BaseModel):
     czas_norma: Optional[float] = 0
     stanowisko: Optional[str] = ""
     opis_czynnosci: Optional[str] = ""
+    czas_zbrojenia_min: Optional[float] = 0.0
 
 @app.post("/api/operacje", dependencies=[Depends(verify_key)])
 def create_operacja(req: OperacjaRequest):
@@ -319,10 +323,10 @@ def create_operacja(req: OperacjaRequest):
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO operacje (zlecenie_id,nazwa,kolejnosc,czas_norma,
-               stanowisko,opis_czynnosci,qr_code)
-               VALUES (?,?,?,?,?,?,?)""",
+               stanowisko,opis_czynnosci,qr_code,czas_zbrojenia_min)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (req.zlecenie_id, req.nazwa, req.kolejnosc, req.czas_norma,
-             req.stanowisko, req.opis_czynnosci, qr)
+             req.stanowisko, req.opis_czynnosci, qr, req.czas_zbrojenia_min or 0.0)
         )
         return {"id": cur.lastrowid, "qr_code": qr}
 
@@ -331,9 +335,9 @@ def update_operacja(oid: int, req: OperacjaRequest):
     with get_db() as conn:
         conn.execute(
             """UPDATE operacje SET nazwa=?,kolejnosc=?,czas_norma=?,
-               stanowisko=?,opis_czynnosci=? WHERE id=?""",
+               stanowisko=?,opis_czynnosci=?,czas_zbrojenia_min=? WHERE id=?""",
             (req.nazwa, req.kolejnosc, req.czas_norma,
-             req.stanowisko, req.opis_czynnosci, oid)
+             req.stanowisko, req.opis_czynnosci, req.czas_zbrojenia_min or 0.0, oid)
         )
     return {"ok": True}
 
@@ -546,14 +550,16 @@ class StawkaRequest(BaseModel):
     stanowisko: str
     stawka_godz: float
     opis: Optional[str] = ""
+    zbrojenie_aktywne: Optional[int] = 0
+    zbrojenie_stawka_godz: Optional[float] = 0.0
 
 @app.post("/api/stawki", dependencies=[Depends(verify_key)])
 def create_stawka(req: StawkaRequest):
     with get_db() as conn:
         try:
             cur = conn.execute(
-                "INSERT INTO stawki (stanowisko,stawka_godz,opis) VALUES (?,?,?)",
-                (req.stanowisko, req.stawka_godz, req.opis)
+                "INSERT INTO stawki (stanowisko,stawka_godz,opis,zbrojenie_aktywne,zbrojenie_stawka_godz) VALUES (?,?,?,?,?)",
+                (req.stanowisko, req.stawka_godz, req.opis, req.zbrojenie_aktywne or 0, req.zbrojenie_stawka_godz or 0.0)
             )
             return {"id": cur.lastrowid}
         except sqlite3.IntegrityError:
@@ -563,8 +569,8 @@ def create_stawka(req: StawkaRequest):
 def update_stawka(sid: int, req: StawkaRequest):
     with get_db() as conn:
         conn.execute(
-            "UPDATE stawki SET stanowisko=?,stawka_godz=?,opis=? WHERE id=?",
-            (req.stanowisko, req.stawka_godz, req.opis, sid)
+            "UPDATE stawki SET stanowisko=?,stawka_godz=?,opis=?,zbrojenie_aktywne=?,zbrojenie_stawka_godz=? WHERE id=?",
+            (req.stanowisko, req.stawka_godz, req.opis, req.zbrojenie_aktywne or 0, req.zbrojenie_stawka_godz or 0.0, sid)
         )
     return {"ok": True}
 
@@ -1081,6 +1087,27 @@ def koszty_zlecenia(zid: int):
         total_koszt = 0
         total_godz = 0
         rows = []
+        # pobierz operacje z danymi zbrojenia i stawki zbrojenia
+        operacje_zbrojenie = conn.execute("""
+            SELECT o.id, o.czas_zbrojenia_min, st.zbrojenie_stawka_godz, st.zbrojenie_aktywne
+            FROM operacje o
+            LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
+            WHERE o.zlecenie_id=?
+        """, (zid,)).fetchall()
+        zbrojenie_map = {r["id"]: dict(r) for r in operacje_zbrojenie}
+
+        # Koszt zbrojenia - raz na operację
+        koszt_zbrojenia_total = 0.0
+        zbrojenia_info = []
+        for op in operacje_zbrojenie:
+            zb_min = op["czas_zbrojenia_min"] or 0
+            zb_stawka = op["zbrojenie_stawka_godz"] or 0
+            zb_aktywne = op["zbrojenie_aktywne"] or 0
+            if zb_aktywne and zb_min > 0 and zb_stawka > 0:
+                koszt_zb = (zb_min / 60.0) * zb_stawka
+                koszt_zbrojenia_total += koszt_zb
+                zbrojenia_info.append({"czas_min": zb_min, "stawka_godz": zb_stawka, "koszt": round(koszt_zb, 2)})
+
         for s in sesje:
             elapsed = (_parse(s["end_time"]) -
                        _parse(s["start_time"])).total_seconds() / 3600
@@ -1112,6 +1139,7 @@ def koszty_zlecenia(zid: int):
         produkty_list = [dict(p) for p in produkty]
         koszt_produktow = sum(float(p['ilosc']) * float(p['cena']) for p in produkty_list)
         total_koszty = total_koszt + koszt_produktow
+        total_koszty_z_zbrojeniem = total_koszt + koszt_produktow + koszt_zbrojenia_total
         return {
             "zlecenie": dict(zl),
             "sesje": rows,
@@ -1119,9 +1147,11 @@ def koszty_zlecenia(zid: int):
             "total_godz": round(total_godz, 2),
             "total_koszt": round(total_koszt, 2),
             "koszt_produktow": round(koszt_produktow, 2),
-            "total_koszty": round(total_koszty, 2),
+            "koszt_zbrojenia": round(koszt_zbrojenia_total, 2),
+            "zbrojenia": zbrojenia_info,
+            "total_koszty": round(total_koszty_z_zbrojeniem, 2),
             "przychod": round(przychod, 2),
-            "marza": round(przychod - total_koszty, 2),
+            "marza": round(przychod - total_koszty_z_zbrojeniem, 2),
         }
 
 
@@ -1383,7 +1413,11 @@ def init_db_on_start():
         kolejnosc INTEGER DEFAULT 0, czas_norma REAL DEFAULT 0,
         stanowisko TEXT, status TEXT DEFAULT 'oczekuje', qr_code TEXT,
         ilosc_wykonana INTEGER DEFAULT 0, opis_czynnosci TEXT DEFAULT '',
+        czas_zbrojenia_min REAL DEFAULT 0.0,
         FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id))""")
+    # Migracja operacje
+    try: c.execute("ALTER TABLE operacje ADD COLUMN czas_zbrojenia_min REAL DEFAULT 0.0")
+    except: pass
 
     c.execute("""CREATE TABLE IF NOT EXISTS sesje_pracy (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1403,7 +1437,13 @@ def init_db_on_start():
     c.execute("""CREATE TABLE IF NOT EXISTS stawki (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         stanowisko TEXT UNIQUE NOT NULL, stawka_godz REAL NOT NULL,
-        czas_norma_min REAL DEFAULT 0, opis TEXT DEFAULT '')""")
+        czas_norma_min REAL DEFAULT 0, opis TEXT DEFAULT '',
+        zbrojenie_aktywne INTEGER DEFAULT 0,
+        zbrojenie_stawka_godz REAL DEFAULT 0.0)""")
+    # Migracja stawki
+    for col, typ in [("zbrojenie_aktywne","INTEGER DEFAULT 0"), ("zbrojenie_stawka_godz","REAL DEFAULT 0.0")]:
+        try: c.execute(f"ALTER TABLE stawki ADD COLUMN {col} {typ}")
+        except: pass
 
     c.execute("""CREATE TABLE IF NOT EXISTS katalog_produktow (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

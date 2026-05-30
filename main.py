@@ -710,6 +710,18 @@ def majster_stats():
             ORDER BY z.numer
         """).fetchall()
 
+        wszystkie_zlecenia = conn.execute("""
+            SELECT z.id, z.numer, z.nazwa, z.status, z.ilosc_sztuk, z.termin,
+                   z.cena_brutto_szt,
+                   COUNT(o.id) as op_total,
+                   SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done,
+                   SUM(o.ilosc_wykonana) as sztuki_wykonane
+            FROM zlecenia z
+            LEFT JOIN operacje o ON o.zlecenie_id = z.id
+            GROUP BY z.id
+            ORDER BY z.id DESC
+        """).fetchall()
+
         # alerty norm (sesje przekraczające normę)
         alerty = conn.execute("""
             SELECT s.id as sesja_id, u.full_name, o.nazwa as op_nazwa,
@@ -763,6 +775,7 @@ def majster_stats():
         "dzis_sztuk": dzis[1] or 0,
         "dzis_godz": round(dzis[2] or 0, 2),
         "zlecenia": [dict(r) for r in zlecenia],
+        "wszystkie_zlecenia": [dict(r) for r in wszystkie_zlecenia],
         "alerty_norm": alert_list,
         "koszty_dzis": [dict(r) for r in koszty],
     }
@@ -935,6 +948,57 @@ def get_zlecenie_sesje(zid: int):
             ORDER BY s.end_time DESC
         """, (zid,)).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.get("/api/zlecenia/{zid}/szczegoly", dependencies=[Depends(verify_key)])
+def get_zlecenie_szczegoly(zid: int):
+    """Szczegóły zlecenia: historia sesji + koszt pracy + zysk."""
+    with get_db() as conn:
+        zlecenie = conn.execute("""
+            SELECT z.*, (z.cena_brutto_szt * z.ilosc_sztuk) as wartosc_total
+            FROM zlecenia z WHERE z.id=?
+        """, (zid,)).fetchone()
+        if not zlecenie:
+            raise HTTPException(404, "Zlecenie nie znaleziono")
+
+        # Sesje dla wszystkich operacji tego zlecenia
+        sesje = conn.execute("""
+            SELECT s.id, s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi, s.typ,
+                   u.full_name, u.stawka_godz,
+                   o.nazwa as op_nazwa, o.kolejnosc, o.stanowisko, o.czas_norma,
+                   z2.numer as zl_numer
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id=u.id
+            LEFT JOIN operacje o ON s.operacja_id=o.id
+            LEFT JOIN zlecenia z2 ON o.zlecenie_id=z2.id
+            WHERE o.zlecenie_id=? AND s.status='zakonczona'
+            ORDER BY o.kolejnosc, s.end_time
+        """, (zid,)).fetchall()
+
+        # Oblicz koszt każdej sesji
+        result_sesje = []
+        koszt_total = 0.0
+        for s in sesje:
+            sd = dict(s)
+            elapsed_sec = 0.0
+            if sd['start_time'] and sd['end_time']:
+                elapsed_sec = (_parse(sd['end_time']) - _parse(sd['start_time'])).total_seconds()
+                for p in json.loads(sd['pauzy'] or '[]'):
+                    if p.get('koniec'):
+                        elapsed_sec -= (_parse(p['koniec']) - _parse(p['start'])).total_seconds()
+                elapsed_sec = max(0, elapsed_sec)
+            stawka = sd.get('stawka_godz') or 0
+            koszt = (elapsed_sec / 3600.0) * float(stawka)
+            sd['koszt_sesji'] = round(koszt, 2)
+            sd['elapsed_sec'] = round(elapsed_sec, 1)
+            koszt_total += koszt
+            result_sesje.append(sd)
+
+    return {
+        "sesje": result_sesje,
+        "koszt_total": round(koszt_total, 2),
+        "wartosc": float(zlecenie['wartosc_total'] or 0),
+    }
 
 # ─── Podsumowanie kosztów zlecenia ────────────────────────────────────────────
 @app.get("/api/zlecenia/{zid}/koszty", dependencies=[Depends(verify_key)])

@@ -120,8 +120,7 @@
 //  CONFIG
 // ══════════════════════════════════════════════════════════════
 let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
-const _autoUrl = (() => { try { const o = window.location.origin; return (o && o !== 'null' && !o.startsWith('file')) ? o : ''; } catch(e) { return ''; } })();
-let SERVER_URL = CONFIG.server_url || _autoUrl || '';
+let SERVER_URL = CONFIG.server_url || '';
 let API_KEY    = CONFIG.api_key    || '';
 const HEADERS  = () => ({'Content-Type':'application/json','x-api-key':API_KEY});
 
@@ -146,7 +145,7 @@ const patch= (p,b) => api(p, {method:'PATCH', body:JSON.stringify(b)});
 //  STATE
 // ══════════════════════════════════════════════════════════════
 let state = {
-  screen: 'login',
+  screen: SERVER_URL ? 'login' : 'config',
   user: null,
   activeTab: 'praca',
   loading: false,
@@ -362,7 +361,6 @@ async function doLogin(username, password) {
   setState({loading:true, error:null});
   try {
     const user = await post('/api/login', {username, password});
-    stopLoginInfoRefresh();
     const tab = defaultTab(user.role);
     setState({user, screen:'main', loading:false, activeTab:tab});
     loadTabData(tab);
@@ -524,23 +522,8 @@ function renderQRZleceniePickerModal() {
 async function startQRInne() {
   const opis = document.getElementById('qr-inne-opis')?.value?.trim();
   if (!opis) { alert('Wpisz co robisz'); return; }
-  const m = state.qrZleceniePickerModal;
-  // Znajdź pierwszą operację (operacja_id) z zlecenia żeby przypisać do niego
-  const firstOp = m?.operacje?.find(o => o.status !== 'zakonczona' && o.status !== 'anulowane');
-  const operacjaId = firstOp?.id || (m?.operacje?.[0]?.id) || null;
   setState({qrZleceniePickerModal:null, qrInneMode:false});
-  try {
-    // Typ "inne" – operacja produkcyjna przypisana do zlecenia (nie zmienia statusu samej operacji)
-    await post('/api/sesje/start', {
-      operacja_id: operacjaId,
-      user_id: state.user.id,
-      typ: 'inne',
-      opis_nieprodukcyjnej: opis
-    });
-    await loadPracownik();
-  } catch(e) {
-    alert('Błąd: ' + e.message);
-  }
+  await startNieprodukcyjna(opis);
 }
 
 function statusBadge_txt(s) {
@@ -707,127 +690,52 @@ function saveConfig() {
 
 // ══════════════════════════════════════════════════════════════
 //  SCREEN: LOGIN
-// ═══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════
 function renderLogin() {
-  const wi = state.warehouseInfo;
-  const missingUrl = !SERVER_URL;
-  const missingKey = !API_KEY;
-  const showSetup  = missingUrl || missingKey;
-  let html = '<div style="padding:16px;max-width:480px;margin:0 auto">';
-  if (wi && !showSetup) html += renderWarehouseLoginPanel(wi);
-  else if (SERVER_URL && !showSetup) html += '<div style="text-align:center;padding:20px 0 8px;color:var(--dim);font-size:12px">⏳ Ładowanie statusu produkcji...</div>';
-  html += '<div class="login-card">';
-  html += '<h2>⚙ PRODUKCJA</h2>';
-  html += '<p class="subtitle">System Zarządzania Produkcją v5.0</p>';
-  if (state.error) html += '<div class="error-banner">⚠ ' + state.error + '</div>';
-  if (showSetup) {
-    html += '<div style="background:var(--entry);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px">';
-    html += '<div style="font-size:11px;color:var(--orange);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">⚙ Konfiguracja połączenia</div>';
-    if (missingUrl) html += '<div class="field" style="margin-bottom:8px"><label>URL Serwera</label><input id="lg-url" type="url" placeholder="https://produkcja-xxx.railway.app" value="' + SERVER_URL + '" autocomplete="off"></div>';
-    if (missingKey) html += '<div class="field" style="margin-bottom:0"><label>Klucz API</label><input id="lg-apikey" type="password" placeholder="klucz-api" autocomplete="off"></div>';
-    html += '</div>';
-  }
-  html += '<div class="field"><label>Login</label><input id="lg-user" type="text" placeholder="np. piotr.p" autocomplete="username" onkeydown="if(event.key===\'Enter\')document.getElementById(\'lg-pass\').focus()"></div>';
-  html += '<div class="field"><label>Hasło</label><input id="lg-pass" type="password" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')doLoginWithKey()"></div>';
-  html += '<button class="btn btn-accent" style="margin-top:8px" onclick="doLoginWithKey()"' + (state.loading ? ' disabled' : '') + '>';
-  html += state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się';
-  html += '</button>';
-  html += '<button class="btn-outline" style="margin-top:10px" onclick="setState({screen:\'config\'})">&#x2699; Zmień serwer</button>';
-  html += '</div></div>';
-  return html;
+  const warehouseInfo = state.warehouseInfo;
+  return `
+  <div style="padding:16px">
+    ${warehouseInfo ? renderWarehouseLoginPanel(warehouseInfo) : ''}
+    <div class="login-card">
+      <h2>⚙ PRODUKCJA</h2>
+      <p class="subtitle">System Zarządzania Produkcją v4.0</p>
+      ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
+      <div class="field">
+        <label>Login</label>
+        <input id="lg-user" type="text" placeholder="np. piotr.p" autocomplete="username"
+               onkeydown="if(event.key==='Enter')document.getElementById('lg-pass').focus()">
+      </div>
+      <div class="field">
+        <label>Hasło</label>
+        <input id="lg-pass" type="password" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')doLogin(document.getElementById('lg-user').value,this.value)">
+      </div>
+      <button class="btn btn-accent" style="margin-top:8px"
+              onclick="doLogin(document.getElementById('lg-user').value,document.getElementById('lg-pass').value)"
+              ${state.loading?'disabled':''}>
+        ${state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się'}
+      </button>
+      <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">⚙ Zmień serwer</button>
+    </div>
+  </div>`;
 }
 
-function doLoginWithKey() {
-  const urlEl = document.getElementById('lg-url');
-  const keyEl = document.getElementById('lg-apikey');
-  if (urlEl && urlEl.value.trim()) SERVER_URL = urlEl.value.trim();
-  if (keyEl && keyEl.value.trim()) API_KEY    = keyEl.value.trim();
-  if (SERVER_URL && API_KEY) {
-    localStorage.setItem('produkcja_config', JSON.stringify({server_url: SERVER_URL, api_key: API_KEY}));
-    if (_loginInfoInterval) clearInterval(_loginInfoInterval);
-    startLoginInfoRefresh();
-  }
-  doLogin(document.getElementById('lg-user').value, document.getElementById('lg-pass').value);
-}
-
-function renderWarehouseLoginPanel(wi) {
-  const zakonczone = (wi.zakonczone || []);
-  const nastepne   = (wi.nastepne   || []);
-  const aktywne    = (wi.aktywne    || []);
-
-  let html = '';
-
-  // Sekcja: Operacje zakończone – do odbioru
-  if (zakonczone.length) {
-    html += `
-    <div style="background:rgba(39,174,96,.10);border:1px solid var(--green);border-radius:12px;padding:14px 16px;margin-bottom:10px">
-      <div style="font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
-        <span>📦 Do odbioru (${zakonczone.length})</span>
-        <span style="font-weight:400;font-size:10px;color:var(--dim)">zakończone operacje</span>
-      </div>`;
-    zakonczone.forEach(op => {
-      html += `
-      <div style="border-bottom:1px solid rgba(39,174,96,.2);padding:7px 0">
+function renderWarehouseLoginPanel(info) {
+  if (!info || !info.length) return '';
+  return `
+  <div style="max-width:380px;margin:0 auto 12px">
+    <div style="background:rgba(39,174,96,.12);border:1px solid var(--green);border-radius:12px;padding:14px 16px">
+      <div style="font-size:11px;font-weight:700;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
+        📦 Operacje czekające na odbiór (${info.length})
+      </div>
+      ${info.map(op => `
+      <div style="border-bottom:1px solid rgba(39,174,96,.2);padding:7px 0;last-child:border-none">
         <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
         <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
-        <div style="font-size:12px;color:var(--dim)">🏭 ${op.stanowisko||'—'} | 📦 <span style="color:var(--green);font-weight:600">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</span></div>
-        ${op.nastepna_operacja ? `<div style="font-size:12px;color:var(--blue);font-weight:600;margin-top:2px">🚚 Zawieź do: <strong>${op.nastepna_operacja}</strong></div>` : `<div style="font-size:12px;color:var(--orange);font-weight:600;margin-top:2px">📤 Gotowe do wydania</div>`}
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Sekcja: W trakcie realizacji
-  if (aktywne.length) {
-    html += `
-    <div style="background:rgba(243,156,18,.10);border:1px solid var(--orange);border-radius:12px;padding:14px 16px;margin-bottom:10px">
-      <div style="font-size:11px;font-weight:700;color:var(--orange);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
-        🔄 W trakcie (${aktywne.length})
-      </div>`;
-    aktywne.forEach(op => {
-      const prog = op.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana/op.ilosc_sztuk)*100) : 0;
-      html += `
-      <div style="border-bottom:1px solid rgba(243,156,18,.2);padding:7px 0">
-        <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
-        <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-          <div style="flex:1;background:var(--border);border-radius:3px;height:4px;overflow:hidden">
-            <div style="width:${prog}%;height:100%;background:var(--orange);border-radius:3px"></div>
-          </div>
-          <span style="font-size:11px;color:var(--dim)">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</span>
-        </div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Sekcja: Następne operacje (kolejka)
-  if (nastepne.length) {
-    html += `
-    <div style="background:rgba(52,152,219,.10);border:1px solid var(--blue);border-radius:12px;padding:14px 16px;margin-bottom:10px">
-      <div style="font-size:11px;font-weight:700;color:var(--blue);letter-spacing:1px;text-transform:uppercase;margin-bottom:10px">
-        ⏳ Kolejka – następne operacje (${nastepne.length})
-      </div>`;
-    nastepne.forEach(op => {
-      html += `
-      <div style="border-bottom:1px solid rgba(52,152,219,.2);padding:7px 0">
-        <div style="font-weight:600;font-size:13px;color:var(--text)">${op.kolejnosc}. ${op.nazwa}</div>
-        <div style="font-size:12px;color:var(--dim)">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
-        <div style="font-size:12px;color:var(--blue);font-weight:600">🚚 Zawieź do: <strong>${op.stanowisko||'—'}</strong>${op.czas_norma?' | ⏱ norma: '+op.czas_norma+' min':''}</div>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  if (!zakonczone.length && !aktywne.length && !nastepne.length) {
-    html += `
-    <div style="background:rgba(39,174,96,.08);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;text-align:center">
-      <div style="color:var(--green);font-size:22px;margin-bottom:4px">✅</div>
-      <div style="font-size:13px;color:var(--dim)">Brak operacji do odbioru</div>
-    </div>`;
-  }
-
-  return html;
+        <div style="font-size:12px;color:var(--dim)">🏭 ${op.stanowisko||'—'} | 📦 ${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -969,13 +877,14 @@ function renderPracaGlowna() {
 
   // QR skaner
   if (state.qrScanMode) {
+    const hist = JSON.parse(localStorage.getItem('qr_historia')||'[]');
     const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
     html += `
     <div class="card" style="border-color:var(--blue)">
       <div class="section-hdr" style="margin-bottom:12px">📷 Skaner QR</div>`;
 
-    if (!state.qrManualMode) {
-      // Tryb aparatu – działa na wszystkich urządzeniach z kamerą
+    if (isMobile && !state.qrManualMode) {
+      // Tryb aparatu na urządzeniu mobilnym
       html += `
       <div id="qr-camera-wrap" style="position:relative;width:100%;background:#000;border-radius:10px;overflow:hidden;margin-bottom:10px">
         <video id="qr-video" style="width:100%;display:block;border-radius:10px" playsinline autoplay muted></video>
@@ -984,14 +893,14 @@ function renderPracaGlowna() {
       </div>
       <button class="btn-outline" style="margin-bottom:8px" onclick="setState({qrManualMode:true})">⌨ Wpisz kod ręcznie</button>`;
     } else {
-      // Tryb ręcznego wpisywania
+      // Tryb ręcznego wpisywania (komputer lub wybór użytkownika)
       html += `
       <div class="qr-input-row field" style="margin-bottom:10px">
         <input id="qr-input" type="text" placeholder="Wpisz kod QR i naciśnij Enter"
                autofocus onkeydown="if(event.key==='Enter')scanQR(this.value)">
         <button class="btn-sm btn-accent" onclick="scanQR(document.getElementById('qr-input').value)">▶</button>
       </div>
-      <button class="btn-outline" style="margin-bottom:8px" onclick="stopQRCamera();setState({qrManualMode:false})">📷 Użyj aparatu</button>`;
+      ${isMobile ? `<button class="btn-outline" style="margin-bottom:8px" onclick="setState({qrManualMode:false})">📷 Użyj aparatu</button>` : ''}`;
     }
 
     html += `
@@ -1019,12 +928,11 @@ function renderPracaGlowna() {
     state.aktywnesje.forEach(sesja => {
       const paused = isPaused(sesja);
       const isNieprod = sesja.typ === 'nieprodukcyjna';
-      const isInne = sesja.typ === 'inne';
       html += `
       <div class="timer-card ${paused?'paused':''} ${isNieprod?'nieprodukcyjna-card':''}">
-        <div class="timer-label">${isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : isInne ? '⚡ INNE – PROD.' : (paused ? '⏸ PAUZA' : '⏱ AKTYWNA')}</div>
+        <div class="timer-label">${isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : (paused ? '⏸ PAUZA' : '⏱ AKTYWNA')}</div>
         <div class="timer-display" id="timer-${sesja.id}">00:00:00</div>
-        <div class="timer-op">${isInne ? (sesja.uwagi || '—') : (sesja.op_nazwa || sesja.uwagi || '—')}</div>
+        <div class="timer-op">${sesja.op_nazwa || sesja.uwagi || '—'}</div>
         ${sesja.zl_numer ? `<div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>` : ''}
         <div style="color:var(--dim);font-size:12px;margin:4px 0 12px">${sesja.stanowisko||''}</div>
         <div class="btn-row">
@@ -1328,12 +1236,8 @@ function renderMajsterPodsumowanie(stats) {
         <div class="progress-wrap">
           <div class="progress-bar" style="width:${prog}%;background:${isZakonczone?'var(--green)':prog>=100?'var(--green)':'var(--accent)'}"></div>
         </div>
-        <div style="font-size:11px;color:var(--dim);margin-top:4px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px">
+        <div style="font-size:11px;color:var(--dim);margin-top:4px;display:flex;justify-content:space-between">
           <span>${prog}% • ${z.sztuki_wykonane||0}/${z.ilosc_sztuk} szt.</span>
-          ${z.cena_brutto_szt > 0 ? `
-          <span style="color:${z.marza >= 0 ? 'var(--green)' : 'var(--red)'};font-weight:700">
-            💰 ${z.marza >= 0 ? '+' : ''}${fmtPLN(z.marza)}
-          </span>` : ''}
           <span style="color:var(--accent)">▶ szczegóły</span>
         </div>
       </div>`;
@@ -1352,65 +1256,37 @@ function renderMajsterPodsumowanie(stats) {
 
     if (d.loading) {
       html += `<div class="spinner">⏳</div>`;
-    } else {
-      // Blok finansowy
-      if (d.koszty) {
-        const k = d.koszty;
-        const marzaColor = k.marza >= 0 ? 'var(--green)' : 'var(--red)';
-        const marzaPct = k.przychod > 0 ? Math.round(k.marza / k.przychod * 100) : null;
+    } else if (d.sesje && d.sesje.length) {
+      html += `<div class="section-hdr">Historia operacji (${d.sesje.length} sesji)</div>`;
+      d.sesje.forEach(s => {
+        const start = parseLocalDT(s.start_time);
+        const end = s.end_time ? parseLocalDT(s.end_time) : null;
+        let elapsed = end ? (end - start) / 1000 : 0;
+        const pauzy = JSON.parse(s.pauzy || '[]');
+        for (const p of pauzy) {
+          if (p.koniec) elapsed -= (parseLocalDT(p.koniec) - parseLocalDT(p.start)) / 1000;
+        }
+        elapsed = Math.max(0, Math.round(elapsed));
+        const dateStr = s.end_time ? s.end_time.substring(0,16).replace('T',' ') : '—';
         html += `
-        <div style="background:var(--entry);border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid var(--border)">
-          <div style="font-size:11px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">💰 Finanse zlecenia</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <div style="text-align:center;background:var(--panel);border-radius:8px;padding:10px">
-              <div style="font-size:18px;font-weight:700;color:var(--blue)">${fmtPLN(k.przychod)}</div>
-              <div style="font-size:10px;color:var(--dim);margin-top:2px">Przychód</div>
+        <div style="border-bottom:1px solid var(--border);padding:8px 0">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <div style="font-weight:600;font-size:13px">${s.kolejnosc ? s.kolejnosc+'. ' : ''}${s.op_nazwa || '—'}</div>
+              <div style="font-size:12px;color:var(--dim)">👤 ${s.full_name}</div>
+              <div style="font-size:11px;color:var(--dim)">🕐 ${dateStr}</div>
+              ${s.stanowisko?`<div style="font-size:11px;color:var(--dim)">🏭 ${s.stanowisko}</div>`:''}
             </div>
-            <div style="text-align:center;background:var(--panel);border-radius:8px;padding:10px">
-              <div style="font-size:18px;font-weight:700;color:var(--orange)">${fmtPLN(k.total_koszt)}</div>
-              <div style="font-size:10px;color:var(--dim);margin-top:2px">Koszty rob.</div>
+            <div style="text-align:right">
+              <div style="font-family:Consolas;color:var(--green);font-size:14px">${fmtTime(elapsed)}</div>
+              <div style="font-size:11px;color:var(--dim)">${s.ilosc_sztuk} szt.</div>
             </div>
           </div>
-          <div style="text-align:center;background:var(--panel);border-radius:8px;padding:12px;margin-top:8px;border:2px solid ${marzaColor}">
-            <div style="font-size:24px;font-weight:900;color:${marzaColor}">${k.marza >= 0 ? '+' : ''}${fmtPLN(k.marza)}</div>
-            <div style="font-size:11px;color:var(--dim);margin-top:2px">Zysk firmy${marzaPct !== null ? ' (' + marzaPct + '% marży)' : ''}</div>
-          </div>
+          ${s.uwagi ? `<div style="font-size:11px;color:var(--orange);margin-top:3px">💬 ${s.uwagi}</div>` : ''}
         </div>`;
-      }
-
-      if (d.sesje && d.sesje.length) {
-      if (d.sesje && d.sesje.length) {
-        html += `<div class="section-hdr">Historia operacji (${d.sesje.length} sesji)</div>`;
-        d.sesje.forEach(s => {
-          const start = parseLocalDT(s.start_time);
-          const end = s.end_time ? parseLocalDT(s.end_time) : null;
-          let elapsed = end ? (end - start) / 1000 : 0;
-          const pauzy = JSON.parse(s.pauzy || '[]');
-          for (const p of pauzy) {
-            if (p.koniec) elapsed -= (parseLocalDT(p.koniec) - parseLocalDT(p.start)) / 1000;
-          }
-          elapsed = Math.max(0, Math.round(elapsed));
-          const dateStr = s.end_time ? s.end_time.substring(0,16).replace('T',' ') : '—';
-          html += `
-          <div style="border-bottom:1px solid var(--border);padding:8px 0">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start">
-              <div>
-                <div style="font-weight:600;font-size:13px">${s.kolejnosc ? s.kolejnosc+'. ' : ''}${s.op_nazwa || '—'}</div>
-                <div style="font-size:12px;color:var(--dim)">👤 ${s.full_name}</div>
-                <div style="font-size:11px;color:var(--dim)">🕐 ${dateStr}</div>
-                ${s.stanowisko?`<div style="font-size:11px;color:var(--dim)">🏭 ${s.stanowisko}</div>`:''}
-              </div>
-              <div style="text-align:right">
-                <div style="font-family:Consolas;color:var(--green);font-size:14px">${fmtTime(elapsed)}</div>
-                <div style="font-size:11px;color:var(--dim)">${s.ilosc_sztuk} szt.</div>
-              </div>
-            </div>
-            ${s.uwagi ? `<div style="font-size:11px;color:var(--orange);margin-top:3px">💬 ${s.uwagi}</div>` : ''}
-          </div>`;
-        });
-      } else if (!d.koszty) {
-        html += `<div class="empty">Brak zarejestrowanych sesji dla tego zlecenia</div>`;
-      }
+      });
+    } else {
+      html += `<div class="empty">Brak zarejestrowanych sesji dla tego zlecenia</div>`;
     }
 
     html += `
@@ -1423,13 +1299,10 @@ function renderMajsterPodsumowanie(stats) {
 }
 
 async function openZlecenieDetails(zid, numer, nazwa) {
-  setState({zlecenieDetailsModal: {id:zid, numer, nazwa, loading:true, sesje:null, koszty:null}});
+  setState({zlecenieDetailsModal: {id:zid, numer, nazwa, loading:true, sesje:null}});
   try {
-    const [sesje, koszty] = await Promise.all([
-      get(`/api/zlecenia/${zid}/sesje`),
-      get(`/api/zlecenia/${zid}/koszty`).catch(() => null),
-    ]);
-    setState({zlecenieDetailsModal: {...state.zlecenieDetailsModal, loading:false, sesje, koszty}});
+    const sesje = await get(`/api/zlecenia/${zid}/sesje`);
+    setState({zlecenieDetailsModal: {...state.zlecenieDetailsModal, loading:false, sesje}});
   } catch(e) {
     setState({zlecenieDetailsModal: {...state.zlecenieDetailsModal, loading:false, sesje:[]}});
   }
@@ -1574,7 +1447,6 @@ function renderZlecenia() {
             <div class="card-sub">${z.nazwa}</div>
             ${z.termin ? `<div class="card-sub">📅 ${fmtDate(z.termin)}</div>` : ''}
             <div class="card-sub">📦 ${z.ilosc_sztuk} szt. ${z.cena_brutto_szt ? '| '+fmtPLN(z.cena_brutto_szt)+'/szt' : ''}</div>
-            ${z.przychod > 0 ? '<div style="margin-top:4px;font-size:12px;display:flex;gap:8px;flex-wrap:wrap"><span style="color:var(--dim)">Przychód: <b style="color:var(--blue)">' + fmtPLN(z.przychod) + '</b></span> <span style="color:var(--dim)">Koszty: <b style="color:var(--orange)">' + fmtPLN(z.total_koszt) + '</b></span> <span style="color:var(--dim)">Zysk: <b style="color:' + (z.marza >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (z.marza >= 0 ? '+' : '') + fmtPLN(z.marza) + '</b></span></div>' : ''}
           </div>
           ${statusBadge(z.status)}
         </div>
@@ -2276,8 +2148,6 @@ function render() {
   for (const [sid, t] of Object.entries(state.timers)) {
     if (t.sesja) startTimerFor(t.sesja);
   }
-  // Obsługa kamery QR
-  afterRenderQR();
   // Narysuj QR jeśli modal QR otwarty
   if (state.qrGenModal && state.qrGenKod) {
     setTimeout(() => drawQRCanvas(state.qrGenKod), 50);
@@ -2374,16 +2244,13 @@ async function startQRCamera() {
   }
 }
 
-// Uruchom kamerę po renderze – wywoływane z głównej funkcji render() poniżej
-function afterRenderQR() {
-  // Jeśli kamera jest już aktywna i video element istnieje – nie restartuj
-  if (_qrStream && document.getElementById('qr-video')) return;
-  // Zatrzymaj kamerę jeśli element nie istnieje (poza trybem skanowania)
-  if (!document.getElementById('qr-video')) {
-    stopQRCamera();
-    return;
-  }
-  if (state.qrScanMode && !state.qrManualMode) {
+// Uruchom kamerę po renderze jeśli jesteśmy w trybie aparatu
+const _origRender = render;
+function render() {
+  stopQRCamera();
+  _origRender();
+  // Jeśli QR scan mode aktywny i nie manual mode – uruchom kamerę
+  if (state.qrScanMode && !state.qrManualMode && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
     setTimeout(startQRCamera, 100);
   }
 }
@@ -2394,35 +2261,16 @@ function afterRenderQR() {
 // Wczytaj historię QR
 state.qrLastCodes = JSON.parse(localStorage.getItem('qr_historia')||'[]');
 
-// Załaduj info produkcji na ekran logowania (bez auth – publiczny endpoint)
-let _loginInfoInterval = null;
-
+// Załaduj info dla magazyniera na ekran logowania
 async function loadWarehouseLoginInfo() {
   if (!SERVER_URL || !API_KEY) return;
   try {
-    const data = await get('/api/status/produkcja');
-    setState({warehouseInfo: data}, true);
+    const ops = await get('/api/operacje/zakonczone-do-transportu');
+    setState({warehouseInfo: ops}, true);
     render();
-  } catch(e) {
-    // stary endpoint fallback
-    try {
-      const ops = await get('/api/operacje/zakonczone-do-transportu');
-      setState({warehouseInfo: {zakonczone: ops, nastepne: [], aktywne: []}}, true);
-      render();
-    } catch(_) { /* cicho */ }
-  }
+  } catch(e) { /* cicho – brak logowania */ }
 }
-
-function startLoginInfoRefresh() {
-  loadWarehouseLoginInfo();
-  if (_loginInfoInterval) clearInterval(_loginInfoInterval);
-  _loginInfoInterval = setInterval(loadWarehouseLoginInfo, 20000);
-}
-
-function stopLoginInfoRefresh() {
-  if (_loginInfoInterval) { clearInterval(_loginInfoInterval); _loginInfoInterval = null; }
-}
-if (SERVER_URL) startLoginInfoRefresh();
+if (SERVER_URL) loadWarehouseLoginInfo();
 
 // Auto-refresh co 30s
 setInterval(() => {

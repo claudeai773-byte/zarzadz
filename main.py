@@ -219,7 +219,24 @@ def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM zlecenia ORDER BY created_at DESC").fetchall()
-    return [dict(r) for r in rows]
+        result = []
+        for z in rows:
+            zd = dict(z)
+            # Oblicz pozostały czas w minutach na bazie norm operacji
+            ops = conn.execute("""
+                SELECT status, czas_norma, ilosc_wykonana FROM operacje WHERE zlecenie_id=?
+            """, (z["id"],)).fetchall()
+            ilosc = z["ilosc_sztuk"] or 1
+            pozostale_min = 0
+            for op in ops:
+                if op["status"] == "zakonczona": continue
+                norma = op["czas_norma"] or 0
+                if not norma: continue
+                wykonano = op["ilosc_wykonana"] or 0
+                pozostale_min += norma * max(0, ilosc - wykonano)
+            zd["pozostale_min"] = round(pozostale_min, 1)
+            result.append(zd)
+    return result
 
 class ZlecenieRequest(BaseModel):
     numer: str
@@ -357,8 +374,9 @@ def get_zakonczone_transport():
 class StartSesjaRequest(BaseModel):
     operacja_id: Optional[int] = None
     user_id: int
-    typ: str = "operacja"   # operacja | nieprodukcyjna
+    typ: str = "operacja"   # operacja | nieprodukcyjna | inne_zlecenie
     opis_nieprodukcyjnej: Optional[str] = ""
+    zlecenie_id_inne: Optional[int] = None  # dla typ='inne_zlecenie'
 
 class StopSesjaRequest(BaseModel):
     sesja_id: int
@@ -384,10 +402,11 @@ def start_sesja(req: StartSesjaRequest):
                 raise HTTPException(400, "Masz już aktywną sesję tej operacji.")
 
         cur = conn.execute(
-            """INSERT INTO sesje_pracy (operacja_id, user_id, typ, start_time, status, uwagi)
-               VALUES (?,?,?,?,?,?)""",
+            """INSERT INTO sesje_pracy (operacja_id, user_id, typ, start_time, status, uwagi, zlecenie_id_inne)
+               VALUES (?,?,?,?,?,?,?)""",
             (req.operacja_id, req.user_id, req.typ, now, "aktywna",
-             req.opis_nieprodukcyjnej or "")
+             req.opis_nieprodukcyjnej or "",
+             req.zlecenie_id_inne if req.typ == "inne_zlecenie" else None)
         )
         sesja_id = cur.lastrowid
         if req.operacja_id and req.typ in ("operacja", "inne_zlecenie"):
@@ -475,10 +494,12 @@ def get_aktywne_sesje(user_id: int):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT s.*, o.nazwa as op_nazwa, o.stanowisko,
-                   z.numer as zl_numer, z.nazwa as zl_nazwa
+                   COALESCE(z.numer, zi.numer) as zl_numer,
+                   COALESCE(z.nazwa, zi.nazwa) as zl_nazwa
             FROM sesje_pracy s
             LEFT JOIN operacje o ON s.operacja_id = o.id
             LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+            LEFT JOIN zlecenia zi ON s.zlecenie_id_inne = zi.id
             WHERE s.user_id=? AND s.status='aktywna'
             ORDER BY s.start_time
         """, (user_id,)).fetchall()
@@ -673,15 +694,18 @@ def generate_qr(kod: str):
 def majster_stats():
     with get_db() as conn:
         aktywne = conn.execute("""
-            SELECT s.start_time, s.pauzy, s.id as sesja_id, s.typ,
+            SELECT s.start_time, s.pauzy, s.id as sesja_id, s.typ, s.uwagi,
                    u.full_name, u.id as user_id,
                    o.nazwa as op_nazwa, o.stanowisko, o.czas_norma,
                    o.ilosc_wykonana, o.id as op_id,
-                   z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk
+                   COALESCE(z.numer, zi.numer) as zl_numer,
+                   COALESCE(z.nazwa, zi.nazwa) as zl_nazwa,
+                   COALESCE(z.ilosc_sztuk, zi.ilosc_sztuk) as ilosc_sztuk
             FROM sesje_pracy s
             JOIN users u ON s.user_id = u.id
             LEFT JOIN operacje o ON s.operacja_id = o.id
             LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+            LEFT JOIN zlecenia zi ON s.zlecenie_id_inne = zi.id
             WHERE s.status='aktywna'
             ORDER BY s.start_time
         """).fetchall()
@@ -698,12 +722,13 @@ def majster_stats():
         """).fetchone()
 
         # postęp zleceń z detalami operacji
+        # sztuki_wykonane = MIN(ilosc_wykonana) bo każda operacja musi być zrobiona dla każdej sztuki
         zlecenia = conn.execute("""
             SELECT z.id, z.numer, z.nazwa, z.status, z.ilosc_sztuk, z.termin,
                    z.cena_brutto_szt,
                    COUNT(o.id) as op_total,
                    SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done,
-                   SUM(o.ilosc_wykonana) as sztuki_wykonane
+                   MIN(o.ilosc_wykonana) as sztuki_wykonane
             FROM zlecenia z
             LEFT JOIN operacje o ON o.zlecenie_id = z.id
             WHERE z.status IN ('nowe','w_toku')
@@ -716,18 +741,18 @@ def majster_stats():
                    z.cena_brutto_szt,
                    COUNT(o.id) as op_total,
                    SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done,
-                   SUM(o.ilosc_wykonana) as sztuki_wykonane
+                   MIN(o.ilosc_wykonana) as sztuki_wykonane
             FROM zlecenia z
             LEFT JOIN operacje o ON o.zlecenie_id = z.id
             GROUP BY z.id
             ORDER BY z.id DESC
         """).fetchall()
 
-        # alerty norm (sesje przekraczające normę)
+        # alerty norm (sesje przekraczające normę całościową = czas_norma × ilosc_sztuk)
         alerty = conn.execute("""
             SELECT s.id as sesja_id, u.full_name, o.nazwa as op_nazwa,
                    o.czas_norma, s.start_time, s.pauzy,
-                   z.numer as zl_numer
+                   z.numer as zl_numer, z.ilosc_sztuk
             FROM sesje_pracy s
             JOIN users u ON s.user_id = u.id
             JOIN operacje o ON s.operacja_id = o.id
@@ -744,15 +769,20 @@ def majster_stats():
                     pause_sec = (_parse(p["koniec"]) -
                                  _parse(p["start"])).total_seconds()
                     elapsed_min -= pause_sec / 60
-            if elapsed_min > a["czas_norma"] * 1.2:  # alert przy 120% normy
+            # norma całkowita = czas_norma × liczba_sztuk
+            ilosc_sztuk = max(1, a["ilosc_sztuk"] or 1)
+            norma_calkowita = a["czas_norma"] * ilosc_sztuk
+            if elapsed_min > norma_calkowita:  # alert dopiero po przekroczeniu pełnej normy
                 alert_list.append({
                     "sesja_id": a["sesja_id"],
                     "pracownik": a["full_name"],
                     "operacja": a["op_nazwa"],
                     "zlecenie": a["zl_numer"],
                     "norma_min": a["czas_norma"],
+                    "norma_calkowita_min": round(norma_calkowita, 1),
+                    "ilosc_sztuk": ilosc_sztuk,
                     "elapsed_min": round(elapsed_min, 1),
-                    "przekroczenie_pct": round((elapsed_min / a["czas_norma"] - 1) * 100)
+                    "przekroczenie_pct": round((elapsed_min / norma_calkowita - 1) * 100)
                 })
 
         # podsumowanie kosztów dzisiaj
@@ -977,20 +1007,23 @@ def get_zlecenie_szczegoly(zid: int):
         if not zlecenie:
             raise HTTPException(404, "Zlecenie nie znaleziono")
 
-        # Sesje dla wszystkich operacji tego zlecenia
+        # Sesje dla wszystkich operacji tego zlecenia + sesje "inne" powiązane z tym zleceniem
         sesje = conn.execute("""
             SELECT s.id, s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi, s.typ,
                    u.full_name, COALESCE(st.stawka_godz, 0) as stawka_godz,
-                   o.nazwa as op_nazwa, o.kolejnosc, o.stanowisko, o.czas_norma,
+                   COALESCE(o.nazwa, s.uwagi) as op_nazwa,
+                   COALESCE(o.kolejnosc, 999) as kolejnosc,
+                   COALESCE(o.stanowisko, '') as stanowisko,
+                   COALESCE(o.czas_norma, 0) as czas_norma,
                    z2.numer as zl_numer
             FROM sesje_pracy s
             JOIN users u ON s.user_id=u.id
             LEFT JOIN operacje o ON s.operacja_id=o.id
             LEFT JOIN zlecenia z2 ON o.zlecenie_id=z2.id
             LEFT JOIN stawki st ON o.stanowisko=st.stanowisko
-            WHERE o.zlecenie_id=? AND s.status='zakonczona'
-            ORDER BY o.kolejnosc, s.end_time
-        """, (zid,)).fetchall()
+            WHERE (o.zlecenie_id=? OR s.zlecenie_id_inne=?) AND s.status='zakonczona'
+            ORDER BY COALESCE(o.kolejnosc,999), s.end_time
+        """, (zid, zid)).fetchall()
 
         # Oblicz koszt każdej sesji
         result_sesje = []
@@ -1261,16 +1294,20 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
         for z in zlecenia:
             zid = z["id"]
             sesje = conn.execute("""
-                SELECT s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi,
-                       u.full_name, o.nazwa as op_nazwa, o.kolejnosc,
-                       o.stanowisko, COALESCE(st.stawka_godz,0) as stawka_godz
+                SELECT s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi, s.typ,
+                       u.full_name,
+                       COALESCE(o.nazwa, s.uwagi) as op_nazwa,
+                       COALESCE(o.kolejnosc, 999) as kolejnosc,
+                       COALESCE(o.stanowisko, '') as stanowisko,
+                       COALESCE(o.czas_norma, 0) as czas_norma,
+                       COALESCE(st.stawka_godz,0) as stawka_godz
                 FROM sesje_pracy s
                 JOIN users u ON s.user_id=u.id
-                JOIN operacje o ON s.operacja_id=o.id
+                LEFT JOIN operacje o ON s.operacja_id=o.id
                 LEFT JOIN stawki st ON o.stanowisko=st.stanowisko
-                WHERE o.zlecenie_id=? AND s.status='zakonczona'
-                ORDER BY o.kolejnosc, s.end_time
-            """, (zid,)).fetchall()
+                WHERE (o.zlecenie_id=? OR s.zlecenie_id_inne=?) AND s.status='zakonczona'
+                ORDER BY COALESCE(o.kolejnosc,999), s.end_time
+            """, (zid, zid)).fetchall()
 
             sesje_list = []
             koszt_pracy = 0
@@ -1290,6 +1327,7 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
                     "data": (s["end_time"] or "")[:16].replace("T"," "),
                     "czas_min": round(elapsed * 60, 1),
                     "ilosc_sztuk": s["ilosc_sztuk"],
+                    "czas_norma": s["czas_norma"] or 0,
                     "koszt": koszt,
                     "uwagi": s["uwagi"] or "",
                 })
@@ -1353,7 +1391,14 @@ def init_db_on_start():
         typ TEXT NOT NULL, start_time TIMESTAMP, end_time TIMESTAMP,
         pauzy TEXT DEFAULT '[]', ilosc_sztuk INTEGER DEFAULT 0,
         uwagi TEXT, status TEXT DEFAULT 'aktywna',
+        zlecenie_id_inne INTEGER DEFAULT NULL,
         FOREIGN KEY (user_id) REFERENCES users(id))""")
+
+    # Migracja: dodaj kolumnę zlecenie_id_inne jeśli nie istnieje (dla starych baz)
+    try:
+        c.execute("ALTER TABLE sesje_pracy ADD COLUMN zlecenie_id_inne INTEGER DEFAULT NULL")
+    except Exception:
+        pass  # kolumna już istnieje
 
     c.execute("""CREATE TABLE IF NOT EXISTS stawki (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

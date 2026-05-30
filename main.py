@@ -262,6 +262,8 @@ def update_zlecenie(zid: int, req: ZlecenieRequest):
 @app.delete("/api/zlecenia/{zid}", dependencies=[Depends(verify_key)])
 def delete_zlecenie(zid: int):
     with get_db() as conn:
+        conn.execute("DELETE FROM sesje_pracy WHERE operacja_id IN (SELECT id FROM operacje WHERE zlecenie_id=?)", (zid,))
+        conn.execute("DELETE FROM produkty_zlecenia WHERE zlecenie_id=?", (zid,))
         conn.execute("DELETE FROM operacje WHERE zlecenie_id=?", (zid,))
         conn.execute("DELETE FROM zlecenia WHERE id=?", (zid,))
     return {"ok": True}
@@ -1135,6 +1137,170 @@ def delete_produkt_zlecenia(zid: int, pid: int):
     with get_db() as conn:
         conn.execute("DELETE FROM produkty_zlecenia WHERE id=? AND zlecenie_id=?", (pid, zid))
     return {"ok": True}
+
+
+
+# ─── Wydajność majstra – raport z dowolnego zakresu dat ──────────────────────
+@app.get("/api/stats/wydajnosc_raport", dependencies=[Depends(verify_key)])
+def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
+    """Wydajność pracowników w podanym zakresie dat (YYYY-MM-DD)."""
+    if not data_od:
+        data_od = (_dt.datetime.utcnow() - _dt.timedelta(days=30)).strftime("%Y-%m-%d")
+    if not data_do:
+        data_do = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+    filter_sql = f"date(s.end_time) BETWEEN '{data_od}' AND '{data_do}'"
+
+    with get_db() as conn:
+        users_rows = conn.execute(f"""
+            SELECT u.id, u.full_name,
+                   COUNT(CASE WHEN s.typ IN ('operacja','inne_zlecenie') THEN 1 END) as sesji,
+                   COALESCE(SUM(CASE WHEN s.typ IN ('operacja','inne_zlecenie') THEN s.ilosc_sztuk ELSE 0 END),0) as sztuki,
+                   COALESCE(SUM(CASE WHEN s.typ IN ('operacja','inne_zlecenie') THEN
+                     (strftime('%s', s.end_time) - strftime('%s', s.start_time)) / 60.0 ELSE 0 END), 0) as min_roboczy,
+                   COALESCE(SUM(CASE WHEN s.typ='zbrojenie' THEN
+                     (strftime('%s', s.end_time) - strftime('%s', s.start_time)) / 60.0 ELSE 0 END), 0) as min_zbrojenie,
+                   COALESCE(SUM(CASE WHEN s.typ='nieprodukcyjna' THEN
+                     (strftime('%s', s.end_time) - strftime('%s', s.start_time)) / 60.0 ELSE 0 END), 0) as min_nieproduktywny,
+                   COUNT(DISTINCT date(s.start_time)) as dni_pracy
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.status='zakonczona' AND {filter_sql}
+            GROUP BY u.id ORDER BY min_roboczy DESC
+        """).fetchall()
+
+        wyniki = []
+        for r in users_rows:
+            sesje = conn.execute(f"""
+                SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
+                       o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
+                       z.numer as zl_numer
+                FROM sesje_pracy s
+                LEFT JOIN operacje o ON s.operacja_id = o.id
+                LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+                WHERE s.user_id=? AND s.status='zakonczona' AND {filter_sql}
+                ORDER BY s.end_time DESC
+            """, (r["id"],)).fetchall()
+
+            sesje_list = []
+            normy_ok = 0; normy_total = 0
+            for s in sesje:
+                elapsed = (_parse(s["end_time"]) - _parse(s["start_time"])).total_seconds() / 60
+                pauzy = json.loads(s["pauzy"] or "[]")
+                for p in pauzy:
+                    if p.get("koniec"):
+                        elapsed -= (_parse(p["koniec"]) - _parse(p["start"])).total_seconds() / 60
+                elapsed = max(0.1, elapsed)
+                wyd_pct = round(s["czas_norma"] / elapsed * 100) if s.get("czas_norma") else None
+                if wyd_pct is not None:
+                    normy_total += 1
+                    if wyd_pct >= 90: normy_ok += 1
+                sesje_list.append({
+                    "op_nazwa": s["op_nazwa"] or "—",
+                    "stanowisko": s["stanowisko"] or "—",
+                    "zl_numer": s["zl_numer"] or "—",
+                    "ilosc_sztuk": s["ilosc_sztuk"],
+                    "czas_min": round(elapsed, 1),
+                    "norma_min": s.get("czas_norma"),
+                    "wyd_pct": wyd_pct,
+                    "typ": s["typ"],
+                    "data": (s["end_time"] or "")[:10],
+                })
+
+            wyniki.append({
+                "user_id": r["id"],
+                "full_name": r["full_name"],
+                "sesji": r["sesji"],
+                "sztuki": r["sztuki"],
+                "min_roboczy": round(r["min_roboczy"], 1),
+                "min_zbrojenie": round(r["min_zbrojenie"], 1),
+                "min_nieproduktywny": round(r["min_nieproduktywny"], 1),
+                "dni_pracy": r["dni_pracy"],
+                "normy_ok": normy_ok,
+                "normy_total": normy_total,
+                "sesje": sesje_list,
+            })
+    return {"data_od": data_od, "data_do": data_do, "pracownicy": wyniki}
+
+# ─── Raport zleceń PDF-data – dane dla wybranego okresu ──────────────────────
+@app.get("/api/raporty/zlecenia", dependencies=[Depends(verify_key)])
+def raport_zlecenia(data_od: str = "", data_do: str = ""):
+    if not data_od:
+        data_od = (_dt.datetime.utcnow() - _dt.timedelta(days=30)).strftime("%Y-%m-%d")
+    if not data_do:
+        data_do = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        zlecenia = conn.execute("""
+            SELECT z.*, 
+                   COUNT(DISTINCT o.id) as op_total,
+                   COALESCE(SUM(o.ilosc_wykonana),0) as sztuki_done
+            FROM zlecenia z
+            LEFT JOIN operacje o ON o.zlecenie_id=z.id
+            WHERE date(z.created_at) BETWEEN ? AND ?
+               OR date(z.updated_at) BETWEEN ? AND ?
+            GROUP BY z.id ORDER BY z.id DESC
+        """, (data_od, data_do, data_od, data_do)).fetchall()
+
+        result = []
+        for z in zlecenia:
+            zid = z["id"]
+            sesje = conn.execute("""
+                SELECT s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk,
+                       u.full_name, o.nazwa as op_nazwa, o.kolejnosc,
+                       o.stanowisko, COALESCE(st.stawka_godz,0) as stawka_godz
+                FROM sesje_pracy s
+                JOIN users u ON s.user_id=u.id
+                JOIN operacje o ON s.operacja_id=o.id
+                LEFT JOIN stawki st ON o.stanowisko=st.stanowisko
+                WHERE o.zlecenie_id=? AND s.status='zakonczona'
+                ORDER BY o.kolejnosc, s.end_time
+            """, (zid,)).fetchall()
+
+            sesje_list = []
+            koszt_pracy = 0
+            for s in sesje:
+                elapsed = (_parse(s["end_time"]) - _parse(s["start_time"])).total_seconds() / 3600
+                pauzy = json.loads(s["pauzy"] or "[]")
+                for p in pauzy:
+                    if p.get("koniec"):
+                        elapsed -= (_parse(p["koniec"]) - _parse(p["start"])).total_seconds() / 3600
+                elapsed = max(0, elapsed)
+                koszt = round(elapsed * s["stawka_godz"], 2)
+                koszt_pracy += koszt
+                sesje_list.append({
+                    "pracownik": s["full_name"],
+                    "operacja": s["op_nazwa"],
+                    "kolejnosc": s["kolejnosc"],
+                    "data": (s["end_time"] or "")[:16].replace("T"," "),
+                    "czas_min": round(elapsed * 60, 1),
+                    "ilosc_sztuk": s["ilosc_sztuk"],
+                    "koszt": koszt,
+                })
+
+            produkty = conn.execute(
+                "SELECT * FROM produkty_zlecenia WHERE zlecenie_id=?", (zid,)
+            ).fetchall()
+            produkty_list = [dict(p) for p in produkty]
+            koszt_produktow = sum(float(p["ilosc"])*float(p["cena"]) for p in produkty_list)
+            wartosc = (z["cena_brutto_szt"] or 0) * (z["ilosc_sztuk"] or 0)
+            zysk = wartosc - koszt_pracy - koszt_produktow
+
+            result.append({
+                "id": zid,
+                "numer": z["numer"],
+                "nazwa": z["nazwa"],
+                "status": z["status"],
+                "ilosc_sztuk": z["ilosc_sztuk"],
+                "cena_szt": z["cena_brutto_szt"],
+                "wartosc": round(wartosc, 2),
+                "created_at": (z["created_at"] or "")[:10],
+                "sesje": sesje_list,
+                "produkty": produkty_list,
+                "koszt_pracy": round(koszt_pracy, 2),
+                "koszt_produktow": round(koszt_produktow, 2),
+                "koszt_total": round(koszt_pracy + koszt_produktow, 2),
+                "zysk": round(zysk, 2),
+            })
+    return {"data_od": data_od, "data_do": data_do, "zlecenia": result}
 
 
 # ─── Inicjalizacja bazy danych ────────────────────────────────────────────────

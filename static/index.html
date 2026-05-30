@@ -205,6 +205,10 @@ let state = {
   raportWydOkres: {od:"", do:""},
   raportWydTyp: "skrocony",
 
+  // Autofill operacje
+  autofillSourceId: null,
+  autofillOperacje: [],
+
   // Print modal
   printModal: null,
   printOps: [],
@@ -574,10 +578,28 @@ async function saveZlecenie(data) {
   try {
     if (data.id) {
       await put(`/api/zlecenia/${data.id}`, data);
+      setState({zlecenieModal:null});
     } else {
-      await post('/api/zlecenia', data);
+      const result = await post('/api/zlecenia', data);
+      const newId = result.id;
+      // Skopiuj operacje ze wzorcowego zlecenia
+      const ops = state.autofillOperacje || [];
+      if (ops.length && state.autofillSourceId && newId) {
+        for (const op of ops) {
+          try {
+            await post('/api/operacje', {
+              zlecenie_id: newId,
+              nazwa: op.nazwa,
+              kolejnosc: op.kolejnosc,
+              czas_norma: op.czas_norma,
+              stanowisko: op.stanowisko || '',
+              opis_czynnosci: op.opis_czynnosci || '',
+            });
+          } catch(e2) { console.error('Błąd kopiowania operacji:', e2); }
+        }
+      }
+      setState({zlecenieModal:null, autofillSourceId:null, autofillOperacje:[]});
     }
-    setState({zlecenieModal:null});
     await loadZlecenia();
   } catch(e) {
     alert('Błąd: ' + e.message);
@@ -705,8 +727,8 @@ function renderLogin() {
   <div style="padding:16px;max-width:500px;margin:0 auto">
     ${wi ? renderWarehouseLoginPanel(wi) : ''}
     <div class="login-card">
-      <h2>⚙ PRODUKCJA</h2>
-      <p class="subtitle">System Zarządzania Produkcją v5.0</p>
+      <h2>⚙ PRODUKCJA JANUS</h2>
+      <p class="subtitle">System Zarządzania Produkcją</p>
       ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
       <div class="field">
         <label>Login</label>
@@ -881,18 +903,21 @@ function renderPracaWydajnosc() {
     w.sesje.forEach(s => {
       const wPct = s.wyd_pct;
       const wColor = wPct===null ? 'var(--dim)' : wPct>=90 ? 'var(--green)' : wPct>=70 ? 'var(--orange)' : 'var(--red)';
+      const sztuk = s.ilosc_sztuk || 1;
+      const avgMin = sztuk > 0 ? (s.czas_min / sztuk).toFixed(1) : s.czas_min;
       html += `
       <div class="card" style="padding:10px;margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
-          <div>
+          <div style="flex:1;min-width:0">
             <div style="font-weight:600;font-size:13px">${s.op_nazwa}</div>
-            <div style="font-size:11px;color:var(--dim)">📋 ${s.zl_numer} | 🏭 ${s.stanowisko||'—'}</div>
+            <div style="font-size:11px;color:var(--accent)">📋 ${s.zl_numer}${s.zl_nazwa && s.zl_nazwa!==s.zl_numer ? ' – '+s.zl_nazwa : ''}</div>
+            <div style="font-size:11px;color:var(--dim)">🏭 ${s.stanowisko||'—'} | 📅 ${s.data||s.end_time?.substring(0,10)||'—'}</div>
             <div style="font-size:11px;color:var(--dim);margin-top:2px">
-              ⏱ ${s.czas_min} min${s.norma_min ? ' | norma: '+s.norma_min+' min' : ''} | 📦 ${s.ilosc_sztuk} szt.
+              ⏱ ${avgMin} min/szt.${s.norma_min ? ' | norma: '+s.norma_min+' min' : ''} | 📦 ${sztuk} szt.
             </div>
           </div>
           ${wPct !== null ? `
-          <div style="text-align:right">
+          <div style="text-align:right;margin-left:8px">
             <div style="font-weight:700;font-size:18px;color:${wColor}">${wPct}%</div>
             <div style="font-size:10px;color:var(--dim)">normy</div>
           </div>` : ''}
@@ -1280,6 +1305,7 @@ function printRaportZlecenia(data, od, doDt) {
             <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas</th>
             <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
             <th style="padding:4px 8px;text-align:right;border:1px solid #eee">Koszt</th>
+            <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Uwagi</th>
           </tr></thead><tbody>`;
       (z.sesje||[]).forEach(s => {
         zlHtml += `<tr>
@@ -1289,6 +1315,7 @@ function printRaportZlecenia(data, od, doDt) {
           <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${fmtMinr(s.czas_min)}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.ilosc_sztuk||0}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:right">${fmtPLNr(s.koszt)}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;color:#555;font-style:italic">${s.uwagi||'—'}</td>
         </tr>`;
       });
       zlHtml += `</tbody></table></div>`;
@@ -1418,15 +1445,17 @@ function printRaportWydajnosc(data, od, doDt, typ) {
               <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Operacja / Typ</th>
               <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Zlecenie</th>
               <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Data</th>
-              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas (min)</th>
+              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas (min/szt.)</th>
               <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
             </tr></thead><tbody>`;
         p.sesje.forEach((s,i) => {
+          const sztuk = s.ilosc_sztuk || 1;
+          const avgMin = sztuk > 0 ? (parseFloat(s.czas_min)/sztuk).toFixed(1) : s.czas_min;
           tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
             <td style="padding:3px 8px;border:1px solid #eee">${s.op_nazwa}</td>
             <td style="padding:3px 8px;border:1px solid #eee">${s.zl_numer}</td>
             <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data}</td>
-            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.czas_min}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${avgMin} min/szt.</td>
             <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.ilosc_sztuk||'—'}</td>
           </tr>`;
         });
@@ -1599,8 +1628,12 @@ function renderMajsterPodsumowanie(stats) {
           op.sesje.forEach(s => {
             const dt = s.end_time ? (s.end_time||'').substring(0,16).replace('T',' ') : '—';
             const normMin = s.czas_norma || op.sesje[0]?.czas_norma || 0;
+            const sztuk = s.ilosc_sztuk || 1;
             const elapsedMin = s.elapsed_sec / 60;
-            const czasPrzekroczony = normMin > 0 && elapsedMin > normMin;
+            // norma = czas na 1 szt. – porównujemy śr. czas/szt z normą
+            const avgSecPerPiece = Math.round(s.elapsed_sec / sztuk);
+            const avgMinPerPiece = elapsedMin / sztuk;
+            const czasPrzekroczony = normMin > 0 && avgMinPerPiece > normMin;
             const timeColor = czasPrzekroczony ? 'var(--red)' : 'var(--green)';
             const rowBg = czasPrzekroczony ? 'background:rgba(231,76,60,0.08);' : '';
             html += '<div style="padding:7px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;' + rowBg + '">'
@@ -1608,9 +1641,9 @@ function renderMajsterPodsumowanie(stats) {
                   + '<div style="font-size:11px;color:var(--dim)">🕐 ' + dt + '</div>'
                   + (s.uwagi?'<div style="font-size:11px;color:var(--orange)">💬 '+s.uwagi+'</div>':'')
                   + '</div><div style="text-align:right">'
-                  + '<div style="font-family:Consolas;color:' + timeColor + ';font-size:13px">' + fmtTime(Math.round(s.elapsed_sec)) + '</div>'
-                  + (normMin?'<div style="font-size:10px;color:var(--dim)">norma: ' + normMin + ' min</div>':'')
-                  + '<div style="font-size:11px;color:var(--dim)">' + (s.ilosc_sztuk||0) + ' szt.</div>'
+                  + '<div style="font-family:Consolas;color:' + timeColor + ';font-size:14px;font-weight:700">' + fmtTime(avgSecPerPiece) + '<span style="font-family:inherit;font-size:10px;color:var(--dim);font-weight:400"> /szt.</span></div>'
+                  + '<div style="font-size:11px;color:var(--dim)">łącznie: ' + fmtTime(Math.round(s.elapsed_sec)) + ' · ' + sztuk + ' szt.</div>'
+                  + (normMin?'<div style="font-size:10px;color:var(--dim)">norma: ' + normMin + ' min/szt.</div>':'')
                   + (s.koszt_sesji?'<div style="font-size:11px;color:var(--accent)">'+fmtPLN(s.koszt_sesji)+'</div>':'')
                   + '</div></div>';
           });
@@ -1734,18 +1767,23 @@ function renderMajsterWydajnosc() {
       </div>` : ''}
       ${expanded && p.sesje.length ? `
       <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
-        <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Ostatnie sesje:</div>
-        ${p.sesje.slice(0,10).map(s => {
+        <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Sesje (${p.sesje.length}):</div>
+        ${p.sesje.slice(0,15).map(s => {
           const wColor = s.wyd_pct===null ? 'var(--dim)' : s.wyd_pct>=90 ? 'var(--green)' : s.wyd_pct>=70 ? 'var(--orange)' : 'var(--red)';
+          const avgMin = s.ilosc_sztuk > 0 ? (s.czas_min / s.ilosc_sztuk).toFixed(1) : s.czas_min;
           return `
-          <div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid rgba(46,53,72,.3)">
-            <div>
-              <span>${s.op_nazwa}</span>
-              <span style="color:var(--dim)"> | ${s.zl_numer} | ${s.ilosc_sztuk} szt.</span>
-            </div>
-            <div style="text-align:right">
-              <span style="color:var(--dim)">${s.czas_min}min</span>
-              ${s.wyd_pct!==null?`<span style="color:${wColor};margin-left:6px;font-weight:700">${s.wyd_pct}%</span>`:''}
+          <div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.op_nazwa}</div>
+                <div style="font-size:11px;color:var(--accent)">📋 ${s.zl_numer}${s.zl_nazwa && s.zl_nazwa!==s.zl_numer ? ' – '+s.zl_nazwa : ''}</div>
+                <div style="font-size:11px;color:var(--dim)">📅 ${s.data||'—'} | 🏭 ${s.stanowisko||'—'} | 📦 ${s.ilosc_sztuk||0} szt.</div>
+              </div>
+              <div style="text-align:right;margin-left:8px;white-space:nowrap">
+                <div style="font-family:Consolas;font-size:13px;font-weight:700;color:var(--text)">${avgMin}<span style="font-size:10px;color:var(--dim);font-weight:400"> min/szt</span></div>
+                ${s.norma_min?`<div style="font-size:10px;color:var(--dim)">norma: ${s.norma_min} min</div>`:''}
+                ${s.wyd_pct!==null?`<div style="font-weight:700;font-size:14px;color:${wColor}">${s.wyd_pct}%</div>`:''}
+              </div>
             </div>
           </div>`;
         }).join('')}
@@ -1868,6 +1906,20 @@ function renderZlecenia() {
                    onfocus="filterZleceniaSearch(this.value)">
           </div>
           <div id="zl-search-results" style="margin-top:6px"></div>
+          ${state.autofillOperacje && state.autofillOperacje.length ? `
+          <div style="margin-top:8px;background:rgba(39,174,96,0.08);border:1px solid var(--green);border-radius:6px;padding:8px 10px;">
+            <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:6px">
+              ✅ Zostaną skopiowane operacje (${state.autofillOperacje.length}):
+            </div>
+            ${state.autofillOperacje.map(op =>
+              `<div style="font-size:12px;padding:2px 0;border-bottom:1px solid rgba(39,174,96,0.2)">
+                <span style="color:var(--dim)">${op.kolejnosc}.</span>
+                <span style="margin-left:6px">${op.nazwa}</span>
+                ${op.stanowisko ? `<span style="color:var(--dim);margin-left:6px">| ${op.stanowisko}</span>` : ''}
+                ${op.czas_norma ? `<span style="color:var(--accent);margin-left:6px">| ${op.czas_norma} min/szt</span>` : ''}
+              </div>`
+            ).join('')}
+          </div>` : ''}
         </div>` : ''}
         <div class="field"><label>Numer</label><input id="zl-numer" type="text" value="${z.numer||''}"></div>
         <div class="field"><label>Nazwa</label><input id="zl-nazwa" type="text" value="${z.nazwa||''}"></div>
@@ -1928,7 +1980,7 @@ function filterZleceniaSearch(query) {
 function autofillZlecenie(id) {
   const z = (state.zlecenia||[]).find(x => x.id === id);
   if (!z) return;
-  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+  const setVal = (elId, val) => { const el = document.getElementById(elId); if (el) el.value = val; };
   setVal('zl-numer', z.numer || '');
   setVal('zl-nazwa', z.nazwa || '');
   setVal('zl-opis',  z.opis  || '');
@@ -1942,6 +1994,18 @@ function autofillZlecenie(id) {
   if (search) search.value = '';
   const results = document.getElementById('zl-search-results');
   if (results) results.innerHTML = '';
+  // załaduj operacje z wzorcowego zlecenia
+  setState({autofillSourceId: id, autofillOperacje: []}, true);
+  fetchAutofillOperacje(id);
+}
+
+async function fetchAutofillOperacje(zid) {
+  try {
+    const ops = await get(`/api/zlecenia/${zid}/operacje`);
+    setState({autofillOperacje: ops});
+  } catch(e) {
+    setState({autofillOperacje: []});
+  }
 }
 
 function renderProduktyZleceniaForm(zid) {

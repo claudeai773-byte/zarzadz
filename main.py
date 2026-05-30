@@ -811,7 +811,7 @@ def stats_wydajnosc(okres: str = "dzis"):
             sesje = conn.execute(f"""
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
-                       z.numer as zl_numer
+                       z.numer as zl_numer, z.nazwa as zl_nazwa
                 FROM sesje_pracy s
                 JOIN operacje o ON s.operacja_id = o.id
                 JOIN zlecenia z ON o.zlecenie_id = z.id
@@ -832,7 +832,9 @@ def stats_wydajnosc(okres: str = "dzis"):
                         elapsed -= (_parse(p["koniec"]) -
                                     _parse(p["start"])).total_seconds() / 60
                 elapsed = max(0.1, elapsed)
-                wyd_pct = round(s["czas_norma"] / elapsed * 100) if s["czas_norma"] else None
+                czas_norma = s["czas_norma"]
+                ilosc = s["ilosc_sztuk"] or 1
+                wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
                 if wyd_pct is not None:
                     normy_total += 1
                     if wyd_pct >= 90:
@@ -841,10 +843,12 @@ def stats_wydajnosc(okres: str = "dzis"):
                     "op_nazwa": s["op_nazwa"],
                     "stanowisko": s["stanowisko"],
                     "zl_numer": s["zl_numer"],
+                    "zl_nazwa": s.get("zl_nazwa") or s["zl_numer"],
                     "ilosc_sztuk": s["ilosc_sztuk"],
                     "czas_min": round(elapsed, 1),
-                    "norma_min": s["czas_norma"],
+                    "norma_min": czas_norma,
                     "wyd_pct": wyd_pct,
+                    "data": (s["end_time"] or "")[:10],
                 })
 
             wyniki.append({
@@ -906,7 +910,9 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
                 elapsed -= (_parse(p["koniec"]) -
                             _parse(p["start"])).total_seconds() / 60
         elapsed = max(0.1, elapsed)
-        wyd_pct = round(s["czas_norma"] / elapsed * 100) if s["czas_norma"] else None
+        czas_norma = s["czas_norma"]
+        ilosc = s["ilosc_sztuk"] or 1
+        wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
         if wyd_pct is not None:
             normy_total += 1
             if wyd_pct >= 90:
@@ -918,9 +924,10 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
             "zl_nazwa": s["zl_nazwa"],
             "ilosc_sztuk": s["ilosc_sztuk"],
             "czas_min": round(elapsed, 1),
-            "norma_min": s["czas_norma"],
+            "norma_min": czas_norma,
             "wyd_pct": wyd_pct,
             "end_time": s["end_time"],
+            "data": (s["end_time"] or "")[:10],
         })
 
     return {
@@ -1190,7 +1197,9 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     if p.get("koniec"):
                         elapsed -= (_parse(p["koniec"]) - _parse(p["start"])).total_seconds() / 60
                 elapsed = max(0.1, elapsed)
-                wyd_pct = round(s["czas_norma"] / elapsed * 100) if s.get("czas_norma") else None
+                czas_norma = s["czas_norma"]
+                ilosc = s["ilosc_sztuk"] or 1
+                wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
                 if wyd_pct is not None:
                     normy_total += 1
                     if wyd_pct >= 90: normy_ok += 1
@@ -1200,7 +1209,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     "zl_numer": s["zl_numer"] or "—",
                     "ilosc_sztuk": s["ilosc_sztuk"],
                     "czas_min": round(elapsed, 1),
-                    "norma_min": s.get("czas_norma"),
+                    "norma_min": czas_norma,
                     "wyd_pct": wyd_pct,
                     "typ": s["typ"],
                     "data": (s["end_time"] or "")[:10],
@@ -1244,7 +1253,7 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
         for z in zlecenia:
             zid = z["id"]
             sesje = conn.execute("""
-                SELECT s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk,
+                SELECT s.start_time, s.end_time, s.pauzy, s.ilosc_sztuk, s.uwagi,
                        u.full_name, o.nazwa as op_nazwa, o.kolejnosc,
                        o.stanowisko, COALESCE(st.stawka_godz,0) as stawka_godz
                 FROM sesje_pracy s
@@ -1274,6 +1283,7 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
                     "czas_min": round(elapsed * 60, 1),
                     "ilosc_sztuk": s["ilosc_sztuk"],
                     "koszt": koszt,
+                    "uwagi": s["uwagi"] or "",
                 })
 
             produkty = conn.execute(

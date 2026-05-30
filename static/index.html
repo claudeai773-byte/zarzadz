@@ -1092,6 +1092,48 @@ function renderPracaGlowna() {
   return html;
 }
 
+
+// ──────────────────────────────────────────────────────────────
+//  HELPER: szacowany czas zakończenia zlecenia
+// ──────────────────────────────────────────────────────────────
+function szacowanyKoniec(z, ops) {
+  // ops = lista operacji z cache (lub null)
+  // z = zlecenie z polami: ilosc_sztuk, op_done, op_total
+  if (!z) return null;
+  const ilosc = z.ilosc_sztuk || 1;
+
+  // Oblicz pozostały czas na bazie operacji z cache
+  if (ops && ops.length > 0) {
+    let pozostaleMin = 0;
+    ops.forEach(op => {
+      if (op.status === 'zakonczona') return;
+      const norma = op.czas_norma || 0;
+      if (!norma) return;
+      const wykonano = op.ilosc_wykonana || 0;
+      const pozostaloSztuk = Math.max(0, ilosc - wykonano);
+      pozostaleMin += norma * pozostaloSztuk;
+    });
+    if (pozostaleMin <= 0) return null;
+    const koniec = new Date(Date.now() + pozostaleMin * 60 * 1000);
+    return koniec;
+  }
+
+  // Fallback: brak szczegółów ops – nie szacuj
+  return null;
+}
+
+function fmtEstimatedKoniec(dt) {
+  if (!dt) return null;
+  const today = new Date();
+  const isToday = dt.toDateString() === today.toDateString();
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate()+1);
+  const isTomorrow = dt.toDateString() === tomorrow.toDateString();
+  const hm = dt.toLocaleTimeString('pl-PL', {hour:'2-digit',minute:'2-digit'});
+  if (isToday) return `dziś ~${hm}`;
+  if (isTomorrow) return `jutro ~${hm}`;
+  return dt.toLocaleDateString('pl-PL', {day:'2-digit',month:'2-digit'}) + ` ~${hm}`;
+}
+
 // ══════════════════════════════════════════════════════════════
 //  TAB: MAJSTER
 // ══════════════════════════════════════════════════════════════
@@ -1135,7 +1177,7 @@ function renderMajster() {
           <div class="card-header">
             <div>
               <div class="card-title">👤 ${s.full_name} ${hasPauza?'<span class="badge badge-orange">PAUZA</span>':''}</div>
-              <div class="card-sub">${s.typ==='nieprodukcyjna'?'⏸ Nieprodukcyjna':'🔧 '+s.op_nazwa}</div>
+              <div class="card-sub">${s.typ==='nieprodukcyjna'?'⏸ Nieprodukcyjna':s.typ==='inne_zlecenie'?'🔧 Inne: '+(s.uwagi||s.op_nazwa||'—'):'🔧 '+s.op_nazwa}</div>
               ${s.zl_numer?`<div class="card-sub">📋 ${s.zl_numer} – ${s.zl_nazwa}</div>`:''}
             </div>
             <div style="text-align:right">
@@ -1188,6 +1230,7 @@ function renderMajster() {
               <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
               <div class="card-sub">${z.nazwa}</div>
               ${z.termin?`<div class="card-sub">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
+              ${(() => { const estOps = (state.majsterOpsCache&&state.majsterOpsCache[z.id])||null; const est=szacowanyKoniec(z,estOps); return est?`<div class="card-sub" style="color:var(--blue)">🕐 Szac. koniec: ${fmtEstimatedKoniec(est)}</div>`:''; })()}
             </div>
             <div style="display:flex;align-items:center;gap:8px">
               ${statusBadge(z.status)}
@@ -1275,7 +1318,7 @@ function renderMajster() {
         <div class="alert-banner">
           <div style="font-weight:700">⚠ Przekroczono normę – ${a.zlecenie}, operacja: ${a.operacja}</div>
           <div style="font-size:12px;margin-top:2px">👤 ${a.pracownik}</div>
-          <div>Norma: ${a.norma_min} min | Czas: ${a.elapsed_min} min | <strong style="font-size:15px">+${a.przekroczenie_pct}%</strong></div>
+          <div>Norma: ${a.norma_min} min/szt. × ${a.ilosc_sztuk} szt. = ${a.norma_calkowita_min} min | Czas: ${a.elapsed_min} min | <strong style="font-size:15px">+${a.przekroczenie_pct}%</strong></div>
         </div>`;
       });
     }
@@ -1391,11 +1434,21 @@ function printRaportZlecenia(data, od, doDt) {
             <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Uwagi</th>
           </tr></thead><tbody>`;
       (z.sesje||[]).forEach(s => {
-        zlHtml += `<tr>
-          <td style="padding:3px 8px;border:1px solid #eee">${s.operacja||'—'}</td>
+        // Sprawdź czy w normie: czas_norma × ilosc_sztuk vs czas_min (czas_norma w min/szt)
+        const normaCalk = (s.czas_norma||0) * (s.ilosc_sztuk||1);
+        const wNormie = normaCalk > 0 && s.czas_min <= normaCalk;
+        const przekroczone = normaCalk > 0 && s.czas_min > normaCalk;
+        const rowBg = przekroczone ? 'background:#fff3f3' : wNormie ? 'background:#f3fff6' : '';
+        const normaBadge = normaCalk > 0
+          ? (wNormie
+              ? `<span style="color:#1e8a4c;font-weight:700;font-size:10px">✓ OK</span>`
+              : `<span style="color:#c0392b;font-weight:700;font-size:10px">⚠ PRZEKR.</span>`)
+          : '';
+        zlHtml += `<tr style="${rowBg}">
+          <td style="padding:3px 8px;border:1px solid #eee">${s.operacja||'—'} ${normaBadge}</td>
           <td style="padding:3px 8px;border:1px solid #eee">${s.pracownik||'—'}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data||'—'}</td>
-          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${fmtMinr(s.czas_min)}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;color:${przekroczone?'#c0392b':wNormie?'#1e8a4c':'inherit'};font-weight:${przekroczone||wNormie?'700':'400'}">${fmtMinr(s.czas_min)}${normaCalk>0?' / norma: '+fmtMinr(normaCalk):''}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.ilosc_sztuk||0}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:right">${fmtPLNr(s.koszt)}</td>
           <td style="padding:3px 8px;border:1px solid #eee;color:#555;font-style:italic">${s.uwagi||'—'}</td>
@@ -1956,6 +2009,7 @@ function renderZlecenia() {
             <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
             <div class="card-sub">${z.nazwa}</div>
             ${z.termin ? `<div class="card-sub">📅 ${fmtDate(z.termin)}</div>` : ''}
+            ${(() => { if (!z.pozostale_min || z.status==='zakonczone') return ''; const est = new Date(Date.now() + z.pozostale_min*60*1000); return `<div class="card-sub" style="color:var(--blue)">🕐 Szac. koniec: ${fmtEstimatedKoniec(est)}</div>`; })()}
             <div class="card-sub">📦 ${z.ilosc_sztuk} szt. ${z.cena_brutto_szt ? '| '+fmtPLN(z.cena_brutto_szt)+'/szt' : ''}</div>
           </div>
           ${statusBadge(z.status)}

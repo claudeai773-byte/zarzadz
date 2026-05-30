@@ -1236,9 +1236,9 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
             FROM zlecenia z
             LEFT JOIN operacje o ON o.zlecenie_id=z.id
             WHERE date(z.created_at) BETWEEN ? AND ?
-               OR date(z.updated_at) BETWEEN ? AND ?
+
             GROUP BY z.id ORDER BY z.id DESC
-        """, (data_od, data_do, data_od, data_do)).fetchall()
+        """, (data_od, data_do)).fetchall()
 
         result = []
         for z in zlecenia:

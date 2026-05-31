@@ -2256,9 +2256,9 @@ function filterZleceniaSearch(query) {
 function autofillZlecenie(id) {
   const z = (state.zlecenia||[]).find(x => x.id === id);
   if (!z) return;
-  // Numer: sugeruj nowy numer na podstawie wzorca (z sufiksem -K)
-  const baseNumer = (z.numer || '').replace(/-K[0-9]*$/, '');
-  const numerSufx = baseNumer + '-K' + (Date.now()%1000);
+  // Numer: sugeruj nowy numer na podstawie wzorca (z sufiksem -K + pełny timestamp)
+  const baseNumer = (z.numer || '').replace(/-K\d+$/, '');
+  const numerSufx = baseNumer + '-K' + Date.now();
   // Zapisz dane autouzupełnienia do state.zlecenieModal – dzięki temu
   // po re-renderze (np. po załadowaniu operacji) pola nie zostaną wyczyszczone
   const autofillData = {

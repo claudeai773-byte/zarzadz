@@ -1,0 +1,3568 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1a1f2e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>⚙ Produkcja</title>
+<style>
+  :root {
+    --bg:#1a1f2e;--panel:#242938;--accent:#e8a020;
+    --text:#e8eaf0;--dim:#8892a4;--border:#2e3548;
+    --green:#27ae60;--red:#e74c3c;--blue:#3498db;
+    --orange:#f39c12;--entry:#1e2435;--purple:#9b59b6;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;overflow-x:hidden;}
+  #app{display:flex;flex-direction:column;min-height:100vh;}
+  .topbar{background:var(--panel);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid var(--accent);position:sticky;top:0;z-index:100;}
+  .topbar h1{font-family:Consolas,monospace;font-size:18px;color:var(--accent);}
+  .topbar .user-info{font-size:12px;color:var(--dim);text-align:right;line-height:1.4;}
+  .logout-btn{background:var(--red);color:white;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;}
+  .content{flex:1;padding:12px;max-width:640px;margin:0 auto;width:100%;padding-bottom:80px;}
+  .login-card{background:var(--panel);border-radius:16px;padding:32px 24px;margin:40px auto;max-width:380px;border:1px solid var(--border);}
+  .login-card h2{color:var(--accent);font-family:Consolas,monospace;font-size:22px;text-align:center;margin-bottom:8px;}
+  .login-card .subtitle{color:var(--dim);text-align:center;font-size:13px;margin-bottom:28px;}
+  .field{margin-bottom:16px;}
+  .field label{display:block;color:var(--dim);font-size:12px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;}
+  .field input,.field select,.field textarea{width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:15px;outline:none;transition:border-color .2s;}
+  .field input:focus,.field select:focus{border-color:var(--accent);}
+  .field textarea{resize:vertical;min-height:80px;font-family:inherit;}
+  select option{background:var(--panel);}
+  .btn{display:block;width:100%;padding:14px;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s;text-align:center;}
+  .btn:active{opacity:.8;}
+  .btn-accent{background:var(--accent);color:#1a1f2e;}
+  .btn-green{background:var(--green);color:white;}
+  .btn-red{background:var(--red);color:white;}
+  .btn-blue{background:var(--blue);color:white;}
+  .btn-purple{background:var(--purple);color:white;}
+  .btn-sm{padding:8px 14px;width:auto;font-size:12px;border-radius:8px;border:none;cursor:pointer;font-weight:600;}
+  .btn-outline{background:transparent;border:1px solid var(--border);color:var(--dim);padding:10px 14px;border-radius:8px;cursor:pointer;font-size:14px;width:100%;}
+  .btn-row{display:flex;gap:8px;margin-top:8px;}
+  .btn-row .btn{flex:1;}
+  .card{background:var(--panel);border-radius:12px;padding:16px;margin-bottom:10px;border:1px solid var(--border);}
+  .card-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
+  .card-title{font-weight:700;font-size:15px;color:var(--text);}
+  .card-sub{color:var(--dim);font-size:12px;margin-top:2px;}
+  .badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;}
+  .badge-green{background:rgba(39,174,96,.2);color:var(--green);}
+  .badge-orange{background:rgba(243,156,18,.2);color:var(--orange);}
+  .badge-red{background:rgba(231,76,60,.2);color:var(--red);}
+  .badge-blue{background:rgba(52,152,219,.2);color:var(--blue);}
+  .badge-dim{background:rgba(136,146,164,.15);color:var(--dim);}
+  .badge-purple{background:rgba(155,89,182,.2);color:var(--purple);}
+  .tabs{display:flex;background:var(--panel);border-radius:10px;padding:4px;margin-bottom:16px;gap:2px;}
+  .tab{flex:1;padding:10px 4px;border:none;background:transparent;color:var(--dim);border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;transition:all .2s;}
+  .tab.active{background:var(--accent);color:#1a1f2e;}
+  .timer-card{background:linear-gradient(135deg,#1a2e1a,#1e2e1e);border:2px solid var(--green);border-radius:16px;padding:20px;text-align:center;margin-bottom:10px;}
+  .timer-card.paused{border-color:var(--orange);background:linear-gradient(135deg,#2e2a1a,#2e2e1a);}
+  .timer-display{font-family:Consolas,monospace;font-size:42px;font-weight:700;color:var(--green);letter-spacing:4px;margin:6px 0;}
+  .timer-card.paused .timer-display{color:var(--orange);}
+  .timer-label{color:var(--dim);font-size:13px;}
+  .timer-op{color:var(--text);font-size:15px;font-weight:600;margin:6px 0;}
+  .timer-zl{color:var(--accent);font-size:13px;}
+  .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+  .stats-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;}
+  .stat-box{background:var(--panel);border-radius:10px;padding:14px 12px;text-align:center;border:1px solid var(--border);}
+  .stat-val{font-size:26px;font-weight:700;color:var(--accent);font-family:Consolas,monospace;}
+  .stat-lbl{color:var(--dim);font-size:11px;margin-top:4px;}
+  .section-hdr{color:var(--dim);font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+  .spinner{text-align:center;padding:40px;color:var(--dim);font-size:32px;}
+  .empty{text-align:center;padding:40px;color:var(--dim);font-size:14px;}
+  .error-banner{background:rgba(231,76,60,.15);border:1px solid var(--red);color:var(--red);border-radius:10px;padding:12px 16px;margin-bottom:12px;font-size:14px;}
+  .alert-banner{background:rgba(243,156,18,.15);border:1px solid var(--orange);color:var(--orange);border-radius:10px;padding:12px 16px;margin-bottom:10px;font-size:13px;}
+  .bottom-nav{background:var(--panel);border-top:1px solid var(--border);display:flex;position:fixed;bottom:0;left:0;right:0;z-index:100;}
+  .nav-btn{flex:1;padding:8px 4px 12px;border:none;background:transparent;color:var(--dim);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;transition:color .2s;}
+  .nav-btn .icon{font-size:20px;}
+  .nav-btn.active{color:var(--accent);}
+  .progress-wrap{background:var(--border);border-radius:4px;height:6px;margin:8px 0;overflow:hidden;}
+  .progress-bar{height:100%;border-radius:4px;background:var(--green);transition:width .3s;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;display:flex;align-items:flex-end;}
+  .modal{background:var(--panel);border-radius:20px 20px 0 0;padding:24px 20px 40px;width:100%;max-height:90vh;overflow-y:auto;}
+  .modal h3{font-size:18px;margin-bottom:16px;color:var(--accent);}
+  .modal-close{float:right;background:none;border:none;color:var(--dim);font-size:24px;cursor:pointer;margin-top:-4px;}
+  .config-wrap{padding:24px 16px;max-width:420px;margin:0 auto;}
+  .config-wrap h2{color:var(--accent);font-family:Consolas,monospace;margin-bottom:6px;}
+  .config-wrap p{color:var(--dim);font-size:13px;margin-bottom:24px;}
+  .qr-input-row{display:flex;gap:8px;}
+  .qr-input-row input{flex:1;}
+  .qr-preview{width:100%;border-radius:10px;background:white;padding:10px;display:flex;justify-content:center;margin-top:8px;}
+  .qr-preview img{max-width:200px;max-height:200px;}
+  .tag{display:inline-block;background:var(--entry);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--dim);margin:2px 2px 0 0;}
+  table.data-table{width:100%;border-collapse:collapse;font-size:13px;}
+  table.data-table th{color:var(--dim);font-weight:600;padding:8px 6px;border-bottom:1px solid var(--border);text-align:left;}
+  table.data-table td{padding:8px 6px;border-bottom:1px solid rgba(46,53,72,.5);}
+  .nieprodukcyjna-card{border-color:var(--purple) !important;}
+  .chip-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+  .chip{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--entry);color:var(--dim);}
+  .chip.active{background:var(--accent);color:#1a1f2e;border-color:var(--accent);}
+  .wyd-bar-wrap{height:10px;background:var(--border);border-radius:5px;overflow:hidden;flex:1;}
+  .wyd-bar{height:100%;border-radius:5px;transition:width .4s;}
+  .sub-tabs{display:flex;background:var(--entry);border-radius:8px;padding:3px;margin-bottom:14px;gap:2px;}
+  .sub-tab{flex:1;padding:8px 4px;border:none;background:transparent;color:var(--dim);border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;transition:all .2s;}
+  .sub-tab.active{background:var(--accent);color:#1a1f2e;}
+  @media print{
+    body{background:#fff !important;color:#000 !important;}
+    .no-print,.bottom-nav,.topbar,#print-overlay .btn-row{display:none !important;}
+    #print-overlay{position:fixed;inset:0;background:white;z-index:9999;display:block !important;}
+    .modal{border-radius:0;max-height:100vh !important;padding:16px;}
+    .modal-close,.btn-row{display:none !important;}
+    #print-content{box-shadow:none !important;}
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ══════════════════════════════════════════════════════════════
+//  CONFIG
+// ══════════════════════════════════════════════════════════════
+let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
+let SERVER_URL = CONFIG.server_url || '';
+let API_KEY    = CONFIG.api_key    || '';
+const HEADERS  = () => ({'Content-Type':'application/json','x-api-key':API_KEY});
+
+async function api(path, opts={}) {
+  const url = SERVER_URL.replace(/\/$/, '') + path;
+  const res = await fetch(url, {headers: HEADERS(), ...opts});
+  if (!res.ok) {
+    const t = await res.text().catch(() => 'Błąd serwera');
+    let msg = t;
+    try {
+      const parsed = JSON.parse(t);
+      if (typeof parsed.detail === 'string') msg = parsed.detail;
+      else if (Array.isArray(parsed.detail)) msg = parsed.detail.map(e => e.msg || JSON.stringify(e)).join('; ');
+      else msg = JSON.stringify(parsed);
+    } catch(_) {}
+    console.error(`API ERROR ${res.status} ${path}:`, t);
+    throw new Error(`[${res.status}] ${msg}`);
+  }
+  return res.json();
+}
+const get  = p => api(p);
+const post = (p,b) => api(p, {method:'POST', body:JSON.stringify(b)});
+const put  = (p,b) => api(p, {method:'PUT', body:JSON.stringify(b)});
+const del  = p => api(p, {method:'DELETE'});
+const patch= (p,b) => api(p, {method:'PATCH', body:JSON.stringify(b)});
+
+// ══════════════════════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════════════════════
+let state = {
+  screen: SERVER_URL ? 'login' : 'config',
+  user: null,
+  activeTab: 'praca',
+  loading: false,
+  error: null,
+
+  // Pracownik
+  operacje: [],
+  aktywnesje: [],         // wiele sesji równoległych
+  timers: {},             // sesja_id -> {sec, interval, paused}
+  qrScanMode: false,
+  qrLastCodes: [],        // historia QR
+
+  // Majster
+  majsterStats: null,
+  majsterSubTab: 'live',
+
+  // Magazynier
+  transportOps: [],
+
+  // Zlecenia
+  zlecenia: [],
+  zlecenieModal: null,    // null | 'new' | {edytowane zlecenie}
+  operacjeModal: null,    // {zlecenie} | null
+  zlecenieKoszty: null,
+
+  // Admin
+  adminTab: 'uzytkownicy',
+  users: [],
+  stawki: [],
+  produktyZlecenia: [],   // produkty aktualnie edytowanego zlecenia
+  katalog: [],
+  userModal: null,
+  stawkaModal: null,
+  produktModal: null,
+
+  // Modal stop/pauza
+  stopModal: null,        // null | {sesja}
+  pauzaModal: null,
+  nieprodukcyjnaModal: false,
+
+  // QR gen
+  qrGenModal: false,
+  qrGenKod: '',
+  qrGenTitle: '',
+  qrZleceniePickerModal: null,
+
+  // Pracownik wydajność
+  pracaSubTab: 'praca',   // praca | wydajnosc
+  pracaWydajnosc: null,
+  pracaWydOkres: 'tydzien',
+
+  // Majster wydajność
+  wydajnoscMajster: null,
+  wydajnoscOkres: 'dzis',
+  majsterExpandedUser: null,
+  majsterExpandedZlecenie: null,  // id zlecenia rozwiniętego w tab Zlecenia
+  oblozenie: null,
+  oblozenieLading: false,
+  oblozenieSelected: null,
+  majsterOpsCache: {},            // {zid: [operacje]} - cache operacji dla majstra
+  raportOkres: {od:"", do:""},
+  raportWydOkres: {od:"", do:""},
+  raportWydTyp: "skrocony",
+
+  // Autofill operacje
+  autofillSourceId: null,
+  autofillOperacje: [],
+
+  // Print modal
+  printModal: null,
+  printOps: [],
+  warehouseInfo: null,
+  zlecenieDetailsModal: null,
+  zlecenieModal: null,
+  qrInneMode: false,
+  qrManualMode: false,
+};
+
+function setState(p, noRender) {
+  state = {...state, ...p};
+  if (!noRender) render();
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TIMERS (multi-sesja)
+// ══════════════════════════════════════════════════════════════
+function startTimerFor(sesja) {
+  if (state.timers[sesja.id]?.interval) clearInterval(state.timers[sesja.id].interval);
+  const isPaused = () => {
+    const pauzy = JSON.parse(sesja.pauzy || '[]');
+    return pauzy.length > 0 && !pauzy[pauzy.length-1].koniec;
+  };
+  const update = () => {
+    const el = document.getElementById('timer-'+sesja.id);
+    if (!el) return;
+    const paused = isPaused();
+    // calc elapsed minus pauses
+    const start = parseServerDT(sesja.start_time);
+    let elapsed = Math.floor((Date.now() - start) / 1000);
+    const pauzy = JSON.parse(sesja.pauzy || '[]');
+    for (const p of pauzy) {
+      if (p.koniec) {
+        elapsed -= Math.floor((parseServerDT(p.koniec) - parseServerDT(p.start)) / 1000);
+      } else {
+        elapsed -= Math.floor((Date.now() - parseServerDT(p.start)) / 1000);
+      }
+    }
+    el.textContent = fmtTime(Math.max(0,elapsed));
+    el.style.color = paused ? 'var(--orange)' : 'var(--green)';
+  };
+  update();
+  const interval = setInterval(update, 1000);
+  state.timers[sesja.id] = {interval, sesja};
+}
+
+function stopAllTimers() {
+  for (const t of Object.values(state.timers)) {
+    if (t.interval) clearInterval(t.interval);
+  }
+  state.timers = {};
+}
+
+function fmtTime(sec) {
+  const h = String(Math.floor(sec/3600)).padStart(2,'0');
+  const m = String(Math.floor((sec%3600)/60)).padStart(2,'0');
+  const s = String(sec%60).padStart(2,'0');
+  return `${h}:${m}:${s}`;
+}
+
+// Serwer zwraca UTC z 'Z'. Dla starszych rekordów bez 'Z' – local time.
+function parseServerDT(s) {
+  if (!s) return new Date(NaN);
+  if (/Z$|[+-]\d{2}:\d{2}$/.test(s)) return new Date(s);
+  return new Date(s.replace(' ','T')); // stary rekord – local
+}
+
+function isPaused(sesja) {
+  const pauzy = JSON.parse(sesja.pauzy || '[]');
+  return pauzy.length > 0 && !pauzy[pauzy.length-1].koniec;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  DATA LOADERS
+// ══════════════════════════════════════════════════════════════
+async function loadPracownik() {
+  setState({loading:true, error:null});
+  try {
+    const [ops, sesje] = await Promise.all([
+      get('/api/operacje/aktywne'),
+      get(`/api/sesje/aktywne/${state.user.id}`),
+    ]);
+    stopAllTimers();
+    for (const s of sesje) startTimerFor(s);
+    setState({operacje:ops, aktywnesje:sesje, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+async function loadMajster() {
+  setState({loading:true, error:null, majsterOpsCache:{}});
+  try {
+    const stats = await get('/api/stats/majster');
+    setState({majsterStats:stats, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+async function loadMagazynier() {
+  setState({loading:true, error:null});
+  try {
+    const ops = await get('/api/operacje/zakonczone-do-transportu');
+    setState({transportOps:ops, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+async function loadZlecenia() {
+  setState({loading:true, error:null});
+  try {
+    const zl = await get('/api/zlecenia');
+    setState({zlecenia:zl, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+async function loadAdmin() {
+  setState({loading:true, error:null});
+  try {
+    const [users, stawki, katalog] = await Promise.all([
+      get('/api/users'), get('/api/stawki'), get('/api/katalog')
+    ]);
+    setState({users, stawki, katalog, loading:false});
+  } catch(e) {
+    setState({loading:false, error:e.message});
+  }
+}
+
+async function loadPracownikWydajnosc(okres) {
+  const o = okres || state.pracaWydOkres;
+  setState({pracaWydOkres: o});
+  try {
+    const w = await get(`/api/stats/wydajnosc/${state.user.id}?okres=${o}`);
+    setState({pracaWydajnosc: w});
+  } catch(e) { alert(e.message); }
+}
+
+async function loadWydajnoscMajster(okres) {
+  const o = okres || state.wydajnoscOkres;
+  setState({wydajnoscOkres: o, wydajnoscMajster: null});
+  try {
+    const w = await get(`/api/stats/wydajnosc?okres=${o}`);
+    setState({wydajnoscMajster: w});
+  } catch(e) {
+    setState({wydajnoscMajster: {pracownicy: [], error: e.message}});
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ACTIONS
+// ══════════════════════════════════════════════════════════════
+async function doLogin(username, password) {
+  setState({loading:true, error:null});
+  try {
+    const user = await post('/api/login', {username, password});
+    stopWHRefresh();
+    const tab = defaultTab(user.role);
+    setState({user, screen:'main', loading:false, activeTab:tab});
+    loadTabData(tab);
+  } catch(e) {
+    setState({loading:false, error:'Nieprawidłowy login lub hasło'});
+  }
+}
+
+function defaultTab(role) {
+  if (role === 'magazynier') return 'magazyn';
+  if (role === 'majster')    return 'majster';
+  if (role === 'admin')      return 'admin';
+  return 'praca';
+}
+
+async function startSesja(operacjaId) {
+  try {
+    await post('/api/sesje/start', {operacja_id:operacjaId, user_id:state.user.id, typ:'operacja'});
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function startZbrojenie(operacjaId) {
+  try {
+    await post('/api/sesje/start', {operacja_id:operacjaId, user_id:state.user.id, typ:'zbrojenie'});
+    setState({qrZleceniePickerModal:null});
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function startNieprodukcyjna(opis) {
+  try {
+    await post('/api/sesje/start', {user_id:state.user.id, typ:'nieprodukcyjna', opis_nieprodukcyjnej:opis});
+    setState({nieprodukcyjnaModal:false});
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function togglePauza(sesja) {
+  try {
+    const paused = isPaused(sesja);
+    if (paused) {
+      await post('/api/sesje/pauza/stop', {sesja_id:sesja.id});
+    } else {
+      await post('/api/sesje/pauza/start', {sesja_id:sesja.id, powod:''});
+    }
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function stopSesja(sesjaId, ilosc, uwagi) {
+  const sesja = state.stopModal;
+  const wasZbrojenie = sesja && sesja.typ === 'zbrojenie';
+  const zbrojOpId = sesja && sesja.operacja_id;
+  try {
+    await post('/api/sesje/stop', {sesja_id:sesjaId, ilosc_sztuk:parseInt(ilosc)||0, uwagi:uwagi||''});
+    setState({stopModal:null});
+    await loadPracownik();
+    // Po zakończeniu zbrojenia: odśwież dane operacji w otwartym QR modal
+    if (wasZbrojenie && state.qrZleceniePickerModal) {
+      const m = state.qrZleceniePickerModal;
+      const zl = m.zlecenie;
+      // Pobierz świeżą listę operacji i oznacz zbrojenie jako wykonane
+      try {
+        const ops = await get(`/api/zlecenia/${zl.id}/operacje`);
+        // Uzupełnij zbrojenie_wykonane: jeśli op nie ma aktywnej sesji zbrojenia, a miała czas_zbrojenia_min, uznaj za wykonane
+        const updatedOps = ops.map(op => ({
+          ...op,
+          zbrojenie_wykonane: op.id === zbrojOpId ? true : (op.zbrojenie_wykonane || false),
+        }));
+        setState({qrZleceniePickerModal: {...m, operacje: updatedOps}});
+      } catch(e2) {}
+    }
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+function stopSesjaModal() {
+  const s = state.stopModal;
+  if (!s) return;
+  const isZbrojenie = s.typ === 'zbrojenie';
+  const isNieprod = s.typ === 'nieprodukcyjna';
+  const ilosc = (isZbrojenie || isNieprod) ? 0 : (parseInt(document.getElementById('stop-ilosc')?.value)||0);
+  const uwagi = document.getElementById('stop-uwagi')?.value || '';
+  stopSesja(s.id, ilosc, uwagi);
+}
+
+function clearQRHistory() {
+  localStorage.removeItem('qr_historia');
+  setState({qrLastCodes: []});
+}
+
+async function scanQR(kod) {
+  if (!kod.trim()) return;
+  try {
+    const res = await get('/api/scan/' + encodeURIComponent(kod.trim()));
+    // dodaj do historii
+    const hist = [kod.trim(), ...state.qrLastCodes.filter(c=>c!==kod.trim())].slice(0,10);
+    setState({qrLastCodes: hist, qrScanMode:false});
+    localStorage.setItem('qr_historia', JSON.stringify(hist));
+    showQRResult(res);
+  } catch(e) {
+    alert('Nie znaleziono kodu QR: ' + kod);
+  }
+}
+
+function showQRResult(res) {
+  if (res.type === 'operacja') {
+    const op = res.data;
+    setState({qrZleceniePickerModal: {
+      zlecenie: {numer: op.zl_numer, nazwa: op.zl_nazwa, id: op.zlecenie_id, ilosc_sztuk: op.ilosc_sztuk},
+      operacje: [op],
+    }});
+  } else if (res.type === 'zlecenie') {
+    setState({qrZleceniePickerModal: {zlecenie: res.data, operacje: res.operacje}});
+  }
+}
+
+function renderQRZleceniePickerModal() {
+  const m = state.qrZleceniePickerModal;
+  if (!m) return '';
+  const z = m.zlecenie;
+  const ops = m.operacje || [];
+  const dostepne = ops.filter(o => o.status !== 'zakonczone' && o.status !== 'anulowane');
+  // Oblicz ile sztuk pozostało do zrobienia
+  const iloscTotal = z.ilosc_sztuk || 0;
+  const iloscWykonana = ops.reduce((sum, op) => sum + (op.ilosc_wykonana||0), 0);
+  const iloscPozostalo = Math.max(0, iloscTotal - (ops.length ? Math.min(...ops.map(op => op.ilosc_wykonana||0)) : 0));
+
+  let html = `
+  <div class="modal-overlay">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({qrZleceniePickerModal:null})">×</button>
+      <h3>📋 ${z.numer}</h3>
+      <div style="color:var(--dim);font-size:13px;margin-bottom:10px">${z.nazwa}</div>
+      <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:12px;color:var(--dim)">Zlecona ilość:</span>
+          <span style="font-weight:700;font-size:16px;color:var(--text)">${iloscTotal} szt.</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:12px;color:var(--dim)">Do wykonania:</span>
+          <span style="font-weight:700;font-size:20px;color:${iloscPozostalo===0?'var(--green)':'var(--accent)'}">${iloscPozostalo} szt.</span>
+        </div>
+      </div>`;
+  if (!dostepne.length) {
+    html += `<div class="empty">Brak dostępnych operacji do rozpoczęcia</div>`;
+  } else {
+    html += `<div style="color:var(--dim);font-size:12px;margin-bottom:10px">Wybierz operację:</div>`;
+    dostepne.forEach(op => {
+      const opWykonana = op.ilosc_wykonana || 0;
+      const opPozostalo = Math.max(0, iloscTotal - opWykonana);
+      const opProg = iloscTotal > 0 ? Math.min(100, Math.round(opWykonana / iloscTotal * 100)) : 0;
+      const opZbrMin = op.czas_zbrojenia_min || 0;
+
+      // Stan sesji dla tej operacji
+      const sesjaOp = (state.aktywnesje||[]).find(s => s.operacja_id === op.id && s.typ === 'operacja');
+      const sesjaZbr = (state.aktywnesje||[]).find(s => s.operacja_id === op.id && s.typ === 'zbrojenie');
+      const czyOpAktywna = !!sesjaOp;
+      const czyZbrAktywne = !!sesjaZbr;
+
+      // Czy zbrojenie zostało już wykonane (flaga z serwera)
+      const zbrWykonane = !!op.zbrojenie_wykonane;
+
+      html += `<div class="card" style="padding:12px;margin-bottom:10px">`;
+
+      // Nagłówek operacji
+      html += `
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:15px">${op.kolejnosc}. ${op.nazwa}</div>
+            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min/szt':''}</div>
+            <div style="font-size:12px;margin-top:4px">
+              <span style="color:var(--dim)">Wykonano: </span>
+              <span style="font-weight:600">${opWykonana}/${iloscTotal} szt.</span>
+              ${opPozostalo > 0 ? `<span style="color:var(--accent);margin-left:6px">zostało: <b>${opPozostalo}</b></span>` : '<span style="color:var(--green);margin-left:6px">✅</span>'}
+            </div>
+            <div class="progress-wrap" style="height:4px;margin-top:6px"><div class="progress-bar" style="width:${opProg}%;background:${opProg>=100?'var(--green)':'var(--accent)'}"></div></div>
+          </div>
+        </div>`;
+
+      // Przyciski akcji - zbrojenie pierwsze jeśli jest i nie zostało wykonane
+      if (opZbrMin > 0) {
+        // ── Zbrojenie skonfigurowane: pokaż oba przyciski niezależnie ──────
+        // Reguła: albo aktywne zbrojenie ALBO aktywna operacja – nigdy oba naraz
+        if (czyZbrAktywne) {
+          // Zbrojenie trwa → pokaż status + stop zbrojenia; operacja zablokowana
+          html += `
+          <div style="background:rgba(243,156,18,0.12);border:1px solid var(--orange);border-radius:8px;padding:8px 12px;margin-bottom:8px">
+            <div style="font-size:12px;color:var(--orange);font-weight:700">⚙ Zbrojenie w toku (norma: ${opZbrMin} min)</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">Zakończ zbrojenie, aby uruchomić operację</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-direction:column">
+            <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaZbr).replace(/"/g,'&quot;')}})">⏹ Zakończ zbrojenie</button>
+            <button class="btn btn-outline" style="opacity:0.35;cursor:not-allowed" disabled>▶ Uruchom operację (zbrojenie w toku)</button>
+          </div>`;
+        } else if (czyOpAktywna) {
+          // Operacja trwa → pokaż status + stop operacji; zbrojenie zablokowane
+          html += `
+          <div style="background:rgba(39,174,96,0.1);border:1px solid var(--green);border-radius:8px;padding:8px 12px;margin-bottom:8px">
+            <div style="font-size:12px;color:var(--green);font-weight:700">▶ Operacja w toku</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-direction:column">
+            <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaOp).replace(/"/g,'&quot;')}})">⏹ Zakończ operację</button>
+            <button class="btn btn-outline" style="opacity:0.35;cursor:not-allowed" disabled>⚙ Uruchom zbrojenie (operacja w toku)</button>
+          </div>`;
+        } else {
+          // Nic nie aktywne → oba przyciski dostępne swobodnie
+          const zbrLabel = zbrWykonane
+            ? `⚙ Zbrojenie ponownie (${opZbrMin} min)`
+            : `⚙ Uruchom zbrojenie (${opZbrMin} min)`;
+          html += `
+          <div style="display:flex;gap:8px;flex-direction:column">
+            <button class="btn btn-green" onclick="pickOperacjaFromQR(${op.id})">▶ Uruchom operację</button>
+            <button class="btn btn-accent" style="background:var(--orange);color:#1a1f2e" onclick="startZbrojenie(${op.id})">${zbrLabel}</button>
+          </div>`;
+        }
+      } else {
+        // Brak zbrojenia - normalna operacja
+        if (czyOpAktywna) {
+          html += `<div class="btn-row">
+            <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaOp).replace(/"/g,'&quot;')}})">⏹ Zakończ operację</button>
+          </div>`;
+        } else {
+          html += `<button class="btn btn-green" onclick="pickOperacjaFromQR(${op.id})">▶ Uruchom operację</button>`;
+        }
+      }
+
+      html += `</div>`;
+    });
+  }
+  // Opcja INNE
+  if (!state.qrInneMode) {
+    html += `
+    <div class="card" style="padding:12px;margin-bottom:8px;cursor:pointer;border-color:var(--accent)"
+         onclick="setState({qrInneMode:true})">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:600;color:var(--accent)">⚡ Inne</div>
+          <div style="font-size:12px;color:var(--dim)">Wpisz co robisz i rozpocznij rejestrację</div>
+        </div>
+        <span style="font-size:20px">+</span>
+      </div>
+    </div>`;
+  } else {
+    html += `
+    <div class="card" style="padding:12px;margin-bottom:8px;border-color:var(--accent)">
+      <div style="font-weight:600;color:var(--accent);margin-bottom:10px">⚡ Inne – wpisz co robisz</div>
+      <div class="field" style="margin-bottom:10px">
+        <input id="qr-inne-opis" type="text" placeholder="Np. ustawianie maszyny, regulacja..."
+               onkeydown="if(event.key==='Enter')startQRInne()">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" onclick="startQRInne()">▶ Start</button>
+        <button class="btn btn-outline" onclick="setState({qrInneMode:false})">Anuluj</button>
+      </div>
+    </div>`;
+  }
+
+  html += `
+      <button class="btn btn-outline" style="margin-top:8px"
+              onclick="setState({qrZleceniePickerModal:null,qrInneMode:false})">Zamknij</button>
+    </div>
+  </div>`;
+  return html;
+}
+
+// INNE – sesja produkcyjna przypisana do zlecenia
+async function startQRInne() {
+  const opis = document.getElementById('qr-inne-opis')?.value?.trim();
+  if (!opis) { alert('Wpisz opis'); return; }
+  const m = state.qrZleceniePickerModal;
+  const zid = m?.zlecenie?.id || null;
+  setState({qrZleceniePickerModal:null, qrInneMode:false});
+  try {
+    const body = {user_id: state.user.id, typ: 'nieprodukcyjna', opis_nieprodukcyjnej: opis};
+    if (zid) { body.typ = 'inne_zlecenie'; body.zlecenie_id_inne = zid; }
+    await post('/api/sesje/start', body);
+    await loadPracownik();
+  } catch(e) { alert('Błąd: ' + (e.message||e)); }
+}
+
+function statusBadge_txt(s) {
+  const m = {nowe:'Nowe', w_toku:'W toku', zakonczone:'Zakończone', oczekuje:'Oczekuje', anulowane:'Anulowane'};
+  return m[s]||s;
+}
+
+async function pickOperacjaFromQR(opId) {
+  setState({qrZleceniePickerModal:null});
+  await startSesja(opId);
+}
+
+function loadTabData(tab) {
+  if (tab==='praca')    loadPracownik();
+  if (tab==='majster')  loadMajster();
+  if (tab==='magazyn')  loadMagazynier();
+  if (tab==='zlecenia') loadZlecenia();
+  if (tab==='admin')    loadAdmin();
+}
+
+function switchTab(tab) {
+  setState({activeTab:tab, error:null});
+  loadTabData(tab);
+}
+
+function logout() {
+  // Modal potwierdzenia dla magazyniera
+  if (state.user?.role === 'magazynier' && state.transportOps.length > 0) {
+    const n = state.transportOps.length;
+    if (!confirm(`⚠ Uwaga!\n\nMasz ${n} operacji czekających na transport.\nCzy na pewno chcesz się wylogować?`)) return;
+  }
+  stopAllTimers();
+  setState({user:null, screen:'login', aktywnesje:[], operacje:[], timers:{}});
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ZLECENIA CRUD
+// ══════════════════════════════════════════════════════════════
+let _savingZlecenie = false;
+async function saveZlecenie(data) {
+  if (_savingZlecenie) return;
+  _savingZlecenie = true;
+  try {
+    if (data.id) {
+      await put(`/api/zlecenia/${data.id}`, data);
+      setState({zlecenieModal:null});
+      await loadZlecenia();
+    } else {
+      const result = await post('/api/zlecenia', data);
+      const newId = result.id;
+      // Skopiuj operacje ze wzorcowego zlecenia
+      const ops = state.autofillOperacje || [];
+      if (ops.length && state.autofillSourceId && newId) {
+        for (const op of ops) {
+          try {
+            await post('/api/operacje', {
+              zlecenie_id: newId,
+              nazwa: op.nazwa,
+              kolejnosc: op.kolejnosc,
+              czas_norma: op.czas_norma,
+              stanowisko: op.stanowisko || '',
+              opis_czynnosci: op.opis_czynnosci || '',
+              czas_zbrojenia_min: op.czas_zbrojenia_min || 0,
+            });
+          } catch(e2) { console.error('Błąd kopiowania operacji:', e2); }
+        }
+      }
+      // Najpierw odśwież listę zleceń, potem zamknij modal
+      await loadZlecenia();
+      setState({zlecenieModal:null, autofillSourceId:null, autofillOperacje:[]});
+    }
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  } finally {
+    _savingZlecenie = false;
+  }
+}
+
+async function deleteZlecenie(id) {
+  if (!confirm('Usunąć zlecenie i wszystkie jego operacje?')) return;
+  try {
+    await del(`/api/zlecenia/${id}`);
+    await loadZlecenia();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function changeZlecenieStatus(id, status) {
+  try {
+    await patch(`/api/zlecenia/${id}/status`, {status});
+    await loadZlecenia();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  ADMIN CRUD helpers
+// ══════════════════════════════════════════════════════════════
+async function saveUser(data) {
+  try {
+    if (data.id) { await put(`/api/users/${data.id}`, data); }
+    else { await post('/api/users', data); }
+    setState({userModal:null});
+    await loadAdmin();
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+async function deleteUser(id) {
+  if (!confirm('Usunąć użytkownika?')) return;
+  try { await del(`/api/users/${id}`); await loadAdmin(); }
+  catch(e) { alert('Błąd: '+e.message); }
+}
+async function saveStawka(data) {
+  try {
+    if (data.id) { await put(`/api/stawki/${data.id}`, data); }
+    else { await post('/api/stawki', data); }
+    setState({stawkaModal:null});
+    await loadAdmin();
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+async function deleteStawka(id) {
+  if (!confirm('Usunąć stawkę?')) return;
+  try { await del(`/api/stawki/${id}`); await loadAdmin(); }
+  catch(e) { alert('Błąd: '+e.message); }
+}
+async function saveProdukt(data) {
+  try {
+    if (data.id) { await put(`/api/katalog/${data.id}`, data); }
+    else { await post('/api/katalog', data); }
+    setState({produktModal:null});
+    await loadAdmin();
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+async function deleteProdukt(id) {
+  if (!confirm('Usunąć produkt?')) return;
+  try { await del(`/api/katalog/${id}`); await loadAdmin(); }
+  catch(e) { alert('Błąd: '+e.message); }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  RENDER HELPERS
+// ══════════════════════════════════════════════════════════════
+function statusBadge(s) {
+  const map = {
+    'w_toku':    ['badge-orange','🔄 w toku'],
+    'oczekuje':  ['badge-dim',   '⏳ oczekuje'],
+    'zakonczona':['badge-green', '✅ ukończona'],
+    'zakonczone':['badge-green', '✅ ukończone'],
+    'nowe':      ['badge-blue',  '🆕 nowe'],
+    'anulowane': ['badge-red',   '❌ anulowane'],
+  };
+  const [cls, label] = map[s] || ['badge-dim', s];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+function roleName(r) {
+  return {admin:'Administrator',technolog:'Technolog',pracownik:'Pracownik',
+          magazynier:'Magazynier',majster:'Majster'}[r] || r;
+}
+function fmtPLN(n) { return (n||0).toFixed(2)+' zł'; }
+function fmtDate(d) { return d ? d.substring(0,10) : '—'; }
+
+// ══════════════════════════════════════════════════════════════
+//  SCREEN: CONFIG
+// ══════════════════════════════════════════════════════════════
+function renderConfig() {
+  return `
+  <div class="config-wrap">
+    <h2>⚙ Konfiguracja</h2>
+    <p>Wpisz adres serwera Railway i klucz API.</p>
+    <div class="field">
+      <label>URL Serwera</label>
+      <input id="cfg-url" type="url" placeholder="https://produkcja-xxx.railway.app" value="${SERVER_URL}">
+    </div>
+    <div class="field">
+      <label>Klucz API</label>
+      <input id="cfg-key" type="password" placeholder="klucz-api" value="${API_KEY}">
+    </div>
+    <button class="btn btn-accent" onclick="saveConfig()">💾 Zapisz i połącz</button>
+  </div>`;
+}
+function saveConfig() {
+  const url = document.getElementById('cfg-url').value.trim();
+  const key = document.getElementById('cfg-key').value.trim();
+  if (!url||!key) { alert('Wypełnij oba pola'); return; }
+  SERVER_URL=url; API_KEY=key;
+  localStorage.setItem('produkcja_config', JSON.stringify({server_url:url, api_key:key}));
+  setState({screen:'login'});
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SCREEN: LOGIN
+// ══════════════════════════════════════════════════════════════
+function renderLogin() {
+  const wi = state.warehouseInfo;
+  return `
+  <div style="padding:16px;max-width:500px;margin:0 auto">
+    ${wi ? renderWarehouseLoginPanel(wi) : ''}
+    <div class="login-card">
+      <h2>⚙ PRODUKCJA JANUS</h2>
+      <p class="subtitle">System Zarządzania Produkcją</p>
+      ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
+      <div class="field">
+        <label>Login</label>
+        <input id="lg-user" type="text" placeholder="np. piotr.p" autocomplete="username"
+               onkeydown="if(event.key==='Enter')document.getElementById('lg-pass').focus()">
+      </div>
+      <div class="field">
+        <label>Hasło</label>
+        <input id="lg-pass" type="password" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')doLogin(document.getElementById('lg-user').value,this.value)">
+      </div>
+      <button class="btn btn-accent" style="margin-top:8px"
+              onclick="doLogin(document.getElementById('lg-user').value,document.getElementById('lg-pass').value)"
+              ${state.loading?'disabled':''}>
+        ${state.loading ? '⏳ Łączenie...' : '🔑 Zaloguj się'}
+      </button>
+      <button class="btn-outline" style="margin-top:10px" onclick="setState({screen:'config'})">⚙ Zmień serwer</button>
+    </div>
+  </div>`;
+}
+
+function renderWarehouseLoginPanel(wi) {
+  // Pokazujemy TYLKO zakończone operacje oczekujące na następną (coś do odbioru/przewiezienia)
+  const zakonczone = (wi.zakonczone || []).filter(op => {
+    const nxt = (wi.next_map || {})[String(op.id)];
+    return true; // pokaż wszystkie zakończone – nawet ostatnią (żeby wiedzieć że gotowe)
+  });
+  const next_map = wi.next_map || {};
+  let html = '';
+
+  if (!zakonczone.length) {
+    html += '<div style="background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;text-align:center">'
+          + '<div style="font-size:22px;margin-bottom:6px">✅</div>'
+          + '<div style="font-size:13px;color:var(--dim)">Brak zakończonych operacji do odbioru</div>'
+          + '</div>';
+    return html;
+  }
+
+  html += '<div style="background:rgba(39,174,96,.10);border:1px solid var(--green);border-radius:12px;padding:14px 16px;margin-bottom:10px">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+        + '<span style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:1px">📦 Do odbioru (' + zakonczone.length + ')</span>'
+        + '<span style="font-size:10px;color:var(--dim)">odśwież co 2 min</span>'
+        + '</div>';
+
+  zakonczone.forEach((op, i) => {
+    const nxt = next_map[String(op.id)];
+    const isLast = !nxt;
+    html += '<div style="padding:8px 0;' + (i < zakonczone.length-1 ? 'border-bottom:1px solid rgba(39,174,96,.2)' : '') + '">'
+          + '<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+          + '<div style="flex:1">'
+          + '<div style="font-weight:700;font-size:13px">' + op.kolejnosc + '. ' + op.nazwa + '</div>'
+          + '<div style="font-size:12px;color:var(--dim);margin-top:2px">📋 ' + op.zl_numer + ' – ' + op.zl_nazwa + '</div>'
+          + '<div style="font-size:12px;color:var(--dim)">🏭 ' + (op.stanowisko||'—') + '</div>'
+          + '</div>'
+          + '<div style="text-align:right;margin-left:8px;white-space:nowrap">'
+          + '<span style="font-size:13px;font-weight:700;color:var(--green)">' + op.ilosc_wykonana + '/' + op.ilosc_sztuk + ' szt.</span>'
+          + '</div></div>'
+          + '<div style="margin-top:5px;padding:5px 8px;border-radius:6px;font-size:12px;' + (isLast ? 'background:rgba(39,174,96,.15);color:var(--green)' : 'background:rgba(232,160,32,.12);color:var(--accent)') + '">'
+          + (isLast
+              ? '✅ Gotowe – ostatnia operacja, możliwy odbiór końcowy'
+              : '▶ Następna: <b>' + nxt.kolejnosc + '. ' + nxt.nazwa + '</b>' + (nxt.stanowisko ? ' → <b>' + nxt.stanowisko + '</b>' : ''))
+          + '</div></div>';
+  });
+
+  html += '</div>';
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TOPBAR & NAV
+// ══════════════════════════════════════════════════════════════
+function renderTopbar() {
+  const notifyDot = state.majsterStats?.alerty_norm?.length > 0 ? ' 🔴' : '';
+  return `
+  <div class="topbar">
+    <h1>⚙ PRODUKCJA</h1>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="user-info">
+        <div style="color:var(--text)">${state.user.full_name}</div>
+        <div>${roleName(state.user.role)}</div>
+      </div>
+      <button class="logout-btn" onclick="logout()">🔒</button>
+    </div>
+  </div>`;
+}
+
+function renderBottomNav() {
+  const role = state.user?.role;
+  const tabs = [];
+  if (role !== 'magazynier') tabs.push({id:'praca',icon:'👷',label:'Praca'});
+  if (role === 'magazynier' || role === 'admin') tabs.push({id:'magazyn',icon:'📦',label:'Magazyn'});
+  if (role === 'majster' || role === 'admin')    tabs.push({id:'majster',icon:'🔧',label:'Majster'});
+  if (role !== 'pracownik' && role !== 'magazynier') tabs.push({id:'zlecenia',icon:'📋',label:'Zlecenia'});
+  if (role === 'admin' || role === 'technolog')  tabs.push({id:'admin',icon:'⚙',label:'Admin'});
+  tabs.push({id:'ustawienia',icon:'🔩',label:'Ustawienia'});
+  return `
+  <nav class="bottom-nav">
+    ${tabs.map(t => `
+      <button class="nav-btn ${state.activeTab===t.id?'active':''}" onclick="switchTab('${t.id}')">
+        <span class="icon">${t.icon}</span>${t.label}
+      </button>`).join('')}
+  </nav>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: PRACA
+// ══════════════════════════════════════════════════════════════
+function renderPraca() {
+  if (state.loading) return '<div class="spinner">⏳</div>';
+
+  const subTabs = [{id:'praca',label:'🔧 Praca'},{id:'wydajnosc',label:'📊 Wydajność'}];
+  let html = `
+  <div class="sub-tabs">
+    ${subTabs.map(t => `<button class="sub-tab ${state.pracaSubTab===t.id?'active':''}"
+      onclick="switchPracaTab('${t.id}')">${t.label}</button>`).join('')}
+  </div>`;
+
+  if (state.pracaSubTab === 'wydajnosc') return html + renderPracaWydajnosc();
+  return html + renderPracaGlowna();
+}
+
+function switchPracaTab(tab) {
+  setState({pracaSubTab: tab}, true);
+  if (tab === 'wydajnosc' && !state.pracaWydajnosc) {
+    loadPracownikWydajnosc(state.pracaWydOkres);
+  }
+  render();
+}
+
+function renderPracaWydajnosc() {
+  const w = state.pracaWydajnosc;
+  const okres = state.pracaWydOkres;
+  const okresLabels = {dzis:'Dziś', tydzien:'7 dni', miesiac:'30 dni'};
+
+  let html = `
+  <div class="chip-row">
+    ${Object.entries(okresLabels).map(([k,v]) =>
+      `<div class="chip ${okres===k?'active':''}" onclick="loadPracownikWydajnosc('${k}')">${v}</div>`
+    ).join('')}
+  </div>`;
+
+  if (!w) {
+    html += `<div class="empty">⏳ Ładowanie wydajności...</div>`;
+    return html;
+  }
+
+  const wydPct = w.normy_total > 0 ? Math.round(w.normy_ok/w.normy_total*100) : null;
+  const barColor = wydPct === null ? 'var(--dim)' : wydPct >= 90 ? 'var(--green)' : wydPct >= 70 ? 'var(--orange)' : 'var(--red)';
+
+  html += `
+  <div class="stats-grid" style="grid-template-columns:1fr 1fr 1fr;margin-bottom:14px">
+    <div class="stat-box"><div class="stat-val">${w.sesji}</div><div class="stat-lbl">Sesji</div></div>
+    <div class="stat-box"><div class="stat-val">${w.sztuki}</div><div class="stat-lbl">Sztuk</div></div>
+    <div class="stat-box"><div class="stat-val">${w.godz}h</div><div class="stat-lbl">Godz.</div></div>
+  </div>`;
+
+  if (wydPct !== null) {
+    html += `
+    <div class="card" style="margin-bottom:14px;border-color:${barColor}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:13px;color:var(--dim)">Realizacja norm (${w.normy_ok}/${w.normy_total})</span>
+        <span style="font-weight:700;color:${barColor};font-size:18px">${wydPct}%</span>
+      </div>
+      <div class="wyd-bar-wrap"><div class="wyd-bar" style="width:${wydPct}%;background:${barColor}"></div></div>
+    </div>`;
+  }
+
+  html += `<div class="section-hdr">Historia sesji (${w.sesje.length})</div>`;
+  if (!w.sesje.length) {
+    html += `<div class="empty">Brak danych za wybrany okres</div>`;
+  } else {
+    w.sesje.forEach(s => {
+      const wPct = s.wyd_pct;
+      const wColor = wPct===null ? 'var(--dim)' : wPct>=90 ? 'var(--green)' : wPct>=70 ? 'var(--orange)' : 'var(--red)';
+      const sztuk = s.ilosc_sztuk || 1;
+      const avgMin = sztuk > 0 ? (s.czas_min / sztuk).toFixed(1) : s.czas_min;
+      html += `
+      <div class="card" style="padding:10px;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:13px">${s.op_nazwa}</div>
+            <div style="font-size:11px;color:var(--accent)">📋 ${s.zl_numer}${s.zl_nazwa && s.zl_nazwa!==s.zl_numer ? ' – '+s.zl_nazwa : ''}</div>
+            <div style="font-size:11px;color:var(--dim)">🏭 ${s.stanowisko||'—'} | 📅 ${s.data||s.end_time?.substring(0,10)||'—'}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">
+              ⏱ ${avgMin} min/szt.${s.norma_min ? ' | norma: '+s.norma_min+' min' : ''} | 📦 ${sztuk} szt.
+            </div>
+          </div>
+          ${wPct !== null ? `
+          <div style="text-align:right;margin-left:8px">
+            <div style="font-weight:700;font-size:18px;color:${wColor}">${wPct}%</div>
+            <div style="font-size:10px;color:var(--dim)">normy</div>
+          </div>` : ''}
+        </div>
+        ${wPct !== null ? `
+        <div class="wyd-bar-wrap" style="margin-top:6px">
+          <div class="wyd-bar" style="width:${Math.min(100,wPct)}%;background:${wColor}"></div>
+        </div>` : ''}
+      </div>`;
+    });
+  }
+
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadPracownikWydajnosc()">🔄 Odśwież</button>`;
+  return html;
+}
+
+function renderPracaGlowna() {
+  let html = '';
+
+  // QR skaner
+  if (state.qrScanMode) {
+    const hist = JSON.parse(localStorage.getItem('qr_historia')||'[]');
+    const hasCameraAPI = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    html += `
+    <div class="card" style="border-color:var(--blue)">
+      <div class="section-hdr" style="margin-bottom:12px">📷 Skaner QR</div>`;
+    if (hasCameraAPI && !state.qrManualMode) {
+      html += `
+      <video id="qr-video" style="width:100%;border-radius:8px;background:#000;display:block" playsinline autoplay muted></video>
+      <canvas id="qr-cam-canvas" style="display:none"></canvas>
+      <div id="qr-scan-status" style="text-align:center;color:var(--dim);font-size:13px;padding:6px">Uruchamiam aparat...</div>
+      <button class="btn btn-outline" style="margin-top:6px" onclick="setState({qrManualMode:true})">⌨ Wpisz ręcznie</button>`;
+    } else {
+      html += `
+      <div class="field" style="margin-bottom:10px;display:flex;gap:6px">
+        <input id="qr-input" type="text" placeholder="Wpisz kod QR i naciśnij Enter" style="flex:1"
+               autofocus onkeydown="if(event.key==='Enter')scanQR(this.value)">
+        <button class="btn btn-accent" onclick="scanQR(document.getElementById('qr-input').value)">▶</button>
+      </div>
+      ${hasCameraAPI ? '<button class="btn btn-outline" style="margin-bottom:8px" onclick="setState({qrManualMode:false})">📷 Użyj aparatu</button>' : ''}`;
+    }
+    html += `
+      ${hist.length ? `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+        <div class="section-hdr" style="margin-bottom:0">Historia QR</div>
+        <button class="btn-sm btn-red" onclick="clearQRHistory()" style="font-size:11px">🗑 Wyczyść</button>
+      </div>
+      <div style="margin-top:8px">
+      ${hist.map(c => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span class="tag">${c}</span>
+          <button class="btn-sm btn-blue" onclick="scanQR('${c}')">Użyj</button>
+        </div>`).join('')}
+      </div>
+      ` : ''}
+      <button class="btn btn-outline" style="margin-top:10px"
+              onclick="stopQRCamera();setState({qrScanMode:false,qrManualMode:false})">✕ Zamknij</button>
+    </div>`;
+  } else {
+    html += `
+    <div class="btn-row" style="margin-bottom:12px">
+      <button class="btn btn-blue" onclick="setState({qrScanMode:true,qrManualMode:false})">📷 Skanuj QR</button>
+      <button class="btn btn-purple" onclick="setState({nieprodukcyjnaModal:true})">⏸ Nieprodukcyjna</button>
+    </div>`;
+  }
+
+  // Aktywne sesje (wielokrotne)
+  if (state.aktywnesje.length) {
+    html += `<div class="section-hdr">⏱ Aktywne sesje (${state.aktywnesje.length})</div>`;
+    state.aktywnesje.forEach(sesja => {
+      const paused = isPaused(sesja);
+      const isNieprod = sesja.typ === 'nieprodukcyjna';
+      const isZbrojenie = sesja.typ === 'zbrojenie';
+      const cardStyle = isZbrojenie
+        ? 'background:linear-gradient(135deg,#2e2a1a,#2a2510);border:2px solid var(--orange)'
+        : (isNieprod ? '' : '');
+      const labelTxt = isZbrojenie ? '⚙ ZBROJENIE' : (isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : (paused ? '⏸ PAUZA' : '⏱ AKTYWNA'));
+      const timerColor = isZbrojenie ? 'var(--orange)' : (paused ? 'var(--orange)' : 'var(--green)');
+      html += `
+      <div class="timer-card ${paused?'paused':''} ${isNieprod?'nieprodukcyjna-card':''}" ${cardStyle?`style="${cardStyle}"`:''}> 
+        <div class="timer-label" style="${isZbrojenie?'color:var(--orange)':''}">${labelTxt}</div>
+        <div class="timer-display" id="timer-${sesja.id}" style="color:${timerColor}">00:00:00</div>
+        <div class="timer-op">${sesja.op_nazwa || sesja.uwagi || '—'}</div>
+        ${sesja.zl_numer ? `<div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>` : ''}
+        <div style="color:var(--dim);font-size:12px;margin:4px 0 12px">${sesja.stanowisko||''}</div>
+        <div class="btn-row">
+          ${!isNieprod && !isZbrojenie ? `<button class="btn ${paused?'btn-green':'btn-accent'}" onclick="togglePauza(${JSON.stringify(sesja).replace(/"/g,'&quot;')})">
+            ${paused ? '▶ Wznów' : '⏸ Pauza'}
+          </button>` : ''}
+          <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesja).replace(/"/g,'&quot;')}})">
+            ⏹ Zakończ ${isZbrojenie?'zbrojenie':''}
+          </button>
+        </div>
+      </div>`;
+    });
+  } else {
+    html += `
+    <div class="card" style="text-align:center;padding:20px">
+      <div style="font-size:36px;margin-bottom:8px">⏸</div>
+      <div style="color:var(--dim);font-size:14px">Brak aktywnej sesji</div>
+    </div>`;
+  }
+
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadPracownik()">🔄 Odśwież</button>`;
+
+  // Modal stop
+  if (state.stopModal) {
+    const s = state.stopModal;
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({stopModal:null})">×</button>
+        <h3>⏹ Zakończ sesję</h3>
+        <p style="color:var(--dim);font-size:13px;margin-bottom:16px">${s.op_nazwa || s.uwagi || '—'}</p>
+        ${s.typ === 'zbrojenie' ? `
+        <div style="background:rgba(243,156,18,0.1);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:var(--orange)">
+          ⚙ Zakończenie zbrojenia – po potwierdzeniu będzie możliwe uruchomienie operacji
+        </div>` : ''}
+        ${s.typ !== 'nieprodukcyjna' && s.typ !== 'zbrojenie' ? `
+        <div class="field">
+          <label>Liczba wykonanych sztuk</label>
+          <input type="number" id="stop-ilosc" value="1" min="0">
+        </div>` : ''}
+        <div class="field">
+          <label>Uwagi</label>
+          <textarea id="stop-uwagi" placeholder="opcjonalnie..."></textarea>
+        </div>
+        <button class="btn btn-red" onclick="stopSesjaModal()">
+          ✅ Potwierdź zakończenie
+        </button>
+      </div>
+    </div>`;
+  }
+
+  // Modal nieprodukcyjna
+  if (state.nieprodukcyjnaModal) {
+    const opcje = ['Awaria maszyny','Brak materiału','Szkolenie','Spotkanie','Przerwa obiadowa','Sprzątanie','Inne'];
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({nieprodukcyjnaModal:false})">×</button>
+        <h3>⏸ Praca nieprodukcyjna</h3>
+        <div class="chip-row">
+          ${opcje.map(o => `<div class="chip" onclick="document.getElementById('np-opis').value='${o}'">${o}</div>`).join('')}
+        </div>
+        <div class="field">
+          <label>Opis</label>
+          <input id="np-opis" type="text" placeholder="Co się dzieje?">
+        </div>
+        <button class="btn btn-purple" onclick="startNieprodukcyjna(document.getElementById('np-opis').value)">
+          ▶ Rozpocznij rejestrację
+        </button>
+      </div>
+    </div>`;
+  }
+
+  return html;
+}
+
+
+// ──────────────────────────────────────────────────────────────
+//  HELPER: szacowany czas zakończenia zlecenia
+// ──────────────────────────────────────────────────────────────
+function szacowanyKoniec(z, ops) {
+  // ops = lista operacji z cache (lub null)
+  // z = zlecenie z polami: ilosc_sztuk, op_done, op_total
+  if (!z) return null;
+  const ilosc = z.ilosc_sztuk || 1;
+
+  // Oblicz pozostały czas na bazie operacji z cache
+  if (ops && ops.length > 0) {
+    let pozostaleMin = 0;
+    ops.forEach(op => {
+      if (op.status === 'zakonczona') return;
+      const norma = op.czas_norma || 0;
+      const wykonano = op.ilosc_wykonana || 0;
+      const pozostaloSztuk = Math.max(0, ilosc - wykonano);
+      if (norma) pozostaleMin += norma * pozostaloSztuk;
+      // zbrojenie: dolicz tylko jeśli nie ma aktywnej/zakończonej sesji zbrojenia dla tej op
+      const zbrMin = op.czas_zbrojenia_min || 0;
+      if (zbrMin) {
+        // Sprawdź czy zbrojenie jest już aktywne lub wykonane (przez aktywne sesje)
+        const zbrJuzAkt = (state.aktywnesje||[]).some(s => s.operacja_id === op.id && s.typ === 'zbrojenie');
+        // Jeśli nie aktywne, zakładamy że zbrojenie jest do zrobienia (serwer weryfikuje czy zakończone)
+        if (!zbrJuzAkt) pozostaleMin += zbrMin;
+      }
+    });
+    if (pozostaleMin <= 0) return null;
+    const koniec = new Date(Date.now() + pozostaleMin * 60 * 1000);
+    return koniec;
+  }
+
+  // Fallback: brak szczegółów ops – nie szacuj
+  return null;
+}
+
+function fmtEstimatedKoniec(dt) {
+  if (!dt) return null;
+  const today = new Date();
+  const isToday = dt.toDateString() === today.toDateString();
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate()+1);
+  const isTomorrow = dt.toDateString() === tomorrow.toDateString();
+  const hm = dt.toLocaleTimeString('pl-PL', {hour:'2-digit',minute:'2-digit'});
+  if (isToday) return `dziś ~${hm}`;
+  if (isTomorrow) return `jutro ~${hm}`;
+  return dt.toLocaleDateString('pl-PL', {day:'2-digit',month:'2-digit'}) + ` ~${hm}`;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: MAJSTER
+// ══════════════════════════════════════════════════════════════
+function renderMajster() {
+  if (state.loading) return '<div class="spinner">⏳</div>';
+  const stats = state.majsterStats;
+  if (!stats) return '<div class="empty">Ładowanie...</div>';
+
+  const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'oblozenie',label:'🏭 Obłożenie'},{id:'podsumowanie',label:'📊 Podsumowanie'},{id:'wydajnosc',label:'🏆 Wydajność'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];
+  let html = `
+  <div class="tabs" style="flex-wrap:wrap;gap:2px">
+    ${subTabs.map(t => `<button class="tab ${state.majsterSubTab===t.id?'active':''}"
+      onclick="switchMajsterTab('${t.id}')">${t.label}</button>`).join('')}
+  </div>`;
+
+  if (state.majsterSubTab === 'live') {
+    html += `
+    <div class="stats-grid-3">
+      <div class="stat-box"><div class="stat-val">${stats.aktywne_sesje.length}</div><div class="stat-lbl">online</div></div>
+      <div class="stat-box"><div class="stat-val">${stats.dzis_sztuk}</div><div class="stat-lbl">sztuk dziś</div></div>
+      <div class="stat-box"><div class="stat-val">${(stats.dzis_godz||0).toFixed(1)}</div><div class="stat-lbl">godz. dziś</div></div>
+    </div>
+    <div class="section-hdr">🟢 Pracownicy aktywni</div>`;
+    if (!stats.aktywne_sesje.length) {
+      html += `<div class="empty" style="padding:20px">Brak aktywnych sesji</div>`;
+    } else {
+      stats.aktywne_sesje.forEach(s => {
+        const pauzList = JSON.parse(s.pauzy||'[]');
+        const hasPauza = pauzList.length > 0 && !pauzList[pauzList.length-1].koniec;
+        let elapsed = Math.floor((Date.now() - parseServerDT(s.start_time))/1000);
+        for (const p of pauzList) {
+          if (p.koniec) {
+            elapsed -= Math.floor((parseServerDT(p.koniec) - parseServerDT(p.start))/1000);
+          } else {
+            elapsed -= Math.floor((Date.now() - parseServerDT(p.start))/1000);
+          }
+        }
+        elapsed = Math.max(0, elapsed);
+        html += `
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">👤 ${s.full_name} ${hasPauza?'<span class="badge badge-orange">PAUZA</span>':''}</div>
+              <div class="card-sub">${s.typ==='nieprodukcyjna'?'⏸ Nieprodukcyjna':s.typ==='zbrojenie'?'⚙ Zbrojenie: '+(s.op_nazwa||'—'):s.typ==='inne_zlecenie'?'🔧 Inne: '+(s.uwagi||s.op_nazwa||'—'):'🔧 '+s.op_nazwa}</div>
+              ${s.zl_numer?`<div class="card-sub">📋 ${s.zl_numer} – ${s.zl_nazwa}</div>`:''}
+            </div>
+            <div style="text-align:right">
+              <div style="font-family:Consolas;color:var(--green);font-size:16px">${fmtTime(elapsed)}</div>
+              ${s.czas_norma?`<div style="font-size:11px;color:var(--dim)">norma: ${s.czas_norma}min</div>`:''}
+            </div>
+          </div>
+        </div>`;
+      });
+    }
+  }
+
+  if (state.majsterSubTab === 'zlecenia') {
+    html += `<div class="section-hdr">📋 Zlecenia w toku</div>`;
+    // Show all started operations (even multiple from same zlecenie)
+    const wTokuOps = (stats.aktywne_sesje || []).filter(s => s.op_nazwa);
+    if (wTokuOps.length) {
+      html += `<div class="section-hdr" style="margin-top:8px;color:var(--green)">▶ Aktywne operacje (${wTokuOps.length})</div>`;
+      wTokuOps.forEach(s => {
+        const pauzy = JSON.parse(s.pauzy||'[]');
+        const hasPauza = pauzy.length > 0 && !pauzy[pauzy.length-1].koniec;
+        html += `<div class="card" style="border-color:var(--green);margin-bottom:6px">
+          <div class="card-header">
+            <div style="flex:1;min-width:0">
+              <div class="card-title" style="font-size:13px">${s.op_nazwa||'—'} ${hasPauza?'<span class="badge badge-orange">PAUZA</span>':''}</div>
+              <div class="card-sub">📋 ${s.zl_numer||'—'} – ${s.zl_nazwa||''}</div>
+              <div class="card-sub">👤 ${s.full_name||'—'}</div>
+            </div>
+            ${s.czas_norma?`<div style="font-size:11px;color:var(--dim);text-align:right">norma: ${s.czas_norma}min</div>`:''}
+          </div>
+        </div>`;
+      });
+      html += `<div class="section-hdr" style="margin-top:10px">📋 Postęp zleceń</div>`;
+    }
+    if (!stats.zlecenia.length) {
+      html += `<div class="empty">Brak aktywnych zleceń</div>`;
+    } else {
+      stats.zlecenia.forEach(z => {
+        const prog = z.op_total > 0 ? Math.round((z.op_done/z.op_total)*100) : 0;
+        const sztProg = z.ilosc_sztuk > 0 ? Math.round(((z.sztuki_wykonane||0)/z.ilosc_sztuk)*100) : 0;
+        const przeterminowane = z.termin && new Date(z.termin) < new Date();
+        const expanded = state.majsterExpandedZlecenie === z.id;
+        // Pobierz operacje z cache
+        const ops = (state.majsterOpsCache && state.majsterOpsCache[z.id] !== undefined)
+          ? state.majsterOpsCache[z.id] : null;
+        html += `
+        <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
+          <div class="card-header" style="cursor:pointer" onclick="toggleMajsterZlecenie(${z.id})">
+            <div style="flex:1">
+              <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
+              <div class="card-sub">${z.nazwa}</div>
+              ${z.termin?`<div class="card-sub">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
+              ${(() => { const estOps = (state.majsterOpsCache&&state.majsterOpsCache[z.id])||null; const est=szacowanyKoniec(z,estOps); return est?`<div class="card-sub" style="color:var(--blue)">🕐 Szac. koniec: ${fmtEstimatedKoniec(est)}</div>`:''; })()}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              ${statusBadge(z.status)}
+              <span style="color:var(--dim);font-size:16px">${expanded?'▲':'▼'}</span>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:4px">
+            <span>Operacje: ${z.op_done}/${z.op_total}</span><span>${prog}%</span>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-bar" style="width:${prog}%;background:${prog>=100?'var(--green)':'var(--accent)'}"></div>
+          </div>
+          <div style="font-size:12px;color:var(--dim);margin-top:4px">
+            📦 Sztuki: <b style="color:${sztProg>=100?'var(--green)':'var(--text)'}">${z.sztuki_wykonane||0}/${z.ilosc_sztuk}</b> (${sztProg}%)
+          </div>
+          ${expanded ? `
+          <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+            ${ops === null ? '<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">⏳ Ładowanie operacji...</div>' :
+              ops.length === 0 ? '<div style="font-size:12px;color:var(--dim)">Brak operacji</div>' :
+              ops.map(op => {
+                const opProg = z.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana||0)/z.ilosc_sztuk*100) : 0;
+                const stColor = op.status==='zakonczona'?'var(--green)':op.status==='w_toku'?'var(--accent)':'var(--dim)';
+                const stIcon = op.status==='zakonczona'?'✅':op.status==='w_toku'?'▶':'⏳';
+                return `<div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3)">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div style="flex:1">
+                      <div style="font-size:12px;font-weight:600">${stIcon} ${op.kolejnosc}. ${op.nazwa}</div>
+                      <div style="font-size:11px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min':''}</div>
+                    </div>
+                    <div style="text-align:right;margin-left:8px">
+                      <div style="font-size:12px;font-weight:700;color:${stColor}">${op.ilosc_wykonana||0}/${z.ilosc_sztuk} szt.</div>
+                      <div style="font-size:10px;color:var(--dim)">${opProg}%</div>
+                    </div>
+                  </div>
+                  <div class="progress-wrap" style="height:4px;margin:4px 0 0">
+                    <div class="progress-bar" style="width:${Math.min(100,opProg)}%;background:${stColor}"></div>
+                  </div>
+                </div>`;
+              }).join('')
+            }
+          </div>` : ''}
+        </div>`;
+      });
+    }
+  }
+
+  if (state.majsterSubTab === 'koszty') {
+    html += `<div class="section-hdr">💰 Koszty pracowników dziś</div>`;
+    const koszty = stats.koszty_dzis || [];
+    if (!koszty.length) {
+      html += `<div class="empty">Brak danych</div>`;
+    } else {
+      let total = 0;
+      html += `<table class="data-table"><thead><tr><th>Pracownik</th><th>Stanowisko</th><th>Min.</th><th>Koszt</th></tr></thead><tbody>`;
+      koszty.forEach(k => {
+        const koszt = k.koszt || 0;
+        total += koszt;
+        const min = Math.round((k.godz||0) * 60);
+        html += `<tr>
+          <td>${k.full_name}</td>
+          <td style="font-size:11px">${k.stanowisko||'—'}</td>
+          <td>${min}</td>
+          <td style="color:var(--accent)">${fmtPLN(koszt)}</td>
+        </tr>`;
+      });
+      html += `</tbody></table>
+      <div class="card" style="margin-top:10px;text-align:center">
+        <div style="font-size:12px;color:var(--dim)">ŁĄCZNIE DZIŚ</div>
+        <div style="font-size:28px;font-weight:700;color:var(--accent)">${fmtPLN(total)}</div>
+      </div>`;
+    }
+  }
+
+  if (state.majsterSubTab === 'alerty') {
+    const alerty = stats.alerty_norm || [];
+    html += `<div class="section-hdr">⚠ Alerty norm (${alerty.length})</div>`;
+    if (!alerty.length) {
+      html += `<div class="card" style="text-align:center;padding:20px;border-color:var(--green)">
+        <div style="font-size:32px">✅</div>
+        <div style="color:var(--green);margin-top:8px">Wszystkie operacje w normie</div>
+      </div>`;
+    } else {
+      alerty.forEach(a => {
+        html += `
+        <div class="alert-banner">
+          <div style="font-weight:700">⚠ Przekroczono normę – ${a.zlecenie}, operacja: ${a.operacja}</div>
+          <div style="font-size:12px;margin-top:2px">👤 ${a.pracownik}</div>
+          <div>Norma: ${a.norma_min} min/szt. × ${a.ilosc_sztuk} szt. = ${a.norma_calkowita_min} min | Czas: ${a.elapsed_min} min | <strong style="font-size:15px">+${a.przekroczenie_pct}%</strong></div>
+        </div>`;
+      });
+    }
+  }
+
+  if (state.majsterSubTab === 'oblozenie') {
+    html += renderOblozenie();
+  }
+
+  if (state.majsterSubTab === 'wydajnosc') {
+    html += renderMajsterWydajnosc();
+  }
+
+  if (state.majsterSubTab === 'podsumowanie') {
+    html += renderMajsterPodsumowanie(stats);
+  }
+
+  html += `<button class="btn-outline no-print" style="margin-top:8px" onclick="loadMajster()">🔄 Odśwież</button>`;
+  return html;
+}
+
+function switchMajsterTab(tab) {
+  setState({majsterSubTab: tab}, true);
+  if (tab === 'wydajnosc' && !state.wydajnoscMajster) {
+    loadWydajnoscMajster(state.wydajnoscOkres);
+  }
+  if (tab === 'oblozenie') {
+    loadOblozenie();
+  }
+  render();
+}
+
+// ─── Obłożenie stanowisk ───────────────────────────────────────────────────────
+async function loadOblozenie() {
+  setState({oblozenieLading: true, oblozenie: null});
+  render();
+  try {
+    const data = await get('/api/oblozenie');
+    setState({oblozenie: data, oblozenieLading: false});
+  } catch(e) {
+    setState({oblozenie: {error: e.message}, oblozenieLading: false});
+  }
+  render();
+}
+
+function renderOblozenie() {
+  if (state.oblozenieLading) return '<div class="spinner">⏳</div>';
+  const ob = state.oblozenie;
+  if (!ob) return '<div style="text-align:center;padding:30px;color:var(--dim)">Kliknij zakładkę aby załadować dane.</div>';
+  if (ob.error) return `<div class="error-banner">⚠ ${ob.error}</div><button class="btn-outline" onclick="loadOblozenie()">🔄 Spróbuj ponownie</button>`;
+  if (!ob.length) return '<div class="empty">Brak stanowisk – dodaj stanowiska w ustawieniach Stawki lub przypisz stanowisko do operacji.</div>';
+
+  const selected = state.oblozenieSelected;
+  let html = '';
+
+  // Lista stanowisk jako karty/przyciski
+  html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">';
+  ob.forEach(st => {
+    const opCount = st.operacje.length;
+    const isActive = selected === st.stanowisko;
+    const urgentCount = st.operacje.filter(o => {
+      if (!o.termin) return false;
+      const days = Math.ceil((new Date(o.termin) - new Date()) / 86400000);
+      return days <= 3;
+    }).length;
+    const dotColor = urgentCount > 0 ? 'var(--red)' : opCount > 0 ? 'var(--green)' : 'var(--border)';
+    html += `<button onclick="setState({oblozenieSelected:'${st.stanowisko.replace(/'/g,"\'")}'}); render();"
+      style="display:flex;flex-direction:column;align-items:flex-start;padding:10px 14px;border:2px solid ${isActive ? 'var(--accent)' : 'var(--border)'};
+             border-radius:10px;background:${isActive ? 'rgba(232,160,32,.1)' : 'var(--panel)'};cursor:pointer;text-align:left;min-width:130px;">
+      <span style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px;color:${isActive ? 'var(--accent)' : 'var(--text)'}">
+        <span style="width:8px;height:8px;border-radius:50%;background:${dotColor};display:inline-block"></span>
+        ${st.stanowisko}
+      </span>
+      <span style="font-size:10px;color:var(--dim);margin-top:3px">${opCount} operacji${urgentCount > 0 ? ` · <span style="color:var(--red)">${urgentCount} pilnych</span>` : ''}</span>
+    </button>`;
+  });
+  html += '</div>';
+
+  // Szczegóły wybranego stanowiska
+  if (!selected) {
+    html += '<div class="empty" style="padding:20px">👆 Wybierz stanowisko aby zobaczyć operacje</div>';
+    return html;
+  }
+
+  const stData = ob.find(s => s.stanowisko === selected);
+  if (!stData) return html;
+
+  html += `<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">
+    🏭 ${stData.stanowisko}${stData.stawka_godz ? ' · ' + stData.stawka_godz.toFixed(2) + ' zł/h' : ''}
+    ${stData.opis ? '<span style="font-weight:400;text-transform:none;margin-left:6px">'+stData.opis+'</span>' : ''}
+  </div>`;
+
+  if (!stData.operacje.length) {
+    html += '<div class="empty" style="padding:20px">Brak aktywnych operacji na tym stanowisku.</div>';
+    return html;
+  }
+
+  // Grupuj po zleceniu (może być wiele operacji z jednego zlecenia)
+  const byZlecenie = {};
+  stData.operacje.forEach(o => {
+    const key = o.zlecenie_id;
+    if (!byZlecenie[key]) byZlecenie[key] = {zlecenie_numer: o.zlecenie_numer, zlecenie_nazwa: o.zlecenie_nazwa, termin: o.termin, ilosc_sztuk: o.ilosc_sztuk, zlecenie_status: o.zlecenie_status, ops: []};
+    byZlecenie[key].ops.push(o);
+  });
+
+  // Sortuj grupy wg terminu
+  const groups = Object.values(byZlecenie).sort((a,b) => {
+    if (!a.termin && !b.termin) return 0;
+    if (!a.termin) return 1;
+    if (!b.termin) return -1;
+    return new Date(a.termin) - new Date(b.termin);
+  });
+
+  groups.forEach(g => {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const termin = g.termin ? new Date(g.termin) : null;
+    const daysLeft = termin ? Math.ceil((termin - today) / 86400000) : null;
+    let terminColor = 'var(--dim)';
+    let terminLabel = g.termin ? g.termin.slice(0,10) : '—';
+    if (daysLeft !== null) {
+      if (daysLeft < 0) { terminColor = 'var(--red)'; terminLabel += ' ⚠ PRZEKROCZONY'; }
+      else if (daysLeft === 0) { terminColor = 'var(--red)'; terminLabel += ' (dziś)'; }
+      else if (daysLeft <= 3) { terminColor = 'var(--orange)'; terminLabel += ` (${daysLeft}d)`; }
+      else { terminColor = 'var(--green)'; terminLabel += ` (${daysLeft}d)`; }
+    }
+
+    const statusColors = {nowe:'var(--blue)',w_realizacji:'var(--green)',zakonczone:'var(--dim)',anulowane:'var(--red)'};
+    const zStatusColor = statusColors[g.zlecenie_status] || 'var(--dim)';
+
+    html += `<div style="background:var(--entry);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;border-left:3px solid ${terminColor}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <div style="font-weight:700;font-size:14px">${g.zlecenie_numer}</div>
+          <div style="color:var(--dim);font-size:12px;margin-top:1px">${g.zlecenie_nazwa}</div>
+        </div>
+        <div style="text-align:right;font-size:11px">
+          <div style="color:${terminColor};font-weight:700">📅 ${terminLabel}</div>
+          <div style="color:var(--dim);margin-top:2px">Ilość: <b style="color:var(--text)">${g.ilosc_sztuk} szt.</b></div>
+        </div>
+      </div>`;
+
+    g.ops.forEach(o => {
+      const prog = g.ilosc_sztuk > 0 ? Math.min(100, Math.round((o.ilosc_wykonana / g.ilosc_sztuk) * 100)) : 0;
+      const opStatusColors = {oczekuje:'var(--dim)',w_toku:'var(--blue)',zakonczona:'var(--green)'};
+      const opStatusLabels = {oczekuje:'⏳ oczekuje',w_toku:'▶ w toku',zakonczona:'✅ zakończona'};
+      const opColor = opStatusColors[o.op_status] || 'var(--dim)';
+
+      html += `<div style="padding:8px 10px;background:var(--panel);border-radius:7px;margin-top:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${g.ilosc_sztuk > 1 ? 6 : 0}px">
+          <span style="font-size:12px;font-weight:600">#${o.op_kolejnosc} ${o.op_nazwa}</span>
+          <span style="font-size:10px;color:${opColor};font-weight:700">${opStatusLabels[o.op_status]||o.op_status}</span>
+        </div>`;
+
+      if (g.ilosc_sztuk > 1 || o.ilosc_wykonana > 0) {
+        html += `<div style="display:flex;align-items:center;gap:8px">
+          <div style="flex:1;background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+            <div style="width:${prog}%;height:100%;border-radius:4px;background:${prog>=100?'var(--green)':prog>0?'var(--blue)':'var(--border)'}"></div>
+          </div>
+          <span style="font-size:10px;color:var(--dim);white-space:nowrap">${o.ilosc_wykonana}/${g.ilosc_sztuk} szt. (${prog}%)</span>
+        </div>`;
+      }
+      html += '</div>';
+    });
+
+    html += '</div>';
+  });
+
+  html += `<button class="btn-outline" style="margin-top:4px" onclick="loadOblozenie()">🔄 Odśwież</button>`;
+  return html;
+}
+
+async function toggleMajsterZlecenie(zid) {
+  if (state.majsterExpandedZlecenie === zid) {
+    setState({majsterExpandedZlecenie: null});
+    return;
+  }
+  setState({majsterExpandedZlecenie: zid});
+  // Jeśli brak w cache – załaduj (zawsze przeładuj przy rozwijaniu dla aktualnych danych)
+  const cache = state.majsterOpsCache || {};
+  if (cache[zid] === undefined) {
+    try {
+      const ops = await get('/api/zlecenia/' + zid + '/operacje');
+      const newCache = {...(state.majsterOpsCache || {}), [zid]: ops};
+      setState({majsterOpsCache: newCache});
+    } catch(e) {
+      const newCache = {...(state.majsterOpsCache || {}), [zid]: []};
+      setState({majsterOpsCache: newCache});
+    }
+  }
+}
+
+// ─── Helper date functions ────────────────────────────────────────────────────
+function getToday() {
+  return new Date().toISOString().slice(0,10);
+}
+function getTodayMinus(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0,10);
+}
+
+// ─── Raport PDF – Zlecenia ────────────────────────────────────────────────────
+async function generateRaportZleceniaPDF() {
+  const od = document.getElementById('raport-od')?.value || getTodayMinus(30);
+  const do_ = document.getElementById('raport-do')?.value || getToday();
+  setState({raportOkres: {od, do: do_}});
+  try {
+    const data = await get('/api/raporty/zlecenia?data_od=' + od + '&data_do=' + do_);
+    printRaportZlecenia(data, od, do_);
+  } catch(e) {
+    alert('Błąd generowania raportu: ' + e.message);
+  }
+}
+
+// ─── Formatowanie czasu hh:mm:ss / mm:ss ──────────────────────────────────────
+function fmtHMS(totalMin) {
+  // Przyjmuje minuty (może być ułamkowe), zwraca mm:ss lub hh:mm:ss
+  const totalSec = Math.round((totalMin || 0) * 60);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const mm = ('0'+m).slice(-2);
+  const ss = ('0'+s).slice(-2);
+  if (h > 0) return ('0'+h).slice(-2) + ':' + mm + ':' + ss;
+  return mm + ':' + ss;
+}
+
+function printRaportZlecenia(data, od, doDt) {
+  const zl = data.zlecenia || [];
+  const totalWartosc = zl.reduce((a,z)=>a+(z.wartosc||0),0);
+  const totalKoszt   = zl.reduce((a,z)=>a+(z.koszt_total||0),0);
+  const totalZysk    = zl.reduce((a,z)=>a+(z.zysk||0),0);
+
+  const statusColor = {aktywne:'#1a73e8', zakonczone:'#1e8a4c', anulowane:'#888', wstrzymane:'#e67e00'};
+  const fmtPLNr = v => (parseFloat(v)||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' zł';
+  const fmtMinr = v => fmtHMS(v);
+
+  let zlHtml = '';
+  zl.forEach(z => {
+    const isZysk = z.zysk >= 0;
+    const sesjeByOp = {};
+    (z.sesje||[]).forEach(s => {
+      if (!sesjeByOp[s.operacja]) sesjeByOp[s.operacja] = [];
+      sesjeByOp[s.operacja].push(s);
+    });
+    zlHtml += `
+    <div style="border:1px solid #ddd;border-radius:6px;margin-bottom:16px;overflow:hidden;break-inside:avoid">
+      <div style="background:#f5f7fa;padding:10px 14px;border-bottom:1px solid #ddd;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <span style="font-size:15px;font-weight:700">${z.numer}</span>
+          <span style="font-size:13px;color:#555;margin-left:10px">${z.nazwa||''}</span>
+        </div>
+        <span style="background:${statusColor[z.status]||'#888'};color:#fff;font-size:11px;padding:2px 10px;border-radius:99px;font-weight:600">${z.status||''}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid #ddd">
+        <div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ILOŚĆ</div>${z.ilosc_sztuk||0} szt.</div>
+        <div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">WARTOŚĆ</div>${fmtPLNr(z.wartosc)}</div>
+        <div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">KOSZT PRACY</div>${fmtPLNr(z.koszt_pracy)}</div>
+        ${z.koszt_zbrojenia>0?`<div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#e67e00;font-size:10px">⚙ ZBROJENIE</div>${fmtPLNr(z.koszt_zbrojenia)}</div>`:`<div style="padding:8px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">KOSZT ŁĄCZNY</div>${fmtPLNr(z.koszt_total)}</div>`}
+        <div style="padding:8px 12px;font-size:12px"><div style="color:#888;font-size:10px">ZYSK</div><span style="color:${isZysk?'#1e8a4c':'#c0392b'};font-weight:700">${fmtPLNr(z.zysk)}</span></div>
+      </div>`;
+    if (Object.keys(sesjeByOp).length) {
+      zlHtml += `<div style="padding:8px 14px">
+        <div style="font-size:10px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:6px">Sesje pracy</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px">
+          <thead><tr style="background:#f5f7fa">
+            <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Operacja</th>
+            <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Pracownik</th>
+            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Data</th>
+            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas łączny</th>
+            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas/szt.</th>
+            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
+            <th style="padding:4px 8px;text-align:right;border:1px solid #eee">Koszt</th>
+            <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Uwagi</th>
+          </tr></thead><tbody>`;
+      (z.sesje||[]).forEach(s => {
+        const isNieprod = s.typ === 'nieprodukcyjna';
+        const isInne = s.typ === 'inne_zlecenie';
+        const isZbr = s.typ === 'zbrojenie';
+        // Sprawdź czy w normie: czas_norma × ilosc_sztuk vs czas_min (czas_norma w min/szt)
+        const normaCalk = (!isNieprod && !isInne) ? (s.czas_norma||0) * (s.ilosc_sztuk||1) : 0;
+        const wNormie = normaCalk > 0 && s.czas_min <= normaCalk;
+        const przekroczone = normaCalk > 0 && s.czas_min > normaCalk;
+        let rowBg = przekroczone ? 'background:#fff3f3' : wNormie ? 'background:#f3fff6' : '';
+        if (isNieprod) rowBg = 'background:#f9f5ff';
+        if (isInne) rowBg = 'background:#f0f7ff';
+        const normaBadge = normaCalk > 0
+          ? (wNormie
+              ? `<span style="color:#1e8a4c;font-weight:700;font-size:10px">✓ OK</span>`
+              : `<span style="color:#c0392b;font-weight:700;font-size:10px">⚠ PRZEKR.</span>`)
+          : '';
+        const typBadge = isNieprod
+          ? `<span style="font-size:9px;background:#9b59b6;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">NIEPRODUKCYJNA</span>`
+          : isInne
+          ? `<span style="font-size:9px;background:#2980b9;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">INNE ZLECENIE</span>`
+          : isZbr
+          ? `<span style="font-size:9px;background:#e67e00;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">ZBROJENIE</span>`
+          : '';
+        const opNazwa = s.operacja || (isNieprod ? '⏸ Praca nieprodukcyjna' : isInne ? '🔧 Inne zlecenie' : '—');
+        const sztuk = s.ilosc_sztuk || 1;
+        const avgMinVal = (!isNieprod && sztuk > 0) ? s.czas_min / sztuk : s.czas_min;
+        const totalHMS = fmtHMS(s.czas_min);
+        const normaTotalHMS = normaCalk > 0 ? fmtHMS(normaCalk) : null;
+        const avgHMS = fmtHMS(avgMinVal);
+        const normaPieceFmt = normaCalk > 0 ? fmtHMS(s.czas_norma||0) : null;
+        zlHtml += `<tr style="${rowBg}">
+          <td style="padding:3px 8px;border:1px solid #eee">${opNazwa}${typBadge} ${normaBadge}</td>
+          <td style="padding:3px 8px;border:1px solid #eee">${s.pracownik||'—'}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data||'—'}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:${przekroczone?'#c0392b':wNormie?'#1e8a4c':'inherit'};font-weight:${przekroczone||wNormie?'700':'400'}">${totalHMS}${normaTotalHMS?' / norma: '+normaTotalHMS:''}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#555">${isNieprod ? '—' : avgHMS}${normaPieceFmt&&!isNieprod?' <span style="color:#aaa;font-size:9px">/ '+normaPieceFmt+'</span>':''}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod ? '—' : (s.ilosc_sztuk||0)}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:right">${fmtPLNr(s.koszt)}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;color:#555;font-style:italic">${s.uwagi||'—'}</td>
+        </tr>`;
+      });
+      zlHtml += `</tbody></table></div>`;
+    }
+    if (z.produkty && z.produkty.length) {
+      zlHtml += `<div style="padding:6px 14px 10px">
+        <div style="font-size:10px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:4px">Produkty / Zakupy</div>`;
+      z.produkty.forEach(p => {
+        zlHtml += `<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;border-bottom:1px solid #f0f0f0">
+          <span>${p.nazwa}</span><span style="color:#888">${p.ilosc} szt. × ${fmtPLNr(p.cena)} = <b>${fmtPLNr(p.ilosc*p.cena)}</b></span></div>`;
+      });
+      zlHtml += `</div>`;
+    }
+    zlHtml += `</div>`;
+  });
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>Raport zleceń ${od} – ${doDt}</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; color: #222; }
+    @media print { body { padding: 0; } }
+  </style>
+  </head><body>
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:18px">
+    <div>
+      <div style="font-size:22px;font-weight:700">Raport zleceń produkcyjnych</div>
+      <div style="font-size:13px;color:#555">Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
+    </div>
+    <div style="text-align:right;font-size:13px">
+      <div>Zleceń: <b>${zl.length}</b></div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+    <div style="background:#f5f7fa;border-radius:6px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#888;text-transform:uppercase">Łączna wartość</div>
+      <div style="font-size:20px;font-weight:700;color:#1a73e8">${fmtPLNr(totalWartosc)}</div>
+    </div>
+    <div style="background:#f5f7fa;border-radius:6px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#888;text-transform:uppercase">Łączne koszty</div>
+      <div style="font-size:20px;font-weight:700;color:#e67e00">${fmtPLNr(totalKoszt)}</div>
+    </div>
+    <div style="background:#f5f7fa;border-radius:6px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#888;text-transform:uppercase">Łączny zysk</div>
+      <div style="font-size:20px;font-weight:700;color:${totalZysk>=0?'#1e8a4c':'#c0392b'}">${fmtPLNr(totalZysk)}</div>
+    </div>
+  </div>
+  ${zlHtml}
+  </body></html>`;
+
+  const w = window.open('','_blank','width=900,height=700');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 600);
+}
+
+// ─── Raport PDF – Wydajność pracowników ──────────────────────────────────────
+async function generateRaportWydajnoscPDF() {
+  const od = document.getElementById('rwd-od')?.value || getTodayMinus(7);
+  const do_ = document.getElementById('rwd-do')?.value || getToday();
+  const typ = document.getElementById('rwd-typ')?.value || 'skrocony';
+  setState({raportWydOkres:{od,do:do_}, raportWydTyp:typ});
+  try {
+    const data = await get('/api/stats/wydajnosc_raport?data_od=' + od + '&data_do=' + do_);
+    printRaportWydajnosc(data, od, do_, typ);
+  } catch(e) {
+    alert('Błąd generowania raportu: ' + e.message);
+  }
+}
+
+function printRaportWydajnosc(data, od, doDt, typ) {
+  const pr = data.pracownicy || [];
+  const ZMIANA_MIN = 450;
+  const fmtPLNr = v => (parseFloat(v)||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' zł';
+
+  let tabelaHtml = '';
+  if (typ === 'skrocony') {
+    tabelaHtml += `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#2e3548;color:#fff">
+        <th style="padding:8px 10px;text-align:left">Pracownik</th>
+        <th style="padding:8px 10px;text-align:center">Czas roboczy (min)</th>
+        <th style="padding:8px 10px;text-align:center">Zbrojenie (min)</th>
+        <th style="padding:8px 10px;text-align:center">Nieprodukcyjny (min)</th>
+        <th style="padding:8px 10px;text-align:center">Razem (min)</th>
+        <th style="padding:8px 10px;text-align:center">Zmian (×450 min)</th>
+        <th style="padding:8px 10px;text-align:center">Koszt łączny</th>
+        <th style="padding:8px 10px;text-align:center">Efektywność</th>
+      </tr></thead><tbody>`;
+    pr.forEach((p,i) => {
+      const razem = p.min_roboczy + p.min_zbrojenie + p.min_nieproduktywny;
+      const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
+      const kosztTotal = (p.koszt_total || 0);
+      // Efektywność: % czasu spędzonego na pracy produkcyjnej vs łącznego czasu zarejestrowanego
+      // Jeśli brak czasu nieproduktywnego/zbrojenia – pokazuj na podstawie norm
+      const normy_ok = p.normy_ok || 0;
+      const normy_total = p.normy_total || 0;
+      const efektNormy = normy_total > 0 ? Math.round(normy_ok / normy_total * 100) : null;
+      const efektCzas = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
+      // Pokaż efektywność norm jeśli dostępna, inaczej efektywność czasu
+      const efekt = efektNormy !== null ? efektNormy : (efektCzas !== null ? efektCzas : 0);
+      const efLabel = efektNormy !== null ? efekt + '% norm' : (efektCzas !== null ? efekt + '% czasu' : '—');
+      const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
+      tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8">${Math.round(p.min_roboczy)}</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${Math.round(p.min_zbrojenie)}</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#888">${Math.round(p.min_nieproduktywny)}</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700">${Math.round(razem)}</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center">${zmiany}</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:600;color:#1e8a4c">${kosztTotal.toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</td>
+        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${efKolor}">${efLabel}</td>
+      </tr>`;
+    });
+    tabelaHtml += `</tbody></table>`;
+  } else {
+    // PEŁNY raport
+    pr.forEach(p => {
+      const razem = p.min_roboczy + p.min_zbrojenie + p.min_nieproduktywny;
+      const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
+      const normy_ok2 = p.normy_ok || 0;
+      const normy_total2 = p.normy_total || 0;
+      const efektNormy2 = normy_total2 > 0 ? Math.round(normy_ok2 / normy_total2 * 100) : null;
+      const efektCzas2 = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
+      const efekt = efektNormy2 !== null ? efektNormy2 : (efektCzas2 !== null ? efektCzas2 : 0);
+      const efLabel2 = efektNormy2 !== null ? efekt + '% norm (' + normy_ok2 + '/' + normy_total2 + ')' : (efektCzas2 !== null ? efekt + '% czasu' : '—');
+      const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
+      tabelaHtml += `
+      <div style="border:1px solid #ddd;border-radius:6px;margin-bottom:16px;break-inside:avoid;overflow:hidden">
+        <div style="background:#2e3548;color:#fff;padding:8px 14px;display:flex;justify-content:space-between;align-items:center">
+          <span style="font-weight:700;font-size:14px">${p.full_name}</span>
+          <span style="font-size:12px">${p.sesji} sesji | ${p.sztuki} szt. | efektywność: <b style="color:${efKolor}">${efLabel2}</b></span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #ddd">
+          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ROBOCZY</div><b style="color:#1a73e8">${Math.round(p.min_roboczy)} min</b></div>
+          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ZBROJENIE</div><b style="color:#e67e00">${Math.round(p.min_zbrojenie)} min</b></div>
+          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">NIEPRODUKTYWNY</div><b style="color:#888">${Math.round(p.min_nieproduktywny)} min</b></div>
+          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ZMIANY (${ZMIANA_MIN} min)</div><b>${zmiany}</b></div>
+          <div style="padding:7px 12px;font-size:12px"><div style="color:#888;font-size:10px">KOSZT ŁĄCZNY</div><b style="color:#1e8a4c">${(p.koszt_total||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</b></div>
+        </div>`;
+      if (p.sesje && p.sesje.length) {
+        tabelaHtml += `<div style="padding:8px 14px">
+          <table style="width:100%;border-collapse:collapse;font-size:11px">
+            <thead><tr style="background:#f5f7fa">
+              <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Operacja / Typ</th>
+              <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Zlecenie</th>
+              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Data</th>
+              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas/szt.</th>
+              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas łączny</th>
+              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
+            </tr></thead><tbody>`;
+        p.sesje.forEach((s,i) => {
+          const sztuk = s.ilosc_sztuk || 1;
+          const avgMinVal = sztuk > 0 ? parseFloat(s.czas_min) / sztuk : parseFloat(s.czas_min);
+          const avgHMS = fmtHMS(avgMinVal);
+          const totalHMS = fmtHMS(parseFloat(s.czas_min));
+          const isNieprod = s.typ === 'nieprodukcyjna';
+          const isInne = s.typ === 'inne_zlecenie';
+          const isZbr = s.typ === 'zbrojenie';
+          const rowBg = isNieprod ? '#f5f0ff' : isInne ? '#f0f7ff' : (i%2?'#fff':'#f9fafb');
+          const typBadge = isNieprod
+            ? `<span style="font-size:9px;background:#9b59b6;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">NIEPRODUKCYJNA</span>`
+            : isInne
+            ? `<span style="font-size:9px;background:#2980b9;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">INNE ZLECENIE</span>`
+            : isZbr
+            ? `<span style="font-size:9px;background:#e67e00;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">ZBROJENIE</span>`
+            : '';
+          const opNazwa = s.op_nazwa || (isNieprod ? '⏸ Praca nieprodukcyjna' : isInne ? '🔧 Inne zlecenie' : '—');
+          const zlNumer = isNieprod ? '—' : (s.zl_numer || '—');
+          tabelaHtml += `<tr style="background:${rowBg}">
+            <td style="padding:3px 8px;border:1px solid #eee">${opNazwa}${typBadge}</td>
+            <td style="padding:3px 8px;border:1px solid #eee">${zlNumer}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace">${isNieprod ? totalHMS : avgHMS}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#888">${isNieprod ? '—' : totalHMS}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod ? '—' : (s.ilosc_sztuk||'—')}</td>
+          </tr>`;
+        });
+        tabelaHtml += `</tbody></table></div>`;
+      }
+      tabelaHtml += `</div>`;
+    });
+  }
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>Raport wydajności ${od} – ${doDt}</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; color: #222; }
+    @media print { body { padding: 0; } }
+  </style>
+  </head><body>
+  <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:18px">
+    <div>
+      <div style="font-size:22px;font-weight:700">Raport wydajności pracowników</div>
+      <div style="font-size:13px;color:#555">${typ==='skrocony'?'Raport skrócony':'Raport pełny'} | Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
+    </div>
+    <div style="text-align:right;font-size:13px">Pracowników: <b>${pr.length}</b> | Zmiana = <b>${ZMIANA_MIN} min</b></div>
+  </div>
+  ${tabelaHtml}
+  </body></html>`;
+
+  const w = window.open('','_blank','width=900,height=700');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 600);
+}
+
+
+// ─── Funkcje backupu danych ───────────────────────────────────────────────────
+async function adminBackupNow() {
+  const msg = document.getElementById('backup-status-msg');
+  if (msg) msg.textContent = '⏳ Tworzenie backupu...';
+  try {
+    const r = await get('/api/admin/backup');
+    const total = Object.values(r.rows||{}).reduce((a,b)=>a+b,0);
+    if (msg) msg.innerHTML = `✅ Backup zapisany: <b>${total}</b> rekordów | ${r.ts?.slice(0,19)||''}`;
+  } catch(e) {
+    if (msg) msg.textContent = '❌ Błąd backupu: ' + e.message;
+  }
+}
+
+function adminBackupDownload() {
+  const msg = document.getElementById('backup-status-msg');
+  if (msg) msg.textContent = '⏳ Pobieranie backupu...';
+  const a = document.createElement('a');
+  a.href = (SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/download?x-api-key=' + encodeURIComponent(API_KEY);
+  a.download = 'produkcja_backup_' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  if (msg) msg.textContent = '✅ Plik backupu pobrany.';
+}
+
+async function adminBackupRestore() {
+  const msg = document.getElementById('backup-status-msg');
+  const statusR = await get('/api/admin/backup/status').catch(() => null);
+  const path = statusR?.backup_path || 'serwer';
+  const ts = statusR?.backup_ts?.slice(0,19) || '?';
+  if (!confirm(`Przywrócić dane z backupu na serwerze?\n📁 ${path}\n🕐 Ostatni zapis: ${ts}\n\nUwaga: nadpisze istniejące dane!`)) return;
+  if (msg) msg.textContent = '⏳ Przywracanie backupu z serwera...';
+  try {
+    const r = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/restore', {
+      method: 'POST',
+      headers: {'x-api-key': API_KEY, 'Content-Type': 'application/json'},
+    });
+    const d = await r.json();
+    if (d.ok) {
+      if (msg) msg.innerHTML = '✅ Backup przywrócony ze ścieżki: <b>' + path + '</b><br>Odśwież stronę aby zobaczyć dane.';
+    } else {
+      if (msg) msg.textContent = '❌ Błąd przywracania: ' + (d.error || 'nieznany');
+    }
+  } catch(e) {
+    if (msg) msg.textContent = '❌ Błąd: ' + e.message;
+  }
+}
+
+async function adminBackupStatus() {
+  const msg = document.getElementById('backup-status-msg');
+  try {
+    const r = await get('/api/admin/backup/status');
+    if (msg) msg.innerHTML = r.backup_exists
+      ? `✅ Backup: <b>${r.backup_size_kb} KB</b> | Ostatni: ${r.backup_ts?.slice(0,19)||'?'} | Interwał: co ${r.backup_interval_sec}s<br><span style="color:var(--dim);font-size:10px">📁 ${r.backup_path} (DB: ${r.db_path})</span>`
+      : '⚠ Brak pliku backupu – kliknij "Zapisz backup teraz"';
+  } catch(e) {
+    if (msg) msg.textContent = '❌ ' + e.message;
+  }
+}
+
+// ─── Wczytaj backup z dysku (plik JSON) ───────────────────────────────────────
+function adminBackupRestoreFromDisk() {
+  const msg = document.getElementById('backup-status-msg');
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    if (!confirm(`Wczytać backup z pliku:\n📄 ${file.name}\n\nUwaga: nadpisze istniejące dane na serwerze!`)) return;
+    if (msg) msg.textContent = '⏳ Wczytywanie pliku...';
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (msg) msg.textContent = '⏳ Wysyłanie do serwera...';
+      const r = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/restore-upload', {
+        method: 'POST',
+        headers: {'x-api-key': API_KEY, 'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+      });
+      const d = await r.json();
+      if (d.ok) {
+        const total = Object.values(d.rows||{}).reduce((a,b)=>a+b,0);
+        if (msg) msg.innerHTML = `✅ Backup z dysku przywrócony! Wczytano <b>${total}</b> rekordów z pliku <b>${file.name}</b>.<br><button class="btn btn-sm" style="background:var(--accent);color:#1a1f2e;margin-top:4px" onclick="location.reload()">🔄 Odśwież stronę</button>`;
+      } else {
+        if (msg) msg.textContent = '❌ Błąd przywracania: ' + (d.error || 'nieznany');
+      }
+    } catch(e) {
+      if (msg) msg.textContent = '❌ Błąd: ' + (e.message.includes('JSON') ? 'Nieprawidłowy plik JSON' : e.message);
+    }
+  };
+  input.click();
+}
+
+// ─── Auto-monitoring resetu serwera i auto-restore ────────────────────────────
+let _serverResetMonitor = null;
+let _serverResetDetected = false;
+let _autoRestoreInProgress = false;
+
+async function checkServerReset() {
+  if (!SERVER_URL || !API_KEY || _autoRestoreInProgress) return;
+  try {
+    // Pobierz status backupu – jeśli serwer zwraca brak danych lub liczbę użytkowników = 0,
+    // to znaczy że dane zostały zresetowane
+    const r = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/status', {
+      headers: {'x-api-key': API_KEY}
+    });
+    if (!r.ok) return; // serwer niedostępny – czekamy
+    const d = await r.json();
+
+    // Sprawdź czy serwer ma dane (liczba użytkowników > 0)
+    const usersCheck = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/users', {
+      headers: {'x-api-key': API_KEY}
+    }).catch(() => null);
+    if (!usersCheck || !usersCheck.ok) return;
+    const users = await usersCheck.json();
+
+    // Jeśli lista użytkowników jest pusta a backup istnieje → reset wykryty
+    if (Array.isArray(users) && users.length === 0 && d.backup_exists) {
+      if (!_serverResetDetected && !_autoRestoreInProgress) {
+        _serverResetDetected = true;
+        await autoRestoreAfterReset(d);
+      }
+    } else {
+      _serverResetDetected = false; // serwer ma dane – wszystko OK
+    }
+  } catch(e) {
+    // Błąd sieci – ignorujemy, spróbujemy za chwilę
+  }
+}
+
+async function autoRestoreAfterReset(backupStatus) {
+  _autoRestoreInProgress = true;
+  console.warn('[AUTO-RESTORE] Wykryto reset serwera – automatyczne przywracanie backupu...');
+
+  // Pokaż baner użytkownikowi
+  showResetBanner('⏳ Wykryto reset serwera – przywracam dane z backupu...');
+
+  try {
+    const r = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/restore', {
+      method: 'POST',
+      headers: {'x-api-key': API_KEY, 'Content-Type': 'application/json'},
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showResetBanner('✅ Dane przywrócone automatycznie po restarcie serwera! Odświeżam...');
+      setTimeout(() => {
+        _autoRestoreInProgress = false;
+        _serverResetDetected = false;
+        hideResetBanner();
+        location.reload();
+      }, 2500);
+    } else {
+      showResetBanner('⚠ Auto-restore nie powiódł się: ' + (d.error || 'błąd') + '. Wczytaj backup ręcznie w Ustawieniach → Backup.');
+      _autoRestoreInProgress = false;
+    }
+  } catch(e) {
+    showResetBanner('⚠ Błąd auto-restore: ' + e.message + '. Wczytaj backup ręcznie.');
+    _autoRestoreInProgress = false;
+  }
+}
+
+function showResetBanner(msg) {
+  let banner = document.getElementById('server-reset-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'server-reset-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#b94600;color:#fff;padding:12px 16px;font-size:14px;font-weight:700;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.5);';
+    document.body.prepend(banner);
+  }
+  banner.textContent = msg;
+}
+
+function hideResetBanner() {
+  const banner = document.getElementById('server-reset-banner');
+  if (banner) banner.remove();
+}
+
+function startServerResetMonitor() {
+  if (_serverResetMonitor) clearInterval(_serverResetMonitor);
+  // Sprawdzaj co 20 sekund
+  _serverResetMonitor = setInterval(checkServerReset, 20000);
+  // Pierwsze sprawdzenie po 10s od startu (gdy serwer jest już gotowy)
+  setTimeout(checkServerReset, 10000);
+}
+
+function renderMajsterPodsumowanie(stats) {
+  const aktywne  = (stats?.zlecenia || []);
+  const hist     = (stats?.wszystkie_zlecenia || []);
+  const zakonczone = hist.filter(z => z.status === 'zakonczone');
+  const anulowane  = hist.filter(z => z.status === 'anulowane');
+
+  const ro = state.raportOkres;
+  let html = '<div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px">'
+    + '<div class="stat-box"><div class="stat-val" style="color:var(--blue)">' + aktywne.length + '</div><div class="stat-lbl">Aktywnych</div></div>'
+    + '<div class="stat-box"><div class="stat-val" style="color:var(--green)">' + zakonczone.length + '</div><div class="stat-lbl">Zakończonych</div></div>'
+    + '<div class="stat-box"><div class="stat-val" style="color:var(--red)">' + anulowane.length + '</div><div class="stat-lbl">Anulowanych</div></div>'
+    + '<div class="stat-box"><div class="stat-val">' + (stats.dzis_sztuk||0) + '</div><div class="stat-lbl">Sztuk dziś</div></div>'
+    + '</div>';
+
+  // Raport PDF zleceń
+  html += '<div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:8px">📄 Raport PDF zleceń</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:end">'
+        + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Od</div>'
+        + '<input type="date" id="raport-od" value="' + (ro.od||getTodayMinus(30)) + '" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px;box-sizing:border-box"></div>'
+        + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Do</div>'
+        + '<input type="date" id="raport-do" value="' + (ro.do||getToday()) + '" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px;box-sizing:border-box"></div>'
+        + '<button class="btn btn-accent" style="padding:8px 14px;white-space:nowrap" onclick="generateRaportZleceniaPDF()">📥 Generuj PDF</button>'
+        + '</div></div>';
+
+  html += '<div class="section-hdr">📋 Historia zleceń – kliknij po szczegóły</div>';
+
+  const wszystkie = [...aktywne, ...zakonczone, ...anulowane]
+    .filter((z,i,a) => a.findIndex(x=>x.id===z.id)===i)
+    .sort((a,b) => (b.id||0)-(a.id||0));
+
+  if (!wszystkie.length) {
+    html += '<div class="empty">Brak zleceń</div>';
+  } else {
+    wszystkie.forEach(z => {
+      const isZak = z.status === 'zakonczone';
+      const isAnu = z.status === 'anulowane';
+      const przet = z.termin && new Date(z.termin) < new Date() && !isZak && !isAnu;
+      const prog  = z.op_total > 0 ? Math.round((z.op_done/z.op_total)*100) : 0;
+      const wartosc = (z.cena_brutto_szt||0)*(z.ilosc_sztuk||0);
+      const border  = przet ? 'var(--red)' : isZak ? 'var(--green)' : isAnu ? 'var(--dim)' : '';
+      html += '<div class="card" style="cursor:pointer;' + (border?'border-color:'+border+';':'') + '"'
+            + ' onclick="openZlecenieModal(' + z.id + ')">'
+            + '<div class="card-header">'
+            + '<div style="flex:1;min-width:0">'
+            + '<div class="card-title">' + z.numer + (przet ? ' <span class="badge badge-red">⚠</span>' : '') + '</div>'
+            + '<div class="card-sub">' + z.nazwa + '</div>'
+            + (z.termin ? '<div class="card-sub">📅 ' + fmtDate(z.termin) + '</div>' : '')
+            + '</div>'
+            + '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;margin-left:8px">'
+            + statusBadge(z.status)
+            + '<span style="font-size:11px;color:var(--dim)">' + (z.op_done||0) + '/' + (z.op_total||0) + ' op.</span>'
+            + (wartosc ? '<span style="font-size:11px;color:var(--accent)">' + fmtPLN(wartosc) + '</span>' : '')
+            + '</div></div>'
+            + '<div class="progress-wrap" style="margin-top:6px">'
+            + '<div class="progress-bar" style="width:' + prog + '%;background:' + (isZak?'var(--green)':prog>=100?'var(--green)':'var(--accent)') + '"></div>'
+            + '</div>'
+            + '<div style="font-size:11px;color:var(--dim);margin-top:4px;display:flex;justify-content:space-between">'
+            + '<span>' + prog + '% · ' + (z.sztuki_wykonane||0) + '/' + z.ilosc_sztuk + ' szt.</span>'
+            + '<span style="color:var(--accent)">▶ szczegóły</span>'
+            + '</div></div>';
+    });
+  }
+
+  // Modal szczegółów zlecenia
+  if (state.zlecenieModal) {
+    const m = state.zlecenieModal;
+    html += '<div class="modal-overlay" onclick="if(event.target===this)setState({zlecenieModal:null})">'
+          + '<div class="modal" style="max-height:85vh;overflow-y:auto">'
+          + '<button class="modal-close" onclick="setState({zlecenieModal:null})">×</button>'
+          + '<div style="font-size:16px;font-weight:700;margin-bottom:4px">' + (m.numer||'') + '</div>'
+          + '<div style="color:var(--dim);font-size:13px;margin-bottom:14px">' + (m.nazwa||'') + '</div>';
+
+    if (m.loading) {
+      html += '<div style="text-align:center;padding:20px;color:var(--dim)">⏳ Ładowanie...</div>';
+    } else {
+      if (m.koszt_total != null) {
+        const kosztProd = m.koszt_produktow || 0;
+        const kosztZbr = m.koszt_zbrojenia || 0;
+        const kosztTotal = (m.koszt_total||0) + kosztProd + kosztZbr;
+        const zysk = (m.wartosc||0) - kosztTotal;
+        const kolor = zysk >= 0 ? 'var(--green)' : 'var(--red)';
+        html += '<div style="background:var(--entry);border-radius:8px;padding:12px;margin-bottom:14px">'
+              + '<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:8px">💰 Podsumowanie finansowe</div>'
+              + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:13px">'
+              + '<span style="color:var(--dim)">Wartość zlecenia</span><span style="color:var(--accent);font-weight:700">' + fmtPLN(m.wartosc||0) + '</span>'
+              + '<span style="color:var(--dim)">Koszt pracy</span><span>' + fmtPLN(m.koszt_total||0) + '</span>'
+              + (kosztZbr > 0 ? '<span style="color:var(--orange)">⚙ Koszt zbrojenia</span><span style="color:var(--orange)">' + fmtPLN(kosztZbr) + '</span>' : '')
+              + (kosztProd > 0 ? '<span style="color:var(--dim)">Koszt produktów</span><span>' + fmtPLN(kosztProd) + '</span>' : '')
+              + (kosztTotal !== (m.koszt_total||0) ? '<span style="color:var(--dim)">Koszt łącznie</span><span style="font-weight:700">' + fmtPLN(kosztTotal) + '</span>' : '')
+              + '<span style="color:var(--dim)">Zysk</span><span style="color:' + kolor + ';font-weight:700">' + fmtPLN(zysk) + '</span>'
+              + '</div></div>';
+        // Tabela produktów zlecenia
+        if (m.produkty && m.produkty.length) {
+          html += '<div style="background:var(--entry);border-radius:8px;padding:12px;margin-bottom:14px">'
+                + '<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:8px">🛒 Produkty / Zakupy</div>';
+          m.produkty.forEach(p => {
+            const w = (parseFloat(p.ilosc)||0)*(parseFloat(p.cena)||0);
+            html += '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid rgba(46,53,72,.3)">'
+                  + '<span>' + p.nazwa + '</span>'
+                  + '<span style="color:var(--dim)">' + p.ilosc + ' szt. × ' + fmtPLN(p.cena) + '</span>'
+                  + '<span style="color:var(--accent);font-weight:600">' + fmtPLN(w) + '</span>'
+                  + '</div>';
+          });
+          html += '</div>';
+        }
+      }
+
+      const sesje = m.sesje || [];
+      if (sesje.length) {
+        const ops = {};
+        sesje.forEach(s => {
+          const k = (s.kolejnosc||999) + '::' + (s.op_nazwa||'Inne');
+          if (!ops[k]) ops[k] = {sesje:[], total_sec:0, total_szt:0, kolejnosc:s.kolejnosc||999, nazwa:s.op_nazwa||'Inne'};
+          let el = 0;
+          if (s.start_time && s.end_time) {
+            el = (parseServerDT(s.end_time)-parseServerDT(s.start_time))/1000;
+            (JSON.parse(s.pauzy||'[]')).forEach(p=>{if(p.koniec)el-=(parseServerDT(p.koniec)-parseServerDT(p.start))/1000;});
+            el = Math.max(0, el);
+          }
+          ops[k].sesje.push({...s, elapsed_sec:el});
+          ops[k].total_sec += el;
+          ops[k].total_szt += s.ilosc_sztuk||0;
+        });
+
+        Object.values(ops).sort((a,b)=>a.kolejnosc-b.kolejnosc).forEach(op => {
+          const normMin = op.sesje[0]?.czas_norma||null;
+          const wydPct = normMin && op.total_szt>0 ? Math.round((normMin*op.total_szt)/(op.total_sec/60)*100) : null;
+          const wKolor = wydPct===null?'var(--dim)':wydPct>=90?'var(--green)':wydPct>=70?'var(--orange)':'var(--red)';
+          const kosztOp = op.sesje.reduce((a,s)=>a+(s.koszt_sesji||0),0);
+          html += '<div style="margin-bottom:10px;border:1px solid var(--border);border-radius:8px;overflow:hidden">'
+                + '<div style="background:var(--entry);padding:8px 12px;display:flex;justify-content:space-between;align-items:center">'
+                + '<div style="font-weight:600;font-size:13px">' + (op.kolejnosc<999?op.kolejnosc+'. ':'') + op.nazwa + '</div>'
+                + '<div style="font-size:11px;color:var(--dim);text-align:right">'
+                + fmtTime(Math.round(op.total_sec)) + ' · ' + op.total_szt + ' szt.'
+                + (wydPct!==null?' · <span style="color:'+wKolor+'">'+wydPct+'%</span>':'')
+                + (kosztOp?' · <span style="color:var(--accent)">'+fmtPLN(kosztOp)+'</span>':'')
+                + '</div></div>';
+          op.sesje.forEach(s => {
+            const dt = s.end_time ? (s.end_time||'').substring(0,16).replace('T',' ') : '—';
+            const normMin = s.czas_norma || op.sesje[0]?.czas_norma || 0;
+            const sztuk = s.ilosc_sztuk || 1;
+            const elapsedMin = s.elapsed_sec / 60;
+            // norma = czas na 1 szt. – porównujemy śr. czas/szt z normą
+            const avgSecPerPiece = Math.round(s.elapsed_sec / sztuk);
+            const avgMinPerPiece = elapsedMin / sztuk;
+            const czasPrzekroczony = normMin > 0 && avgMinPerPiece > normMin;
+            const timeColor = czasPrzekroczony ? 'var(--red)' : 'var(--green)';
+            const rowBg = czasPrzekroczony ? 'background:rgba(231,76,60,0.08);' : '';
+            html += '<div style="padding:7px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;' + rowBg + '">'
+                  + '<div><div style="font-size:13px;font-weight:500">' + (s.full_name||'—') + (czasPrzekroczony?' <span style="font-size:10px;color:var(--red);font-weight:700">⚠ PRZEKROCZONO</span>':'') + '</div>'
+                  + '<div style="font-size:11px;color:var(--dim)">🕐 ' + dt + '</div>'
+                  + (s.uwagi?'<div style="font-size:11px;color:var(--orange)">💬 '+s.uwagi+'</div>':'')
+                  + '</div><div style="text-align:right">'
+                  + '<div style="font-family:Consolas;color:' + timeColor + ';font-size:14px;font-weight:700">' + fmtTime(avgSecPerPiece) + '<span style="font-family:inherit;font-size:10px;color:var(--dim);font-weight:400"> /szt.</span></div>'
+                  + '<div style="font-size:11px;color:var(--dim)">łącznie: ' + fmtTime(Math.round(s.elapsed_sec)) + ' · ' + sztuk + ' szt.</div>'
+                  + (normMin?'<div style="font-size:10px;color:var(--dim)">norma: ' + normMin + ' min/szt.</div>':'')
+                  + (s.koszt_sesji?'<div style="font-size:11px;color:var(--accent)">'+fmtPLN(s.koszt_sesji)+'</div>':'')
+                  + '</div></div>';
+          });
+          html += '</div>';
+        });
+      } else {
+        html += '<div class="empty">Brak zarejestrowanych sesji dla tego zlecenia</div>';
+      }
+    }
+    const canDelete = state.user?.role === 'admin' || state.user?.role === 'majster';
+    html += '<div style="display:flex;gap:8px;margin-top:12px">';
+    if (canDelete) {
+      html += '<button class="btn btn-red" style="flex:1" onclick="deleteZlecenieFromModal(' + m.id + ')">🗑 Usuń zlecenie</button>';
+    }
+    html += '<button class="btn btn-outline" style="flex:1" onclick="setState({zlecenieModal:null})">Zamknij</button>';
+    html += '</div></div></div>';
+  }
+
+  return html;
+}
+
+async function deleteZlecenieFromModal(zid) {
+  if (!confirm('Na pewno usunąć to zlecenie? Zostaną usunięte wszystkie sesje i operacje!')) return;
+  try {
+    await del('/api/zlecenia/' + zid);
+    setState({zlecenieModal: null});
+    await loadMajster();
+    alert('Zlecenie zostało usunięte.');
+  } catch(e) {
+    alert('Błąd usuwania: ' + e.message);
+  }
+}
+
+
+async function openZlecenieModal(zid) {
+  const all = [...(state.majsterStats?.zlecenia||[]), ...(state.majsterStats?.wszystkie_zlecenia||[])];
+  const z = all.find(x=>x.id===zid) || {id:zid, numer:'#'+zid, nazwa:'', cena_brutto_szt:0, ilosc_sztuk:0};
+  setState({zlecenieModal:{id:zid, numer:z.numer, nazwa:z.nazwa,
+    wartosc:(z.cena_brutto_szt||0)*(z.ilosc_sztuk||0), loading:true, sesje:null, koszt_total:null}});
+  try {
+    const data = await get('/api/zlecenia/' + zid + '/szczegoly');
+    setState({zlecenieModal:{...state.zlecenieModal, loading:false,
+      sesje:data.sesje, koszt_total:data.koszt_total, koszt_produktow:data.koszt_produktow||0,
+      koszt_zbrojenia:data.koszt_zbrojenia||0,
+      produkty:data.produkty||[], wartosc:data.wartosc||state.zlecenieModal.wartosc}});
+  } catch(e) {
+    setState({zlecenieModal:{...state.zlecenieModal, loading:false, sesje:[]}});
+  }
+}
+
+
+function renderMajsterWydajnosc() {
+  const w = state.wydajnoscMajster;
+  const okres = state.wydajnoscOkres;
+  const okresLabels = {dzis:'Dziś', tydzien:'7 dni', miesiac:'30 dni'};
+  const rwo = state.raportWydOkres;
+
+  let html = `
+  <div class="chip-row">
+    ${Object.entries(okresLabels).map(([k,v]) =>
+      `<div class="chip ${okres===k?'active':''}" onclick="loadWydajnoscMajster('${k}')">${v}</div>`
+    ).join('')}
+  </div>`;
+
+  // Raport PDF wydajności
+  html += '<div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:8px">📄 Raport PDF wydajności</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:6px;align-items:end">'
+        + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Od</div>'
+        + '<input type="date" id="rwd-od" value="' + (rwo.od||getTodayMinus(7)) + '" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px;box-sizing:border-box"></div>'
+        + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Do</div>'
+        + '<input type="date" id="rwd-do" value="' + (rwo.do||getToday()) + '" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px;box-sizing:border-box"></div>'
+        + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Typ raportu</div>'
+        + '<select id="rwd-typ" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px">'
+        + '<option value="skrocony" ' + (state.raportWydTyp==='skrocony'?'selected':'') + '>Skrócony</option>'
+        + '<option value="pelny" ' + (state.raportWydTyp==='pelny'?'selected':'') + '>Pełny</option>'
+        + '</select></div>'
+        + '<button class="btn btn-accent" style="padding:8px 14px;white-space:nowrap" onclick="generateRaportWydajnoscPDF()">📥 Generuj PDF</button>'
+        + '</div></div>';
+
+  // Panel backupu danych
+  html += '<div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:8px">🛡 Backup danych (ochrona przed utratą po restarcie)</div>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1e8a4c;color:#fff" onclick="adminBackupNow()">💾 Zapisz backup teraz</button>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1a73e8;color:#fff" onclick="adminBackupDownload()">⬇ Pobierz backup</button>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:var(--orange,#e67e00);color:#fff" onclick="adminBackupRestore()">⬆ Wczytaj backup z serwera</button>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#7b3fa0;color:#fff" onclick="adminBackupRestoreFromDisk()">📂 Wczytaj backup z dysku</button>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px" onclick="adminBackupStatus()">ℹ Status</button>'
+        + '</div>'
+        + '<div id="backup-status-msg" style="margin-top:6px;font-size:11px;color:var(--dim)">✅ Backup zapisywany automatycznie przy każdej zmianie sesji (start/stop/pauza) oraz co 2 min jako fallback.</div>'
+        + '<div style="margin-top:3px;font-size:10px;color:var(--dim)">🔁 Auto-monitoring resetu serwera aktywny – dane zostaną przywrócone automatycznie po restarcie.</div>'
+        + '</div>';
+
+  if (!w) {
+    html += `<div class="empty">⏳ Ładowanie danych wydajności...</div>`;
+    return html;
+  }
+
+  if (w.error) {
+    html += `<div class="error-banner">⚠ Błąd ładowania danych: ${w.error}</div>`;
+    html += `<button class="btn-outline" onclick="loadWydajnoscMajster()">🔄 Spróbuj ponownie</button>`;
+    return html;
+  }
+
+  if (!w.pracownicy.length) {
+    html += `<div class="empty">Brak danych za wybrany okres</div>`;
+    return html;
+  }
+
+  html += `<div class="section-hdr">🏆 Ranking pracowników – ${okresLabels[okres]}</div>`;
+
+  w.pracownicy.forEach((p, idx) => {
+    const medal = idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':'';
+    const wydPct = p.normy_total > 0 ? Math.round(p.normy_ok/p.normy_total*100) : null;
+    const barColor = wydPct===null ? 'var(--dim)' : wydPct>=90 ? 'var(--green)' : wydPct>=70 ? 'var(--orange)' : 'var(--red)';
+    const expanded = state.majsterExpandedUser === p.user_id;
+
+    html += `
+    <div class="card" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer"
+           onclick="setState({majsterExpandedUser: ${expanded ? 'null' : p.user_id}})">
+        <div>
+          <div style="font-weight:700">${medal} ${p.full_name}</div>
+          <div style="font-size:12px;color:var(--dim)">
+            ${p.sesji} sesji | ${p.sztuki} szt. | ${p.godz}h
+            ${wydPct!==null ? ` | normy: <span style="color:${barColor}">${wydPct}%</span>` : ''}
+            ${p.koszt_total ? ` | koszt: <span style="color:var(--green);font-weight:600">${(p.koszt_total).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</span>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          ${wydPct !== null ? `
+          <div style="text-align:right">
+            <div style="font-size:20px;font-weight:700;color:${barColor}">${wydPct}%</div>
+            <div style="font-size:10px;color:var(--dim)">${p.normy_ok}/${p.normy_total} norm</div>
+          </div>` : ''}
+          <span style="color:var(--dim)">${expanded?'▲':'▼'}</span>
+        </div>
+      </div>
+      ${wydPct !== null ? `
+      <div class="wyd-bar-wrap" style="margin-top:8px">
+        <div class="wyd-bar" style="width:${wydPct}%;background:${barColor}"></div>
+      </div>` : ''}
+      ${expanded && p.sesje.length ? `
+      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Sesje (${p.sesje.length}):</div>
+        ${p.sesje.slice(0,15).map(s => {
+          const wColor = s.wyd_pct===null ? 'var(--dim)' : s.wyd_pct>=90 ? 'var(--green)' : s.wyd_pct>=70 ? 'var(--orange)' : 'var(--red)';
+          const avgMin = s.ilosc_sztuk > 0 ? (s.czas_min / s.ilosc_sztuk).toFixed(1) : s.czas_min;
+          return `
+          <div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.op_nazwa}</div>
+                <div style="font-size:11px;color:var(--accent)">📋 ${s.zl_numer}${s.zl_nazwa && s.zl_nazwa!==s.zl_numer ? ' – '+s.zl_nazwa : ''}</div>
+                <div style="font-size:11px;color:var(--dim)">📅 ${s.data||'—'} | 🏭 ${s.stanowisko||'—'} | 📦 ${s.ilosc_sztuk||0} szt.</div>
+              </div>
+              <div style="text-align:right;margin-left:8px;white-space:nowrap">
+                <div style="font-family:Consolas;font-size:13px;font-weight:700;color:var(--text)">${avgMin}<span style="font-size:10px;color:var(--dim);font-weight:400"> min/szt</span></div>
+                ${s.norma_min?`<div style="font-size:10px;color:var(--dim)">norma: ${s.norma_min} min</div>`:''}
+                ${s.wyd_pct!==null?`<div style="font-weight:700;font-size:14px;color:${wColor}">${s.wyd_pct}%</div>`:''}
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+    </div>`;
+  });
+
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: MAGAZYN
+// ══════════════════════════════════════════════════════════════
+function renderMagazyn() {
+  if (state.loading) return '<div class="spinner">⏳</div>';
+  let html = `<div class="section-hdr">📦 Operacje zakończone – do transportu (${state.transportOps.length})</div>`;
+  if (!state.transportOps.length) {
+    html += `<div class="card" style="text-align:center;padding:30px">
+      <div style="font-size:40px;margin-bottom:10px">✅</div>
+      <div style="color:var(--green);font-size:16px;font-weight:600">Brak operacji do transportu</div>
+    </div>`;
+  } else {
+    state.transportOps.forEach(op => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${op.kolejnosc}. ${op.nazwa}</div>
+            <div class="card-sub">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
+          </div>
+          <span class="badge badge-green">✅ ukończona</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;margin-top:6px">
+          <span style="color:var(--dim)">🏭 Stanowisko</span><span>${op.stanowisko||'—'}</span>
+          <span style="color:var(--dim)">📦 Wykonano</span><span style="color:var(--green);font-weight:600">${op.ilosc_wykonana}/${op.ilosc_sztuk} szt.</span>
+        </div>
+      </div>`;
+    });
+  }
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMagazynier()">🔄 Odśwież</button>`;
+  return html;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: ZLECENIA (planowanie)
+// ══════════════════════════════════════════════════════════════
+function renderZlecenia() {
+  if (state.loading) return '<div class="spinner">⏳</div>';
+
+  const role = state.user?.role;
+  const canEdit = ['admin','technolog','majster'].includes(role);
+
+  let html = '';
+  if (canEdit) {
+    html += `<button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({zlecenieModal:{}})">+ Nowe zlecenie</button>`;
+  }
+
+  const zl = state.zlecenia || [];
+  if (!zl.length) {
+    html += `<div class="empty">Brak zleceń</div>`;
+  } else {
+    zl.forEach(z => {
+      const przeterminowane = z.termin && new Date(z.termin) < new Date() && z.status !== 'zakonczone';
+      html += `
+      <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
+            <div class="card-sub">${z.nazwa}</div>
+            ${z.termin ? `<div class="card-sub">📅 ${fmtDate(z.termin)}</div>` : ''}
+            ${(() => { if (!z.pozostale_min || z.status==='zakonczone') return ''; const est = new Date(Date.now() + z.pozostale_min*60*1000); return `<div class="card-sub" style="color:var(--blue)">🕐 Szac. koniec: ${fmtEstimatedKoniec(est)}</div>`; })()}
+            <div class="card-sub">📦 ${z.ilosc_sztuk} szt. ${z.cena_brutto_szt ? '| '+fmtPLN(z.cena_brutto_szt)+'/szt' : ''}</div>
+          </div>
+          ${statusBadge(z.status)}
+        </div>
+        ${canEdit ? `
+        <div class="btn-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+          <button class="btn-sm btn-blue" onclick="openEditZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">✏ Edytuj</button>
+          <button class="btn-sm btn-accent" onclick="openOperacje(${JSON.stringify(z).replace(/"/g,'&quot;')})">🔧 Operacje</button>
+          <button class="btn-sm btn-green" onclick="loadKoszty(${z.id})">💰 Koszty</button>
+          <select style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px"
+                  onchange="changeZlecenieStatus(${z.id},this.value);this.value='${z.status}'">
+            <option value="${z.status}" disabled selected>▶ Status</option>
+            <option value="nowe">nowe</option>
+            <option value="w_toku">w_toku</option>
+            <option value="zakonczone">zakonczone</option>
+            <option value="anulowane">anulowane</option>
+          </select>
+          <button class="btn-sm btn-accent" onclick="showQRForZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">📷 QR</button>
+          <button class="btn-sm btn-green" onclick="printZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">🖨 Karta</button>
+          <button class="btn-sm btn-red" onclick="deleteZlecenie(${z.id})">🗑</button>
+        </div>` : ''}
+      </div>`;
+    });
+  }
+
+  // Modal QR gen
+  html += renderQRGenModal();
+
+  // Modal drukuj kartę
+  html += renderPrintModal();
+
+  // Modal zlecenie
+  if (state.zlecenieModal !== null) {
+    const z = state.zlecenieModal;
+    const isNew = !z.id;
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({zlecenieModal:null})">×</button>
+        <h3>${z.id ? '✏ Edytuj zlecenie' : '+ Nowe zlecenie'}</h3>
+        ${isNew ? `
+        <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+          <div style="font-size:11px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+            📂 Wczytaj istniejące zlecenie (autouzupełnienie)
+          </div>
+          <div style="display:flex;gap:8px">
+            <input id="zl-search" type="text" placeholder="Wpisz numer lub nazwę..." 
+                   style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;outline:none"
+                   oninput="filterZleceniaSearch(this.value)"
+                   onfocus="filterZleceniaSearch(this.value)">
+          </div>
+          <div id="zl-search-results" style="margin-top:6px"></div>
+          ${state.autofillOperacje && state.autofillOperacje.length ? `
+          <div style="margin-top:8px;background:rgba(39,174,96,0.08);border:1px solid var(--green);border-radius:6px;padding:8px 10px;">
+            <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:6px">
+              ✅ Zostaną skopiowane operacje (${state.autofillOperacje.length}):
+            </div>
+            ${state.autofillOperacje.map(op =>
+              `<div style="font-size:12px;padding:2px 0;border-bottom:1px solid rgba(39,174,96,0.2)">
+                <span style="color:var(--dim)">${op.kolejnosc}.</span>
+                <span style="margin-left:6px">${op.nazwa}</span>
+                ${op.stanowisko ? `<span style="color:var(--dim);margin-left:6px">| ${op.stanowisko}</span>` : ''}
+                ${op.czas_norma ? `<span style="color:var(--accent);margin-left:6px">| ${op.czas_norma} min/szt</span>` : ''}
+              </div>`
+            ).join('')}
+          </div>` : ''}
+        </div>` : ''}
+        <div class="field"><label>Numer</label><input id="zl-numer" type="text" value="${z.numer||''}"></div>
+        <div class="field"><label>Nazwa</label><input id="zl-nazwa" type="text" value="${z.nazwa||''}"></div>
+        <div class="field"><label>Opis</label><textarea id="zl-opis">${z.opis||''}</textarea></div>
+        <div class="field"><label>Termin</label><input id="zl-termin" type="date" value="${z.termin||''}"></div>
+        <div class="field"><label>Ilość sztuk</label><input id="zl-ilosc" type="number" value="${z.ilosc_sztuk||1}" min="1"></div>
+        <div class="field"><label>Cena brutto/szt (zł)</label><input id="zl-cena" type="number" step="0.01" value="${z.cena_brutto_szt||0}"></div>
+        <div class="field">
+          <label>Materiał od klienta</label>
+          <select id="zl-mat">
+            <option value="0" ${!z.material_od_klienta?'selected':''}>Nie</option>
+            <option value="1" ${z.material_od_klienta?'selected':''}>Tak</option>
+          </select>
+        </div>
+        ${z.id ? renderProduktyZleceniaForm(z.id) : '<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">💡 Zapisz zlecenie, aby móc dodać produkty/zakupy</div>'}
+        <button class="btn btn-accent" onclick="saveZlecenieForm(${z.id||0})">💾 Zapisz</button>
+      </div>
+    </div>`;
+  }
+
+  // Modal operacje
+  if (state.operacjeModal) {
+    html += renderOperacjeModal();
+  }
+
+  // Modal koszty
+  if (state.zlecenieKoszty) {
+    html += renderKosztyModal();
+  }
+
+  return html;
+}
+
+function filterZleceniaSearch(query) {
+  const container = document.getElementById('zl-search-results');
+  if (!container) return;
+  const q = query.trim().toLowerCase();
+  const zl = state.zlecenia || [];
+  const filtered = q.length < 1 ? [] : zl.filter(z =>
+    z.numer.toLowerCase().includes(q) || z.nazwa.toLowerCase().includes(q)
+  ).slice(0, 8);
+  if (!filtered.length) { container.innerHTML = ''; return; }
+  container.innerHTML = filtered.map(z => `
+    <div onclick="autofillZlecenie(${z.id})"
+         style="padding:8px 10px;cursor:pointer;border-radius:6px;border:1px solid var(--border);
+                background:var(--panel);margin-bottom:4px;font-size:13px;
+                display:flex;justify-content:space-between;align-items:center"
+         onmouseover="this.style.borderColor='var(--accent)'"
+         onmouseout="this.style.borderColor='var(--border)'">
+      <div>
+        <span style="font-weight:700;color:var(--accent)">${z.numer}</span>
+        <span style="color:var(--dim);margin-left:8px">${z.nazwa}</span>
+      </div>
+      <span style="font-size:11px;color:var(--dim)">📋 wczytaj</span>
+    </div>`).join('');
+}
+
+function autofillZlecenie(id) {
+  const z = (state.zlecenia||[]).find(x => x.id === id);
+  if (!z) return;
+  // Numer: sugeruj nowy numer na podstawie wzorca (z sufiksem -K + pełny timestamp)
+  const baseNumer = (z.numer || '').replace(/-K\d+$/, '');
+  const numerSufx = baseNumer + '-K' + Date.now();
+  // Zapisz dane autouzupełnienia do state.zlecenieModal – dzięki temu
+  // po re-renderze (np. po załadowaniu operacji) pola nie zostaną wyczyszczone
+  const autofillData = {
+    numer: numerSufx,
+    nazwa: z.nazwa || '',
+    opis: z.opis || '',
+    termin: z.termin ? z.termin.substring(0,10) : '',
+    ilosc_sztuk: z.ilosc_sztuk || 1,
+    cena_brutto_szt: z.cena_brutto_szt || 0,
+    material_od_klienta: z.material_od_klienta || 0,
+  };
+  // Aktualizuj zlecenieModal (bez id – to nowe zlecenie) tak aby re-render
+  // użył tych wartości zamiast pustych
+  setState({
+    zlecenieModal: autofillData,
+    autofillSourceId: id,
+    autofillOperacje: [],
+  });
+  // Focus na polu numeru po renderze
+  setTimeout(() => { const el = document.getElementById('zl-numer'); if (el) { el.focus(); el.select(); } }, 80);
+  // Załaduj operacje z wzorcowego zlecenia
+  fetchAutofillOperacje(id);
+}
+
+let _autofillToken = 0;
+
+async function fetchAutofillOperacje(zid) {
+  const myToken = ++_autofillToken;
+  try {
+    const ops = await get(`/api/zlecenia/${zid}/operacje`);
+    // Ignoruj wynik jeśli w międzyczasie wybrano inne zlecenie do autofill
+    if (myToken !== _autofillToken) return;
+    setState({autofillOperacje: ops});
+  } catch(e) {
+    if (myToken !== _autofillToken) return;
+    setState({autofillOperacje: []});
+  }
+}
+
+function renderProduktyZleceniaForm(zid) {
+  const produkty = state.produktyZlecenia || [];
+  const koszt = produkty.reduce((a, p) => a + (parseFloat(p.ilosc)||0)*(parseFloat(p.cena)||0), 0);
+  let html = '<div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">'
+    + '<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">🛒 Produkty / Zakupy pod zlecenie</div>';
+  if (produkty.length) {
+    produkty.forEach(p => {
+      const wartosc = (parseFloat(p.ilosc)||0)*(parseFloat(p.cena)||0);
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:12px">'
+        + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + p.nazwa + '</span>'
+        + '<span style="color:var(--dim);white-space:nowrap">' + p.ilosc + ' szt. × ' + fmtPLN(p.cena) + '</span>'
+        + '<span style="color:var(--accent);font-weight:700;white-space:nowrap;min-width:70px;text-align:right">' + fmtPLN(wartosc) + '</span>'
+        + '<button class="btn-sm btn-red" style="padding:2px 7px;font-size:11px" onclick="deleteProduktZlecenia(' + zid + ',' + p.id + ')">✕</button>'
+        + '</div>';
+    });
+    html += '<div style="border-top:1px solid var(--border);padding-top:6px;font-size:12px;display:flex;justify-content:space-between">'
+      + '<span style="color:var(--dim)">Łączny koszt produktów:</span>'
+      + '<span style="color:var(--accent);font-weight:700">' + fmtPLN(koszt) + '</span>'
+      + '</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--dim);margin-bottom:8px">Brak dodanych produktów</div>';
+  }
+  html += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:6px;margin-top:10px;align-items:end">'
+    + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Nazwa produktu</div>'
+    + '<input id="pr-zl-nazwa" type="text" placeholder="np. Frez R4, Wiertło..." style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px;box-sizing:border-box"></div>'
+    + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Ilość</div>'
+    + '<input id="pr-zl-ilosc" type="number" value="1" min="0.01" step="0.01" style="width:70px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px"></div>'
+    + '<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Cena (zł)</div>'
+    + '<input id="pr-zl-cena" type="number" value="0" min="0" step="0.01" style="width:80px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px"></div>'
+    + '</div>'
+    + '<button class="btn btn-green" style="margin-top:8px;padding:8px" onclick="addProduktZlecenia(' + zid + ')">+ Dodaj produkt</button>'
+    + '</div>';
+  return html;
+}
+
+async function loadProduktyZlecenia(zid) {
+  try {
+    const data = await get('/api/zlecenia/' + zid + '/produkty');
+    setState({produktyZlecenia: data});
+  } catch(e) { setState({produktyZlecenia: []}); }
+}
+
+async function addProduktZlecenia(zid) {
+  const nazwa = document.getElementById('pr-zl-nazwa')?.value?.trim();
+  if (!nazwa) { alert('Podaj nazwę produktu'); return; }
+  const ilosc = parseFloat(document.getElementById('pr-zl-ilosc')?.value)||1;
+  const cena = parseFloat(document.getElementById('pr-zl-cena')?.value)||0;
+  try {
+    await post('/api/zlecenia/' + zid + '/produkty', {zlecenie_id: zid, nazwa, ilosc, cena});
+    await loadProduktyZlecenia(zid);
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function deleteProduktZlecenia(zid, pid) {
+  if (!confirm('Usunąć produkt?')) return;
+  try {
+    await del('/api/zlecenia/' + zid + '/produkty/' + pid);
+    await loadProduktyZlecenia(zid);
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+
+function saveZlecenieForm(id) {
+  const data = {
+    numer: document.getElementById('zl-numer').value.trim(),
+    nazwa: document.getElementById('zl-nazwa').value.trim(),
+    opis: document.getElementById('zl-opis').value,
+    termin: document.getElementById('zl-termin').value || null,
+    ilosc_sztuk: parseInt(document.getElementById('zl-ilosc').value)||1,
+    cena_brutto_szt: parseFloat(document.getElementById('zl-cena').value)||0,
+    material_od_klienta: parseInt(document.getElementById('zl-mat').value)||0,
+  };
+  if (!data.numer||!data.nazwa) { alert('Numer i nazwa są wymagane'); return; }
+  if (id) data.id = id;
+  saveZlecenie(data);
+}
+
+async function openEditZlecenie(z) {
+  if (z && z.id) {
+    await loadProduktyZlecenia(z.id);
+  }
+  setState({zlecenieModal: z});
+}
+
+async function openOperacje(zlecenie) {
+  setState({operacjeModal:{zlecenie, operacje:[], loading:true}});
+  try {
+    const ops = await get(`/api/zlecenia/${zlecenie.id}/operacje`);
+    setState({operacjeModal:{zlecenie, operacje:ops, loading:false}});
+  } catch(e) { alert(e.message); }
+}
+
+function renderOperacjeModal() {
+  const m = state.operacjeModal;
+  if (!m) return '';
+  const zl = m.zlecenie;
+  const ops = m.operacje || [];
+  let html = `
+  <div class="modal-overlay">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({operacjeModal:null})">×</button>
+      <h3>🔧 Operacje – ${zl.numer}</h3>
+      <p style="color:var(--dim);font-size:13px;margin-bottom:16px">${zl.nazwa}</p>`;
+
+  if (m.loading) {
+    html += `<div class="spinner">⏳</div>`;
+  } else {
+    ops.forEach((op,i) => {
+      html += `
+      <div class="card" style="padding:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:600">${op.kolejnosc}. ${op.nazwa}</div>
+            <div style="font-size:12px;color:var(--dim)">${op.stanowisko||'—'} ${op.czas_norma?'| norma: '+op.czas_norma+' min/szt':''} ${op.czas_zbrojenia_min?'<span style="color:var(--orange)">| ⚙ zbr: '+op.czas_zbrojenia_min+' min</span>':''}</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="editOperacja(${JSON.stringify(op).replace(/"/g,'&quot;')})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteOp(${op.id},${zl.id})">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    });
+
+    html += `
+    <div class="card" style="border-color:var(--accent)">
+      <div class="section-hdr" style="margin-bottom:10px">+ Dodaj operację</div>
+      <div class="field"><label>Nazwa</label><input id="op-nazwa" type="text" placeholder="np. Toczenie wału"></div>
+      <div class="field"><label>Kolejność</label><input id="op-kol" type="number" value="${ops.length+1}" min="1"></div>
+      <div class="field"><label>Stanowisko/Operacja</label>
+        <select id="op-stan" onchange="updateZbrojenieField()">
+          <option value="">— wybierz —</option>
+          ${(state.stawki||[]).map(s=>`<option value="${s.stanowisko}" data-zbr="${s.zbrojenie_aktywne||0}" data-zbr-stawka="${s.zbrojenie_stawka_godz||0}">${s.stanowisko}${s.zbrojenie_aktywne?' ⚙':''}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field"><label>Czas (min/szt)</label><input id="op-norma" type="number" step="0.5" value="0" min="0"></div>
+      <div id="zbrojenie-field-wrap" style="display:none">
+        <div style="background:rgba(243,156,18,0.1);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+          <div style="font-size:12px;color:var(--orange);font-weight:700;margin-bottom:6px">⚙ Zbrojenie (1× na operację, niezależnie od ilości sztuk)</div>
+          <div class="field" style="margin-bottom:0"><label>Czas zbrojenia (min)</label><input id="op-zbrojenie" type="number" step="1" value="0" min="0"></div>
+        </div>
+      </div>
+      <div class="field"><label>Opis czynności</label><textarea id="op-opis" style="min-height:60px"></textarea></div>
+      <button class="btn btn-green" onclick="addOperacja(${zl.id})">+ Dodaj operację</button>
+    </div>`;
+  }
+
+  html += `</div></div>`;
+  return html;
+}
+
+function updateZbrojenieField() {
+  const s = document.getElementById('op-stan');
+  const wrap = document.getElementById('zbrojenie-field-wrap');
+  if (!s || !wrap) return;
+  const selOpt = s.options[s.selectedIndex];
+  const zbrAkt = selOpt ? selOpt.getAttribute('data-zbr') : '0';
+  wrap.style.display = (zbrAkt === '1') ? 'block' : 'none';
+}
+
+async function addOperacja(zlecenieId) {
+  const nazwa = document.getElementById('op-nazwa')?.value?.trim();
+  if (!nazwa) { alert('Podaj nazwę operacji'); return; }
+  try {
+    await post('/api/operacje', {
+      zlecenie_id: zlecenieId,
+      nazwa,
+      kolejnosc: parseInt(document.getElementById('op-kol').value)||1,
+      stanowisko: document.getElementById('op-stan').value,
+      czas_norma: parseFloat(document.getElementById('op-norma').value)||0,
+      opis_czynnosci: document.getElementById('op-opis').value,
+      czas_zbrojenia_min: parseFloat(document.getElementById('op-zbrojenie')?.value)||0,
+    });
+    await openOperacje(state.operacjeModal.zlecenie);
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+
+async function deleteOp(opId, zlecenieId) {
+  if (!confirm('Usunąć operację?')) return;
+  try {
+    await del(`/api/operacje/${opId}`);
+    await openOperacje(state.operacjeModal.zlecenie);
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+
+function showQRForZlecenie(z) {
+  if (!z.qr_code) { alert('Brak kodu QR dla zlecenia'); return; }
+  setState({qrGenModal:true, qrGenKod:z.qr_code, qrGenTitle: z.numer + ' – ' + z.nazwa});
+}
+
+function renderQRGenModal() {
+  if (!state.qrGenModal) return '';
+  const kod = state.qrGenKod;
+  const title = state.qrGenTitle || kod;
+  return `
+  <div class="modal-overlay">
+    <div class="modal" style="text-align:center">
+      <button class="modal-close" onclick="setState({qrGenModal:false})">×</button>
+      <h3>📷 Kod QR zlecenia</h3>
+      <div style="font-family:Consolas;font-size:13px;color:var(--accent);margin-bottom:4px">${title}</div>
+      <div style="font-family:Consolas;font-size:11px;color:var(--dim);margin-bottom:16px">${kod}</div>
+      <canvas id="qr-canvas" style="background:white;padding:10px;border-radius:10px;display:block;margin:0 auto"></canvas>
+      <div id="qr-err" style="display:none;color:var(--red);font-size:13px;margin-top:8px">Błąd generowania QR</div>
+      <div style="font-size:12px;color:var(--dim);margin-top:12px">Zrób zdjęcie lub wydrukuj</div>
+      <button class="btn btn-outline" style="margin-top:16px;width:auto;padding:10px 24px" onclick="setState({qrGenModal:false})">Zamknij</button>
+    </div>
+  </div>`;
+}
+
+function drawQRCanvas(kod) {
+  // Simple QR rendering via server fetch with auth header, drawn onto canvas
+  const canvas = document.getElementById('qr-canvas');
+  if (!canvas) return;
+  const url = `${SERVER_URL.replace(/\/$/,'')}/api/qr/${encodeURIComponent(kod)}`;
+  fetch(url, {headers: {'x-api-key': API_KEY}})
+    .then(r => { if (!r.ok) throw new Error('HTTP '+r.status); return r.blob(); })
+    .then(blob => {
+      const img = new Image();
+      img.onload = () => {
+        canvas.width = img.width; canvas.height = img.height;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        URL.revokeObjectURL(img.src);
+      };
+      img.src = URL.createObjectURL(blob);
+    })
+    .catch(() => {
+      canvas.style.display = 'none';
+      const err = document.getElementById('qr-err');
+      if (err) err.style.display = 'block';
+    });
+}
+
+// ─── Karta zlecenia (druk) ────────────────────────────────────
+async function printZlecenie(z) {
+  let ops = [];
+  try { ops = await get(`/api/zlecenia/${z.id}/operacje`); } catch(e) {}
+  setState({printModal: {zlecenie: z, operacje: ops}});
+}
+
+function renderPrintModal() {
+  const m = state.printModal;
+  if (!m) return '';
+  const z = m.zlecenie;
+  const ops = m.operacje || [];
+
+  return `
+  <div class="modal-overlay" id="print-overlay">
+    <div class="modal" style="max-height:92vh;overflow-y:auto">
+      <button class="modal-close no-print" onclick="setState({printModal:null})">×</button>
+      <h3 class="no-print" style="margin-bottom:12px">🖨 Podgląd karty zlecenia</h3>
+
+      <div id="print-content" style="background:#fff;color:#000;padding:20px;border-radius:8px;border:1px solid #ddd">
+        <!-- NAGŁÓWEK -->
+        <div style="text-align:center;border-bottom:3px solid #000;padding-bottom:12px;margin-bottom:16px">
+          <div style="font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#555">Karta Zlecenia Produkcyjnego</div>
+          <div style="font-size:28px;font-weight:900;font-family:Consolas,monospace;margin:4px 0">${z.numer}</div>
+          <div style="font-size:16px;font-weight:600">${z.nazwa}</div>
+        </div>
+
+        <!-- INFO O ZLECENIU -->
+        <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px">
+          <tr style="background:#f5f5f5">
+            <td style="padding:7px 10px;font-weight:700;width:35%;border:1px solid #ccc">Ilość sztuk</td>
+            <td style="padding:7px 10px;border:1px solid #ccc;font-size:20px;font-weight:900;color:#000">${z.ilosc_sztuk} szt.</td>
+          </tr>
+          ${z.termin ? `<tr><td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Termin realizacji</td><td style="padding:7px 10px;border:1px solid #ccc">${fmtDate(z.termin)}</td></tr>` : ''}
+          ${z.opis ? `<tr><td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Opis</td><td style="padding:7px 10px;border:1px solid #ccc">${z.opis}</td></tr>` : ''}
+          <tr>
+            <td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Status</td>
+            <td style="padding:7px 10px;border:1px solid #ccc;text-transform:uppercase">${z.status}</td>
+          </tr>
+          <tr>
+            <td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Materiał od klienta</td>
+            <td style="padding:7px 10px;border:1px solid #ccc">${z.material_od_klienta ? '✓ Tak' : 'Nie'}</td>
+          </tr>
+        </table>
+
+        <!-- OPERACJE -->
+        ${ops.length ? `
+        <div style="font-weight:800;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #000;padding-bottom:4px">
+          Operacje produkcyjne (${ops.length})
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
+          <thead>
+            <tr style="background:#222;color:#fff">
+              <th style="padding:6px 8px;text-align:left;width:30px">Lp.</th>
+              <th style="padding:6px 8px;text-align:left">Operacja</th>
+              <th style="padding:6px 8px;text-align:left">Stanowisko</th>
+              <th style="padding:6px 8px;text-align:center">Norma</th>
+              <th style="padding:6px 8px;text-align:center">Wyk.</th>
+              <th style="padding:6px 8px;text-align:center">✓</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${ops.map((op,i) => `
+            <tr style="background:${i%2===0?'#f9f9f9':'#fff'}">
+              <td style="padding:7px 8px;border:1px solid #ddd;font-weight:700">${op.kolejnosc}</td>
+              <td style="padding:7px 8px;border:1px solid #ddd">
+                <div style="font-weight:600">${op.nazwa}</div>
+                ${op.opis_czynnosci ? `<div style="font-size:11px;color:#666;margin-top:2px">${op.opis_czynnosci}</div>` : ''}
+              </td>
+              <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
+              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center">${op.czas_norma||'—'} min</td>
+              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:60px"></td>
+              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:30px"></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>` : '<div style="color:#666;font-size:13px;margin-bottom:16px">Brak zdefiniowanych operacji</div>'}
+
+        <!-- QR KOD + PODPISY -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;border-top:2px solid #000;padding-top:12px;margin-top:8px">
+          <div>
+            ${z.qr_code ? `
+            <div style="margin-bottom:6px">
+              <div style="font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">KOD QR ZLECENIA</div>
+              <canvas id="print-qr-canvas" style="display:block;border:1px solid #ccc;padding:4px"></canvas>
+              <div style="font-family:Consolas;font-size:9px;margin-top:2px;color:#555">${z.qr_code}</div>
+            </div>` : ''}
+          </div>
+          <div style="text-align:right;font-size:12px">
+            <div style="margin-bottom:20px">
+              <div style="font-weight:700">Wydał</div>
+              <div style="border-top:1px solid #000;margin-top:20px;width:150px;text-align:center;padding-top:3px;font-size:10px">podpis i data</div>
+            </div>
+            <div>
+              <div style="font-weight:700">Przyjął</div>
+              <div style="border-top:1px solid #000;margin-top:20px;width:150px;text-align:center;padding-top:3px;font-size:10px">podpis i data</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="btn-row no-print" style="margin-top:14px">
+        <button class="btn btn-accent" onclick="doPrint()">🖨 Drukuj kartę</button>
+        <button class="btn btn-outline" onclick="setState({printModal:null})">Zamknij</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function doPrint() {
+  const content = document.getElementById('print-content');
+  if (!content) return;
+  // Convert QR canvas to img before printing
+  const qrCanvas = document.getElementById('print-qr-canvas');
+  let qrImgSrc = null;
+  if (qrCanvas && qrCanvas.width > 0) {
+    qrImgSrc = qrCanvas.toDataURL();
+  }
+  let html = content.innerHTML;
+  if (qrImgSrc) {
+    html = html.replace(
+      'id="print-qr-canvas"',
+      `style="display:none" id="print-qr-canvas-hidden"`
+    );
+    html += `<img src="${qrImgSrc}" style="position:absolute;left:0;top:0" />`;
+  }
+  const win = window.open('', '_blank', 'width=720,height:1020');
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>Karta zlecenia – ${state.printModal?.zlecenie?.numer||''}</title>
+    <style>
+      body{font-family:Arial,sans-serif;margin:10mm;background:#fff;}
+      @media print{body{margin:5mm;} @page{margin:10mm;}}
+    </style></head><body>${content.outerHTML}</body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 500);
+}
+
+// ─── Edycja operacji ─────────────────────────────────────────
+function editOperacja(op) {
+  const n = document.getElementById('op-nazwa');
+  const k = document.getElementById('op-kol');
+  const s = document.getElementById('op-stan');
+  const norma = document.getElementById('op-norma');
+  const opis = document.getElementById('op-opis');
+  const zbr = document.getElementById('op-zbrojenie');
+  const zbrWrap = document.getElementById('zbrojenie-field-wrap');
+  if (n) n.value = op.nazwa;
+  if (k) k.value = op.kolejnosc;
+  if (s) { s.value = op.stanowisko || ''; }
+  if (norma) norma.value = op.czas_norma || 0;
+  if (opis) opis.value = op.opis_czynnosci || '';
+  if (zbr) zbr.value = op.czas_zbrojenia_min || 0;
+  // show zbrojenie field if this stanowisko has zbrojenie active
+  if (zbrWrap && s) {
+    const selOpt = s.options[s.selectedIndex];
+    const zbrAkt = selOpt ? selOpt.getAttribute('data-zbr') : '0';
+    zbrWrap.style.display = (zbrAkt === '1' || op.czas_zbrojenia_min > 0) ? 'block' : 'none';
+  }
+  // swap button to update
+  const addBtn = document.querySelector('[onclick^="addOperacja"]');
+  if (addBtn) {
+    addBtn.textContent = '💾 Zapisz zmiany';
+    addBtn.setAttribute('onclick', `updateOperacja(${op.id}, ${state.operacjeModal.zlecenie.id})`);
+  }
+}
+
+async function updateOperacja(opId, zlecenieId) {
+  const nazwa = document.getElementById('op-nazwa')?.value?.trim();
+  if (!nazwa) { alert('Podaj nazwę operacji'); return; }
+  try {
+    await put(`/api/operacje/${opId}`, {
+      zlecenie_id: zlecenieId,
+      nazwa,
+      kolejnosc: parseInt(document.getElementById('op-kol').value)||1,
+      stanowisko: document.getElementById('op-stan').value,
+      czas_norma: parseFloat(document.getElementById('op-norma').value)||0,
+      opis_czynnosci: document.getElementById('op-opis')?.value||'',
+      czas_zbrojenia_min: parseFloat(document.getElementById('op-zbrojenie')?.value)||0,
+    });
+    await openOperacje(state.operacjeModal.zlecenie);
+  } catch(e) { alert('Błąd: '+e.message); }
+}
+
+async function loadKoszty(zlecenieId) {
+  setState({loading:true});
+  try {
+    const k = await get(`/api/zlecenia/${zlecenieId}/koszty`);
+    setState({zlecenieKoszty:k, loading:false});
+  } catch(e) { setState({loading:false}); alert(e.message); }
+}
+
+function renderKosztyProdukty(k) {
+  if (!k.koszt_produktow || k.koszt_produktow <= 0) return '';
+  let html = '<div style="background:var(--entry);border-radius:8px;padding:10px;margin-bottom:12px">'
+    + '<div class="section-hdr" style="margin-bottom:8px">🛒 Produkty / Zakupy</div>';
+  (k.produkty||[]).forEach(p => {
+    html += '<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid rgba(46,53,72,.3)">'
+          + '<span>' + p.nazwa + '</span>'
+          + '<span style="color:var(--dim)">' + p.ilosc + ' szt. × ' + fmtPLN(p.cena) + '</span>'
+          + '<span style="color:var(--accent);font-weight:600">' + fmtPLN(p.ilosc*p.cena) + '</span>'
+          + '</div>';
+  });
+  html += '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:6px">'
+        + '<span>Suma produktów</span><span style="color:var(--accent)">' + fmtPLN(k.koszt_produktow) + '</span>'
+        + '</div></div>';
+  return html;
+}
+
+
+function renderKosztyModal() {
+  const k = state.zlecenieKoszty;
+  if (!k) return '';
+  return `
+  <div class="modal-overlay">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({zlecenieKoszty:null})">×</button>
+      <h3>💰 Koszty – ${k.zlecenie.numer}</h3>
+      <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stat-box"><div class="stat-val" style="font-size:20px">${fmtPLN(k.total_koszty||k.total_koszt)}</div><div class="stat-lbl">Koszt łączny</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:20px">${fmtPLN(k.przychod)}</div><div class="stat-lbl">Przychód</div></div>
+        <div class="stat-box"><div class="stat-val" style="font-size:20px;color:${k.marza>=0?'var(--green)':'var(--red)'}">${fmtPLN(k.marza)}</div><div class="stat-lbl">Zysk / Marża</div></div>
+        <div class="stat-box"><div class="stat-val">${k.total_godz}h</div><div class="stat-lbl">Godz. pracy</div></div>
+      </div>
+      ${renderKosztyProdukty(k)}
+      ${k.koszt_zbrojenia > 0 ? `
+      <div style="background:rgba(243,156,18,0.1);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div class="section-hdr" style="margin-bottom:8px;color:var(--orange)">⚙ Zbrojenie</div>
+        ${(k.zbrojenia||[]).map(z => `
+        <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0">
+          <span style="color:var(--dim)">${z.czas_min} min @ ${fmtPLN(z.stawka_godz)}/h</span>
+          <span style="color:var(--orange);font-weight:600">${fmtPLN(z.koszt)}</span>
+        </div>`).join('')}
+        <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-top:6px;border-top:1px solid rgba(243,156,18,0.3);padding-top:6px">
+          <span>Suma zbrojenia</span><span style="color:var(--orange)">${fmtPLN(k.koszt_zbrojenia)}</span>
+        </div>
+      </div>` : ''}
+      <div class="section-hdr">Sesje pracy</div>
+      ${k.sesje.map(s => `
+      <div class="card" style="padding:10px;margin-bottom:6px">
+        <div style="font-weight:600;font-size:13px">${s.pracownik}</div>
+        <div style="font-size:12px;color:var(--dim)">${s.operacja} | ${s.stanowisko||'—'}</div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px">
+          <span>${s.godz}h @ ${fmtPLN(s.stawka_godz)}/h</span>
+          <span style="color:var(--accent)">${fmtPLN(s.koszt)}</span>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: ADMIN
+// ══════════════════════════════════════════════════════════════
+function renderAdmin() {
+  if (state.loading) return '<div class="spinner">⏳</div>';
+  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'stawki',label:'💰 Stawki'},{id:'katalog',label:'📦 Katalog'}];
+  let html = `
+  <div class="tabs">
+    ${subTabs.map(t => `<button class="tab ${state.adminTab===t.id?'active':''}"
+      onclick="setState({adminTab:'${t.id}'})">${t.label}</button>`).join('')}
+  </div>`;
+
+  if (state.adminTab === 'uzytkownicy') {
+    html += `
+    <button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({userModal:{}})">+ Nowy użytkownik</button>`;
+    (state.users||[]).forEach(u => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">👤 ${u.full_name}</div>
+            <div class="card-sub">@${u.username} | ${roleName(u.role)}</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="setState({userModal:${JSON.stringify(u).replace(/"/g,'&quot;')}})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteUser(${u.id})">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    });
+
+    if (state.userModal !== null) {
+      const u = state.userModal;
+      html += `
+      <div class="modal-overlay">
+        <div class="modal">
+          <button class="modal-close" onclick="setState({userModal:null})">×</button>
+          <h3>${u.id?'✏ Edytuj':'+ Nowy użytkownik'}</h3>
+          ${!u.id ? `<div class="field"><label>Login</label><input id="u-login" type="text" value="${u.username||''}"></div>` : ''}
+          <div class="field"><label>Imię i nazwisko</label><input id="u-name" type="text" value="${u.full_name||''}"></div>
+          <div class="field">
+            <label>Rola</label>
+            <select id="u-role">
+              ${['pracownik','majster','technolog','magazynier','admin'].map(r =>
+                `<option value="${r}" ${u.role===r?'selected':''}>${roleName(r)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>${u.id?'Nowe hasło (puste = bez zmiany)':'Hasło'}</label><input id="u-pass" type="password"></div>
+          <button class="btn btn-accent" onclick="saveUserForm(${u.id||0})">💾 Zapisz</button>
+        </div>
+      </div>`;
+    }
+  }
+
+  if (state.adminTab === 'stawki') {
+    html += `<button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({stawkaModal:{}})">+ Nowa stawka</button>`;
+    (state.stawki||[]).forEach(s => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${s.stanowisko}</div>
+            <div class="card-sub">${fmtPLN(s.stawka_godz)}/h</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="setState({stawkaModal:${JSON.stringify(s).replace(/"/g,'&quot;')}})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteStawka(${s.id})">🗑</button>
+          </div>
+        </div>
+        ${s.zbrojenie_aktywne ? `<div style="margin-top:6px;font-size:12px;color:var(--orange)">⚙ Zbrojenie: ${fmtPLN(s.zbrojenie_stawka_godz)}/h</div>` : ''}
+      </div>`;
+    });
+    if (state.stawkaModal !== null) {
+      const s = state.stawkaModal;
+      const zbrAkt = s.zbrojenie_aktywne ? true : false;
+      html += `
+      <div class="modal-overlay">
+        <div class="modal">
+          <button class="modal-close" onclick="setState({stawkaModal:null})">×</button>
+          <h3>${s.id?'✏ Edytuj stawkę':'+ Nowa stawka'}</h3>
+          <div class="field"><label>Stanowisko</label><input id="st-stan" type="text" value="${s.stanowisko||''}"></div>
+          <div class="field"><label>Stawka (zł/h)</label><input id="st-stawka" type="number" step="0.5" value="${s.stawka_godz||0}"></div>
+          <div class="field"><label>Opis</label><input id="st-opis" type="text" value="${s.opis||''}"></div>
+          <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+              <input type="checkbox" id="st-zbr-akt" ${zbrAkt?'checked':''} onchange="document.getElementById('zbr-stawka-wrap').style.display=this.checked?'block':'none'" style="width:18px;height:18px;cursor:pointer">
+              <label for="st-zbr-akt" style="font-size:14px;cursor:pointer">⚙ Aktywuj zbrojenie</label>
+            </div>
+            <div id="zbr-stawka-wrap" style="display:${zbrAkt?'block':'none'}">
+              <div class="field" style="margin-bottom:0"><label>Stawka zbrojenia (zł/h)</label><input id="st-zbr-stawka" type="number" step="0.5" min="0" value="${s.zbrojenie_stawka_godz||0}"></div>
+            </div>
+          </div>
+          <button class="btn btn-accent" onclick="saveStawkaForm(${s.id||0})">💾 Zapisz</button>
+        </div>
+      </div>`;
+    }
+  }
+
+  if (state.adminTab === 'katalog') {
+    html += `<button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({produktModal:{}})">+ Nowy produkt</button>`;
+    (state.katalog||[]).forEach(p => {
+      html += `
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">${p.nazwa}</div>
+            <div class="card-sub">${p.opis||'—'} | ${fmtPLN(p.cena_szt)}/szt | domyślnie: ${p.ilosc_domyslna} szt.</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-blue" onclick="setState({produktModal:${JSON.stringify(p).replace(/"/g,'&quot;')}})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteProdukt(${p.id})">🗑</button>
+          </div>
+        </div>
+      </div>`;
+    });
+    if (state.produktModal !== null) {
+      const p = state.produktModal;
+      html += `
+      <div class="modal-overlay">
+        <div class="modal">
+          <button class="modal-close" onclick="setState({produktModal:null})">×</button>
+          <h3>${p.id?'✏ Edytuj produkt':'+ Nowy produkt'}</h3>
+          <div class="field"><label>Nazwa</label><input id="pr-nazwa" type="text" value="${p.nazwa||''}"></div>
+          <div class="field"><label>Opis</label><textarea id="pr-opis">${p.opis||''}</textarea></div>
+          <div class="field"><label>Ilość domyślna</label><input id="pr-ilosc" type="number" value="${p.ilosc_domyslna||1}" min="1"></div>
+          <div class="field"><label>Cena (zł/szt)</label><input id="pr-cena" type="number" step="0.01" value="${p.cena_szt||0}"></div>
+          <button class="btn btn-accent" onclick="saveProduktForm(${p.id||0})">💾 Zapisz</button>
+        </div>
+      </div>`;
+    }
+  }
+
+  return html;
+}
+
+function saveUserForm(id) {
+  const data = {
+    full_name: document.getElementById('u-name')?.value?.trim(),
+    role: document.getElementById('u-role')?.value,
+    password: document.getElementById('u-pass')?.value || undefined,
+  };
+  if (!data.full_name) { alert('Podaj imię i nazwisko'); return; }
+  if (id) { data.id = id; }
+  else { data.username = document.getElementById('u-login')?.value?.trim(); data.password = document.getElementById('u-pass')?.value; }
+  saveUser(data);
+}
+function saveStawkaForm(id) {
+  const zbrAkt = document.getElementById('st-zbr-akt')?.checked ? 1 : 0;
+  const data = {
+    stanowisko: document.getElementById('st-stan')?.value?.trim(),
+    stawka_godz: parseFloat(document.getElementById('st-stawka')?.value)||0,
+    opis: document.getElementById('st-opis')?.value||'',
+    zbrojenie_aktywne: zbrAkt,
+    zbrojenie_stawka_godz: zbrAkt ? (parseFloat(document.getElementById('st-zbr-stawka')?.value)||0) : 0,
+  };
+  if (!data.stanowisko) { alert('Podaj nazwę stanowiska'); return; }
+  if (id) data.id = id;
+  saveStawka(data);
+}
+function saveProduktForm(id) {
+  const data = {
+    nazwa: document.getElementById('pr-nazwa')?.value?.trim(),
+    opis: document.getElementById('pr-opis')?.value||'',
+    ilosc_domyslna: parseInt(document.getElementById('pr-ilosc')?.value)||1,
+    cena_szt: parseFloat(document.getElementById('pr-cena')?.value)||0,
+  };
+  if (!data.nazwa) { alert('Podaj nazwę produktu'); return; }
+  if (id) data.id = id;
+  saveProdukt(data);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  TAB: USTAWIENIA
+// ══════════════════════════════════════════════════════════════
+function renderUstawienia() {
+  return `
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px">⚙ Połączenie</div>
+    <div style="font-size:13px;color:var(--dim);word-break:break-all;margin-bottom:8px">
+      Serwer: <span style="color:var(--text)">${SERVER_URL||'(nie ustawiony)'}</span>
+    </div>
+    <button class="btn btn-blue" onclick="setState({screen:'config'})">🔧 Zmień serwer</button>
+  </div>
+  <div class="card" style="margin-top:10px">
+    <div class="card-title" style="margin-bottom:6px">ℹ O aplikacji</div>
+    <div style="font-size:13px;color:var(--dim);line-height:2">
+      System Zarządzania Produkcją v4.0<br>
+      Wielokrotne sesje równoległe ✅<br>
+      Pauzy sesji ✅<br>
+      Skaner QR ✅<br>
+      Praca nieprodukcyjna ✅<br>
+      Alerty norm ✅<br>
+      Wydajność pracowników ✅<br>
+      Podsumowanie zleceń (majster) ✅<br>
+      Wydruk karty zlecenia z QR ✅<br>
+      Pełna administracja ✅
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MAIN RENDER
+// ══════════════════════════════════════════════════════════════
+function renderContent() {
+  if (state.screen === 'config') return renderConfig();
+  if (state.screen === 'login')  return renderLogin();
+
+  const tabContent = {
+    praca:      renderPraca,
+    majster:    renderMajster,
+    magazyn:    renderMagazyn,
+    zlecenia:   renderZlecenia,
+    admin:      renderAdmin,
+    ustawienia: renderUstawienia,
+  }[state.activeTab] || (() => '');
+
+  return `
+    ${renderTopbar()}
+    <div class="content">
+      ${state.error ? `<div class="error-banner">⚠ ${state.error}</div>` : ''}
+      ${tabContent()}
+    </div>
+    ${renderBottomNav()}
+    ${renderQRZleceniePickerModal()}`;
+}
+
+function render() {
+  document.getElementById('app').innerHTML = renderContent();
+  _afterRender();
+  // Restart timerów po re-render
+  for (const [sid, t] of Object.entries(state.timers)) {
+    if (t.sesja) startTimerFor(t.sesja);
+  }
+  // Narysuj QR jeśli modal QR otwarty
+  if (state.qrGenModal && state.qrGenKod) {
+    setTimeout(() => drawQRCanvas(state.qrGenKod), 50);
+  }
+  // Narysuj QR na karcie zlecenia jeśli print modal otwarty
+  if (state.printModal && state.printModal.zlecenie?.qr_code) {
+    setTimeout(() => {
+      const canvas = document.getElementById('print-qr-canvas');
+      if (!canvas) return;
+      const kod = state.printModal.zlecenie.qr_code;
+      const url = `${SERVER_URL.replace(/\/$/,'')}/api/qr/${encodeURIComponent(kod)}`;
+      fetch(url, {headers: {'x-api-key': API_KEY}})
+        .then(r => { if (!r.ok) throw new Error(); return r.blob(); })
+        .then(blob => {
+          const img = new Image();
+          img.onload = () => {
+            canvas.width = img.width; canvas.height = img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            URL.revokeObjectURL(img.src);
+          };
+          img.src = URL.createObjectURL(blob);
+        }).catch(() => {});
+    }, 80);
+  }
+}
+
+
+// ══════════════════════════════════════════════════════════════
+//  CAMERA QR SCANNER
+// ══════════════════════════════════════════════════════════════
+let _qrStream = null;
+let _qrAnimFrame = null;
+
+function stopQRCamera() {
+  if (_qrStream) { _qrStream.getTracks().forEach(t => t.stop()); _qrStream = null; }
+  if (_qrAnimFrame) { cancelAnimationFrame(_qrAnimFrame); _qrAnimFrame = null; }
+}
+
+async function startQRCamera() {
+  const video  = document.getElementById('qr-video');
+  const canvas = document.getElementById('qr-cam-canvas');
+  const status = document.getElementById('qr-scan-status');
+  if (!video) return;
+  try {
+    if (!window.jsQR) {
+      await new Promise((res,rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode:'environment'}
+    });
+    _qrStream = stream;
+    video.srcObject = stream;
+    await video.play();
+    if (status) status.textContent = '🔍 Skanuję...';
+    const ctx = canvas.getContext('2d');
+    function tick() {
+      if (!document.getElementById('qr-video')) { stopQRCamera(); return; }
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = window.jsQR(img.data, img.width, img.height, {inversionAttempts:'dontInvert'});
+        if (code && code.data) {
+          stopQRCamera();
+          scanQR(code.data);
+          return;
+        }
+      }
+      _qrAnimFrame = requestAnimationFrame(tick);
+    }
+    tick();
+  } catch(err) {
+    if (status) status.textContent = 'Brak dostępu do aparatu. Wpisz kod ręcznie.';
+    setState({qrManualMode: true});
+  }
+}
+
+// Wywoływane przez render() aby uruchomić kamerę po re-renderze
+function _afterRender() {
+  stopQRCamera();
+  const hasCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  if (state.qrScanMode && !state.qrManualMode && hasCam) {
+    setTimeout(startQRCamera, 120);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  INIT
+// ══════════════════════════════════════════════════════════════
+// Wczytaj historię QR
+state.qrLastCodes = JSON.parse(localStorage.getItem('qr_historia')||'[]');
+
+// Załaduj info produkcji na ekran logowania
+let _wh_interval = null;
+async function loadWarehouseLoginInfo() {
+  if (!SERVER_URL || !API_KEY) return;
+  try {
+    const data = await get('/api/status/produkcja');
+    setState({warehouseInfo: data}, true);
+    render();
+  } catch(e) {
+    try {
+      const ops = await get('/api/operacje/zakonczone-do-transportu');
+      setState({warehouseInfo: {zakonczone: ops, aktywne:[], nastepne:[], next_map:{}}}, true);
+      render();
+    } catch(_) {}
+  }
+}
+function startWHRefresh() {
+  loadWarehouseLoginInfo();
+  if (_wh_interval) clearInterval(_wh_interval);
+  _wh_interval = setInterval(loadWarehouseLoginInfo, 120000);
+}
+function stopWHRefresh() {
+  if (_wh_interval) { clearInterval(_wh_interval); _wh_interval = null; }
+}
+if (SERVER_URL) startWHRefresh();
+if (SERVER_URL && API_KEY) startServerResetMonitor();
+
+// Auto-refresh co 30s
+setInterval(() => {
+  if (state.screen === 'main' && !state.loading) {
+    if (state.activeTab === 'majster') loadMajster();
+  }
+}, 30000);
+
+render();
+</script>
+</body>
+</html>

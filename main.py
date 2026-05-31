@@ -22,12 +22,17 @@ def _parse(s):
     return _dt.datetime.fromisoformat(str(s).replace("Z","").replace("+00:00",""))
 
 # ─── Konfiguracja ──────────────────────────────────────────────────────────────
-DB_PATH  = os.environ.get("DB_PATH",  "/data/produkcja.db")
-API_KEY  = os.environ.get("API_KEY",  "zmien-mnie-na-bezpieczny-klucz")
-PORT     = int(os.environ.get("PORT", 8000))
+DB_PATH       = os.environ.get("DB_PATH",  "/data/produkcja.db")
+API_KEY       = os.environ.get("API_KEY",  "zmien-mnie-na-bezpieczny-klucz")
+PORT          = int(os.environ.get("PORT", 8000))
+BACKUP_PATH   = os.environ.get("BACKUP_PATH", "/data/backup.json")   # persystentny backup JSON
+BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 300))        # co ile sekund auto-backup (domyślnie 5 min)
 
+# Jeżeli /data nie istnieje (Render bez dysku), używamy katalogu lokalnego
 if not os.path.exists(os.path.dirname(DB_PATH)):
-    DB_PATH = os.path.join(os.path.dirname(__file__), "produkcja.db")
+    _local = os.path.dirname(__file__)
+    DB_PATH     = os.path.join(_local, "produkcja.db")
+    BACKUP_PATH = os.path.join(_local, "backup.json")
 
 app = FastAPI(title="Produkcja API", version="4.0")
 
@@ -1611,6 +1616,143 @@ def init_db_on_start():
     print(f"✓ Baza danych gotowa: {DB_PATH}")
 
 
+# ─── System backupu i przywracania danych ─────────────────────────────────────
+import threading as _threading
+
+_TABLES_TO_BACKUP = [
+    "zlecenia", "operacje", "sesje_pracy", "users", "stawki",
+    "katalog_produktow", "produkty_zlecenia", "opcje_zlecen"
+]
+
+def _db_backup_to_json(path: str = None) -> dict:
+    """Eksportuje wszystkie tabele do słownika (lub pliku JSON)."""
+    path = path or BACKUP_PATH
+    data = {"_ts": _now(), "_ver": "v18", "tables": {}}
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        for tbl in _TABLES_TO_BACKUP:
+            try:
+                rows = conn.execute(f"SELECT * FROM {tbl}").fetchall()
+                data["tables"][tbl] = [dict(r) for r in rows]
+            except Exception:
+                data["tables"][tbl] = []
+        conn.close()
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, default=str)
+        print(f"✓ Backup zapisany: {path} ({len(json.dumps(data))} B, {_now()})")
+    except Exception as e:
+        print(f"✗ Błąd backupu: {e}")
+    return data
+
+def _db_restore_from_json(path: str = None) -> bool:
+    """Przywraca dane z pliku JSON backupu do bazy SQLite."""
+    path = path or BACKUP_PATH
+    if not os.path.exists(path):
+        print(f"  Brak pliku backupu: {path}")
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        tables = data.get("tables", {})
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        # Wyłącz FK tymczasowo, żeby wgrać bez problemów z zależnościami
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for tbl, rows in tables.items():
+            if not rows:
+                continue
+            try:
+                cols = list(rows[0].keys())
+                placeholders = ",".join(["?" for _ in cols])
+                col_list = ",".join(cols)
+                conn.executemany(
+                    f"INSERT OR REPLACE INTO {tbl} ({col_list}) VALUES ({placeholders})",
+                    [[r.get(c) for c in cols] for r in rows]
+                )
+            except Exception as e:
+                print(f"  Błąd przywracania tabeli {tbl}: {e}")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
+        conn.close()
+        total = sum(len(v) for v in tables.values())
+        print(f"✓ Przywrócono {total} rekordów z backupu: {path} (ts: {data.get('_ts','?')})")
+        return True
+    except Exception as e:
+        print(f"✗ Błąd przywracania: {e}")
+        return False
+
+def _auto_backup_loop():
+    """Wątek tła – zapisuje backup co BACKUP_INTERVAL sekund."""
+    import time as _time
+    _time.sleep(30)  # pierwsze uruchomienie po 30s
+    while True:
+        _db_backup_to_json()
+        _time.sleep(BACKUP_INTERVAL)
+
+# ─── Endpointy backupu ────────────────────────────────────────────────────────
+@app.get("/api/admin/backup", dependencies=[Depends(verify_key)])
+def admin_backup():
+    """Natychmiastowy backup bazy do pliku JSON. Zwraca podsumowanie."""
+    data = _db_backup_to_json()
+    summary = {tbl: len(rows) for tbl, rows in data.get("tables", {}).items()}
+    return {"ok": True, "ts": data["_ts"], "path": BACKUP_PATH, "rows": summary}
+
+@app.get("/api/admin/backup/download")
+def admin_backup_download(
+    x_api_key: str = "",
+    x_api_key_h: str = Header(None, alias="x-api-key")
+):
+    """Pobierz plik backupu JSON do komputera."""
+    key = x_api_key or x_api_key_h or ""
+    if key != API_KEY:
+        raise HTTPException(403, "Nieprawidłowy klucz API")
+    _db_backup_to_json()  # odśwież przed pobraniem
+    if not os.path.exists(BACKUP_PATH):
+        raise HTTPException(404, "Brak pliku backupu")
+    return FileResponse(BACKUP_PATH, filename="produkcja_backup.json", media_type="application/json")
+
+@app.post("/api/admin/backup/restore", dependencies=[Depends(verify_key)])
+async def admin_backup_restore(request: Request):
+    """Przywróć dane z przesłanego pliku JSON backupu."""
+    body = await request.body()
+    if not body:
+        # Przywróć z pliku lokalnego
+        ok = _db_restore_from_json()
+        return {"ok": ok, "source": "local_file"}
+    # Przywróć z przesłanego JSON
+    tmp_path = BACKUP_PATH + ".tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(body)
+        ok = _db_restore_from_json(tmp_path)
+        os.remove(tmp_path)
+        return {"ok": ok, "source": "uploaded"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/api/admin/backup/status", dependencies=[Depends(verify_key)])
+def admin_backup_status():
+    """Status backupu: kiedy ostatni, rozmiar pliku."""
+    exists = os.path.exists(BACKUP_PATH)
+    size = os.path.getsize(BACKUP_PATH) if exists else 0
+    ts = None
+    if exists:
+        try:
+            with open(BACKUP_PATH, "r") as f:
+                d = json.load(f)
+            ts = d.get("_ts")
+        except Exception:
+            pass
+    return {
+        "backup_path": BACKUP_PATH,
+        "db_path": DB_PATH,
+        "backup_exists": exists,
+        "backup_size_kb": round(size / 1024, 1),
+        "backup_ts": ts,
+        "backup_interval_sec": BACKUP_INTERVAL,
+    }
+
 # ─── Serwowanie aplikacji ──────────────────────────────────────────────────────
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -1636,6 +1778,24 @@ def health():
 
 # ─── Start ─────────────────────────────────────────────────────────────────────
 init_db_on_start()
+
+# Przywróć dane z backupu jeśli baza jest pusta (nowy kontener po restarcie)
+try:
+    _conn_chk = sqlite3.connect(DB_PATH, timeout=5)
+    _row_count = _conn_chk.execute("SELECT COUNT(*) FROM zlecenia").fetchone()[0]
+    _conn_chk.close()
+    if _row_count == 0 and os.path.exists(BACKUP_PATH):
+        print("⚠ Baza pusta – przywracam dane z backupu...")
+        _db_restore_from_json()
+    else:
+        print(f"✓ Baza zawiera {_row_count} zleceń – backup nie jest potrzebny")
+except Exception as _e:
+    print(f"⚠ Nie sprawdzono stanu bazy: {_e}")
+
+# Uruchom wątek auto-backup w tle
+_bk_thread = _threading.Thread(target=_auto_backup_loop, daemon=True, name="auto-backup")
+_bk_thread.start()
+print(f"✓ Auto-backup uruchomiony co {BACKUP_INTERVAL}s → {BACKUP_PATH}")
 
 if __name__ == "__main__":
     import uvicorn

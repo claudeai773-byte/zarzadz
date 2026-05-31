@@ -130,8 +130,14 @@ async function api(path, opts={}) {
   if (!res.ok) {
     const t = await res.text().catch(() => 'Błąd serwera');
     let msg = t;
-    try { msg = JSON.parse(t).detail || t; } catch(_) {}
-    throw new Error(msg);
+    try {
+      const parsed = JSON.parse(t);
+      if (typeof parsed.detail === 'string') msg = parsed.detail;
+      else if (Array.isArray(parsed.detail)) msg = parsed.detail.map(e => e.msg || JSON.stringify(e)).join('; ');
+      else msg = JSON.stringify(parsed);
+    } catch(_) {}
+    console.error(`API ERROR ${res.status} ${path}:`, t);
+    throw new Error(`[${res.status}] ${msg}`);
   }
   return res.json();
 }
@@ -690,7 +696,10 @@ function logout() {
 // ══════════════════════════════════════════════════════════════
 //  ZLECENIA CRUD
 // ══════════════════════════════════════════════════════════════
+let _savingZlecenie = false;
 async function saveZlecenie(data) {
+  if (_savingZlecenie) return;
+  _savingZlecenie = true;
   try {
     if (data.id) {
       await put(`/api/zlecenia/${data.id}`, data);
@@ -722,6 +731,8 @@ async function saveZlecenie(data) {
     }
   } catch(e) {
     alert('Błąd: ' + e.message);
+  } finally {
+    _savingZlecenie = false;
   }
 }
 
@@ -2283,11 +2294,17 @@ function autofillZlecenie(id) {
   fetchAutofillOperacje(id);
 }
 
+let _autofillToken = 0;
+
 async function fetchAutofillOperacje(zid) {
+  const myToken = ++_autofillToken;
   try {
     const ops = await get(`/api/zlecenia/${zid}/operacje`);
+    // Ignoruj wynik jeśli w międzyczasie wybrano inne zlecenie do autofill
+    if (myToken !== _autofillToken) return;
     setState({autofillOperacje: ops});
   } catch(e) {
+    if (myToken !== _autofillToken) return;
     setState({autofillOperacje: []});
   }
 }

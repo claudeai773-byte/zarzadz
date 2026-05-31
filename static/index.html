@@ -525,6 +525,11 @@ function renderQRZleceniePickerModal() {
       <button class="modal-close" onclick="setState({qrZleceniePickerModal:null})">×</button>
       <h3>📋 ${z.numer}</h3>
       <div style="color:var(--dim);font-size:13px;margin-bottom:10px">${z.nazwa}</div>
+      ${z.model_3d_url ? `
+      <button class="btn btn-blue" style="width:100%;margin-bottom:12px;font-size:14px"
+              onclick="openStep3DViewer('${z.model_3d_url.replace(/'/g,"\\'")}')">
+        🧊 Podgląd modelu 3D (.STEP)
+      </button>` : ''}
       <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <span style="font-size:12px;color:var(--dim)">Zlecona ilość:</span>
@@ -2622,6 +2627,12 @@ function renderZlecenia() {
         <div class="field"><label>Ilość sztuk</label><input id="zl-ilosc" type="number" value="${z.ilosc_sztuk||1}" min="1"></div>
         <div class="field"><label>Cena brutto/szt (zł)</label><input id="zl-cena" type="number" step="0.01" value="${z.cena_brutto_szt||0}"></div>
         <div class="field">
+          <label>Model 3D (link STEP)</label>
+          <input id="zl-model3d" type="url" placeholder="https://drive.google.com/file/d/..." value="${z.model_3d_url||''}"
+                 style="font-size:12px">
+          <div style="font-size:11px;color:var(--dim);margin-top:3px">Google Drive / OneDrive – link do pliku .step lub .stp</div>
+        </div>
+        <div class="field">
           <label>Materiał od klienta</label>
           <select id="zl-mat">
             <option value="0" ${!z.material_od_klienta?'selected':''}>Nie</option>
@@ -2787,6 +2798,7 @@ function saveZlecenieForm(id) {
     ilosc_sztuk: parseInt(document.getElementById('zl-ilosc').value)||1,
     cena_brutto_szt: parseFloat(document.getElementById('zl-cena').value)||0,
     material_od_klienta: parseInt(document.getElementById('zl-mat').value)||0,
+    model_3d_url: document.getElementById('zl-model3d')?.value?.trim() || null,
   };
   if (!data.numer||!data.nazwa) { alert('Numer i nazwa są wymagane'); return; }
   if (id) data.id = id;
@@ -3563,6 +3575,151 @@ setInterval(() => {
 }, 30000);
 
 render();
+
+// ══════════════════════════════════════════════════════════════
+//  STEP 3D VIEWER
+// ══════════════════════════════════════════════════════════════
+let _step3dOverlay = null;
+
+function openStep3DViewer(url) {
+  if (_step3dOverlay) _step3dOverlay.remove();
+  _step3dOverlay = document.createElement('div');
+  _step3dOverlay.id = 'step3d-overlay';
+  _step3dOverlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#0d1117;display:flex;flex-direction:column;';
+  _step3dOverlay.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                padding:12px 16px;background:#161b22;border-bottom:1px solid #30363d;flex-shrink:0">
+      <span style="color:#e6edf3;font-weight:700;font-size:15px">🧊 Podgląd modelu 3D</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        <span id="step3d-status" style="color:#8b949e;font-size:12px"></span>
+        <button onclick="closeStep3DViewer()"
+                style="background:#21262d;border:1px solid #30363d;color:#e6edf3;
+                       border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px">✕ Zamknij</button>
+      </div>
+    </div>
+    <div id="step3d-info" style="display:none;padding:8px 16px;background:#161b22;
+         border-bottom:1px solid #30363d;font-size:12px;color:#8b949e;flex-shrink:0">
+      <b style="color:#e6edf3">Obracaj</b> – przeciągnij &nbsp;|&nbsp;
+      <b style="color:#e6edf3">Zoom</b> – scroll / szczypnij &nbsp;|&nbsp;
+      <b style="color:#e6edf3">Przesuń</b> – 2 palce / PPM
+    </div>
+    <canvas id="step3d-canvas" style="flex:1;display:block;width:100%;touch-action:none"></canvas>
+  `;
+  document.body.appendChild(_step3dOverlay);
+  _initStep3DScene(url);
+}
+
+function closeStep3DViewer() {
+  if (_step3dOverlay) { _step3dOverlay.remove(); _step3dOverlay = null; }
+}
+
+function _setStep3dStatus(msg, color) {
+  const el = document.getElementById('step3d-status');
+  if (el) { el.textContent = msg; el.style.color = color || '#8b949e'; }
+}
+
+function _loadScript(src) {
+  return new Promise((res, rej) => {
+    if (document.querySelector('script[src="' + src + '"]')) { res(); return; }
+    const s = document.createElement('script');
+    s.src = src; s.onload = res;
+    s.onerror = () => rej(new Error('Brak skryptu: ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function _initStep3DScene(stepUrl) {
+  _setStep3dStatus('⏳ Ładowanie biblioteki...', '#e6a020');
+  try {
+    await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
+    await _loadScript('https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js');
+  } catch(e) { _setStep3dStatus('✗ Brak internetu / biblioteki 3D', '#e05555'); return; }
+
+  _setStep3dStatus('⏳ Pobieranie pliku STEP...', '#e6a020');
+  const proxyUrl = SERVER_URL + '/api/step-proxy?url=' + encodeURIComponent(stepUrl);
+  let stepData;
+  try {
+    const resp = await fetch(proxyUrl);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    stepData = await resp.arrayBuffer();
+  } catch(e) { _setStep3dStatus('✗ Błąd pobierania: ' + e.message, '#e05555'); return; }
+
+  _setStep3dStatus('⏳ Parsowanie modelu...', '#e6a020');
+  try { await _loadScript('https://cdn.jsdelivr.net/npm/occt-import-js@0.0.19/dist/occt-import-js.min.js'); }
+  catch(e) { _setStep3dStatus('✗ Brak biblioteki OCCT', '#e05555'); return; }
+
+  let result;
+  try {
+    const occt = await occtimportjs();
+    result = occt.ReadStepFile(new Uint8Array(stepData), null);
+  } catch(e) { _setStep3dStatus('✗ Błąd parsowania: ' + e.message, '#e05555'); return; }
+
+  _setStep3dStatus('✓ Gotowe', '#27ae60');
+  const info = document.getElementById('step3d-info');
+  if (info) info.style.display = 'block';
+
+  const canvas = document.getElementById('step3d-canvas');
+  if (!canvas) return;
+  const renderer = new THREE.WebGLRenderer({canvas, antialias: true});
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setClearColor(0x0d1117);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.001, 1000000);
+  const controls = new THREE.OrbitControls(camera, canvas);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const dl = new THREE.DirectionalLight(0xffffff, 0.9); dl.position.set(1, 2, 3); scene.add(dl);
+  const dl2 = new THREE.DirectionalLight(0x88aaff, 0.4); dl2.position.set(-2, -1, -2); scene.add(dl2);
+
+  const group = new THREE.Group();
+  const defaultMat = new THREE.MeshPhongMaterial({color:0x4a90d9, shininess:60, side:THREE.DoubleSide});
+
+  for (let mi = 0; mi < result.meshes.length; mi++) {
+    const mesh = result.meshes[mi];
+    const geo = new THREE.BufferGeometry();
+    const verts = [], norms = [], idxs = [];
+    let vOff = 0;
+    for (const brep of mesh.breps) {
+      for (let v = 0; v < brep.vertices.length; v+=3)
+        verts.push(brep.vertices[v], brep.vertices[v+1], brep.vertices[v+2]);
+      if (brep.normals) for (let n = 0; n < brep.normals.length; n+=3)
+        norms.push(brep.normals[n], brep.normals[n+1], brep.normals[n+2]);
+      for (const i of brep.triangles) idxs.push(i + vOff);
+      vOff += brep.vertices.length / 3;
+    }
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    if (norms.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
+    else geo.computeVertexNormals();
+    geo.setIndex(idxs);
+    let mat = defaultMat;
+    if (mesh.color) { mat = defaultMat.clone(); mat.color.setRGB(mesh.color[0], mesh.color[1], mesh.color[2]); }
+    group.add(new THREE.Mesh(geo, mat));
+  }
+  scene.add(group);
+
+  const box = new THREE.Box3().setFromObject(group);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3()).length();
+  camera.position.copy(center.clone().add(new THREE.Vector3(size, size*0.6, size)));
+  camera.lookAt(center); controls.target.copy(center); controls.update();
+
+  function _resize() {
+    if (!canvas) return;
+    const w = canvas.clientWidth, h = canvas.clientHeight || 400;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+  }
+  _resize();
+  new ResizeObserver(_resize).observe(canvas);
+
+  (function _anim() {
+    if (!document.getElementById('step3d-overlay')) return;
+    requestAnimationFrame(_anim);
+    controls.update(); renderer.render(scene, camera);
+  })();
+}
 </script>
 </body>
 </html>

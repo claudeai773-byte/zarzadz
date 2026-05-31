@@ -1796,7 +1796,7 @@ def admin_backup_status():
 @app.get("/api/oblozenie", dependencies=[Depends(verify_key)])
 def get_oblozenie():
     """Zwraca oblozenie stanowisk: lista stanowisk + operacje z terminem i postepem."""
-    with db() as conn:
+    with get_db() as conn:
         stawki_rows = conn.execute(
             "SELECT stanowisko, stawka_godz, opis FROM stawki ORDER BY stanowisko"
         ).fetchall()

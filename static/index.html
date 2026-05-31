@@ -1509,6 +1509,19 @@ async function generateRaportZleceniaPDF() {
   }
 }
 
+// ─── Formatowanie czasu hh:mm:ss / mm:ss ──────────────────────────────────────
+function fmtHMS(totalMin) {
+  // Przyjmuje minuty (może być ułamkowe), zwraca mm:ss lub hh:mm:ss
+  const totalSec = Math.round((totalMin || 0) * 60);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  const mm = ('0'+m).slice(-2);
+  const ss = ('0'+s).slice(-2);
+  if (h > 0) return ('0'+h).slice(-2) + ':' + mm + ':' + ss;
+  return mm + ':' + ss;
+}
+
 function printRaportZlecenia(data, od, doDt) {
   const zl = data.zlecenia || [];
   const totalWartosc = zl.reduce((a,z)=>a+(z.wartosc||0),0);
@@ -1517,7 +1530,7 @@ function printRaportZlecenia(data, od, doDt) {
 
   const statusColor = {aktywne:'#1a73e8', zakonczone:'#1e8a4c', anulowane:'#888', wstrzymane:'#e67e00'};
   const fmtPLNr = v => (parseFloat(v)||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' zł';
-  const fmtMinr = v => { const m=Math.round(v||0); return Math.floor(m/60)+'h '+('0'+(m%60)).slice(-2)+'m'; };
+  const fmtMinr = v => fmtHMS(v);
 
   let zlHtml = '';
   zl.forEach(z => {
@@ -1551,28 +1564,49 @@ function printRaportZlecenia(data, od, doDt) {
             <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Operacja</th>
             <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Pracownik</th>
             <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Data</th>
-            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas</th>
+            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas łączny</th>
+            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas/szt.</th>
             <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
             <th style="padding:4px 8px;text-align:right;border:1px solid #eee">Koszt</th>
             <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Uwagi</th>
           </tr></thead><tbody>`;
       (z.sesje||[]).forEach(s => {
+        const isNieprod = s.typ === 'nieprodukcyjna';
+        const isInne = s.typ === 'inne_zlecenie';
+        const isZbr = s.typ === 'zbrojenie';
         // Sprawdź czy w normie: czas_norma × ilosc_sztuk vs czas_min (czas_norma w min/szt)
-        const normaCalk = (s.czas_norma||0) * (s.ilosc_sztuk||1);
+        const normaCalk = (!isNieprod && !isInne) ? (s.czas_norma||0) * (s.ilosc_sztuk||1) : 0;
         const wNormie = normaCalk > 0 && s.czas_min <= normaCalk;
         const przekroczone = normaCalk > 0 && s.czas_min > normaCalk;
-        const rowBg = przekroczone ? 'background:#fff3f3' : wNormie ? 'background:#f3fff6' : '';
+        let rowBg = przekroczone ? 'background:#fff3f3' : wNormie ? 'background:#f3fff6' : '';
+        if (isNieprod) rowBg = 'background:#f9f5ff';
+        if (isInne) rowBg = 'background:#f0f7ff';
         const normaBadge = normaCalk > 0
           ? (wNormie
               ? `<span style="color:#1e8a4c;font-weight:700;font-size:10px">✓ OK</span>`
               : `<span style="color:#c0392b;font-weight:700;font-size:10px">⚠ PRZEKR.</span>`)
           : '';
+        const typBadge = isNieprod
+          ? `<span style="font-size:9px;background:#9b59b6;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">NIEPRODUKCYJNA</span>`
+          : isInne
+          ? `<span style="font-size:9px;background:#2980b9;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">INNE ZLECENIE</span>`
+          : isZbr
+          ? `<span style="font-size:9px;background:#e67e00;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">ZBROJENIE</span>`
+          : '';
+        const opNazwa = s.operacja || (isNieprod ? '⏸ Praca nieprodukcyjna' : isInne ? '🔧 Inne zlecenie' : '—');
+        const sztuk = s.ilosc_sztuk || 1;
+        const avgMinVal = (!isNieprod && sztuk > 0) ? s.czas_min / sztuk : s.czas_min;
+        const totalHMS = fmtHMS(s.czas_min);
+        const normaTotalHMS = normaCalk > 0 ? fmtHMS(normaCalk) : null;
+        const avgHMS = fmtHMS(avgMinVal);
+        const normaPieceFmt = normaCalk > 0 ? fmtHMS(s.czas_norma||0) : null;
         zlHtml += `<tr style="${rowBg}">
-          <td style="padding:3px 8px;border:1px solid #eee">${s.operacja||'—'} ${normaBadge}</td>
+          <td style="padding:3px 8px;border:1px solid #eee">${opNazwa}${typBadge} ${normaBadge}</td>
           <td style="padding:3px 8px;border:1px solid #eee">${s.pracownik||'—'}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data||'—'}</td>
-          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;color:${przekroczone?'#c0392b':wNormie?'#1e8a4c':'inherit'};font-weight:${przekroczone||wNormie?'700':'400'}">${fmtMinr(s.czas_min)}${normaCalk>0?' / norma: '+fmtMinr(normaCalk):''}</td>
-          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.ilosc_sztuk||0}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:${przekroczone?'#c0392b':wNormie?'#1e8a4c':'inherit'};font-weight:${przekroczone||wNormie?'700':'400'}">${totalHMS}${normaTotalHMS?' / norma: '+normaTotalHMS:''}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#555">${isNieprod ? '—' : avgHMS}${normaPieceFmt&&!isNieprod?' <span style="color:#aaa;font-size:9px">/ '+normaPieceFmt+'</span>':''}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod ? '—' : (s.ilosc_sztuk||0)}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:right">${fmtPLNr(s.koszt)}</td>
           <td style="padding:3px 8px;border:1px solid #eee;color:#555;font-style:italic">${s.uwagi||'—'}</td>
         </tr>`;
@@ -1721,18 +1755,35 @@ function printRaportWydajnosc(data, od, doDt, typ) {
               <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Operacja / Typ</th>
               <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Zlecenie</th>
               <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Data</th>
-              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas (min/szt.)</th>
+              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas/szt.</th>
+              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas łączny</th>
               <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
             </tr></thead><tbody>`;
         p.sesje.forEach((s,i) => {
           const sztuk = s.ilosc_sztuk || 1;
-          const avgMin = sztuk > 0 ? (parseFloat(s.czas_min)/sztuk).toFixed(1) : s.czas_min;
-          tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
-            <td style="padding:3px 8px;border:1px solid #eee">${s.op_nazwa}</td>
-            <td style="padding:3px 8px;border:1px solid #eee">${s.zl_numer}</td>
+          const avgMinVal = sztuk > 0 ? parseFloat(s.czas_min) / sztuk : parseFloat(s.czas_min);
+          const avgHMS = fmtHMS(avgMinVal);
+          const totalHMS = fmtHMS(parseFloat(s.czas_min));
+          const isNieprod = s.typ === 'nieprodukcyjna';
+          const isInne = s.typ === 'inne_zlecenie';
+          const isZbr = s.typ === 'zbrojenie';
+          const rowBg = isNieprod ? '#f5f0ff' : isInne ? '#f0f7ff' : (i%2?'#fff':'#f9fafb');
+          const typBadge = isNieprod
+            ? `<span style="font-size:9px;background:#9b59b6;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">NIEPRODUKCYJNA</span>`
+            : isInne
+            ? `<span style="font-size:9px;background:#2980b9;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">INNE ZLECENIE</span>`
+            : isZbr
+            ? `<span style="font-size:9px;background:#e67e00;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">ZBROJENIE</span>`
+            : '';
+          const opNazwa = s.op_nazwa || (isNieprod ? '⏸ Praca nieprodukcyjna' : isInne ? '🔧 Inne zlecenie' : '—');
+          const zlNumer = isNieprod ? '—' : (s.zl_numer || '—');
+          tabelaHtml += `<tr style="background:${rowBg}">
+            <td style="padding:3px 8px;border:1px solid #eee">${opNazwa}${typBadge}</td>
+            <td style="padding:3px 8px;border:1px solid #eee">${zlNumer}</td>
             <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data}</td>
-            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${avgMin} min/szt.</td>
-            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.ilosc_sztuk||'—'}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace">${isNieprod ? totalHMS : avgHMS}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#888">${isNieprod ? '—' : totalHMS}</td>
+            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod ? '—' : (s.ilosc_sztuk||'—')}</td>
           </tr>`;
         });
         tabelaHtml += `</tbody></table></div>`;
@@ -1764,6 +1815,66 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   setTimeout(() => w.print(), 600);
 }
 
+
+// ─── Funkcje backupu danych ───────────────────────────────────────────────────
+async function adminBackupNow() {
+  const msg = document.getElementById('backup-status-msg');
+  if (msg) msg.textContent = '⏳ Tworzenie backupu...';
+  try {
+    const r = await get('/api/admin/backup');
+    const total = Object.values(r.rows||{}).reduce((a,b)=>a+b,0);
+    if (msg) msg.innerHTML = `✅ Backup zapisany: <b>${total}</b> rekordów | ${r.ts?.slice(0,19)||''}`;
+  } catch(e) {
+    if (msg) msg.textContent = '❌ Błąd backupu: ' + e.message;
+  }
+}
+
+function adminBackupDownload() {
+  const msg = document.getElementById('backup-status-msg');
+  if (msg) msg.textContent = '⏳ Pobieranie backupu...';
+  const a = document.createElement('a');
+  a.href = (SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/download?x-api-key=' + encodeURIComponent(API_KEY);
+  a.download = 'produkcja_backup_' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  if (msg) msg.textContent = '✅ Plik backupu pobrany.';
+}
+
+async function adminBackupUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const msg = document.getElementById('backup-status-msg');
+  if (!confirm(`Wgrać backup z pliku "${file.name}"?\nUwaga: nadpisze istniejące dane!`)) return;
+  if (msg) msg.textContent = '⏳ Wgrywanie backupu...';
+  try {
+    const buf = await file.arrayBuffer();
+    const resp = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/restore', {
+      method: 'POST',
+      headers: {'x-api-key': API_KEY, 'Content-Type': 'application/json'},
+      body: buf,
+    });
+    const r = await resp.json();
+    if (r.ok) {
+      if (msg) msg.innerHTML = '✅ Backup przywrócony! <b>Odśwież stronę</b> aby zobaczyć dane.';
+    } else {
+      if (msg) msg.textContent = '❌ Błąd przywracania: ' + (r.error || 'nieznany');
+    }
+  } catch(e) {
+    if (msg) msg.textContent = '❌ Błąd: ' + e.message;
+  }
+  input.value = '';
+}
+
+async function adminBackupStatus() {
+  const msg = document.getElementById('backup-status-msg');
+  try {
+    const r = await get('/api/admin/backup/status');
+    if (msg) msg.innerHTML = r.backup_exists
+      ? `✅ Backup: <b>${r.backup_size_kb} KB</b> | Ostatni: ${r.backup_ts?.slice(0,19)||'?'} | Interwał: co ${r.backup_interval_sec}s`
+      : '⚠ Brak pliku backupu – kliknij "Zapisz backup teraz"';
+  } catch(e) {
+    if (msg) msg.textContent = '❌ ' + e.message;
+  }
+}
 
 function renderMajsterPodsumowanie(stats) {
   const aktywne  = (stats?.zlecenia || []);
@@ -2001,6 +2112,18 @@ function renderMajsterWydajnosc() {
         + '</select></div>'
         + '<button class="btn btn-accent" style="padding:8px 14px;white-space:nowrap" onclick="generateRaportWydajnoscPDF()">📥 Generuj PDF</button>'
         + '</div></div>';
+
+  // Panel backupu danych
+  html += '<div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;margin-bottom:8px">🛡 Backup danych (ochrona przed utratą po restarcie)</div>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1e8a4c;color:#fff" onclick="adminBackupNow()">💾 Zapisz backup teraz</button>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1a73e8;color:#fff" onclick="adminBackupDownload()">⬇ Pobierz backup</button>'
+        + '<label style="padding:7px 12px;font-size:12px;background:var(--orange,#e67e00);color:#fff;border-radius:6px;cursor:pointer">⬆ Wgraj backup<input type="file" accept=".json" style="display:none" onchange="adminBackupUpload(this)"></label>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px" onclick="adminBackupStatus()">ℹ Status</button>'
+        + '</div>'
+        + '<div id="backup-status-msg" style="margin-top:6px;font-size:11px;color:var(--dim)">Auto-backup działa w tle co 5 minut.</div>'
+        + '</div>';
 
   if (!w) {
     html += `<div class="empty">⏳ Ładowanie danych wydajności...</div>`;

@@ -2627,10 +2627,22 @@ function renderZlecenia() {
         <div class="field"><label>Ilość sztuk</label><input id="zl-ilosc" type="number" value="${z.ilosc_sztuk||1}" min="1"></div>
         <div class="field"><label>Cena brutto/szt (zł)</label><input id="zl-cena" type="number" step="0.01" value="${z.cena_brutto_szt||0}"></div>
         <div class="field">
-          <label>Model 3D (link STEP)</label>
-          <input id="zl-model3d" type="url" placeholder="https://drive.google.com/file/d/..." value="${z.model_3d_url||''}"
-                 style="font-size:12px">
-          <div style="font-size:11px;color:var(--dim);margin-top:3px">Google Drive / OneDrive – link do pliku .step lub .stp</div>
+          <label>Model 3D (.step / .stp)</label>
+          <div id="zl-model3d-wrap" style="display:flex;flex-direction:column;gap:6px">
+            ${z.model_3d_url ? `
+              <div style="display:flex;align-items:center;gap:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+                <span style="font-size:13px;flex:1;color:var(--text)">✅ Plik wgrany</span>
+                <button type="button" class="btn-sm" onclick="document.getElementById('zl-model3d-url').value='';this.closest('.field').querySelector('#zl-model3d-status').textContent='';this.closest('.field').querySelector('#zl-model3d-wrap').innerHTML=renderStepUploadEmpty()">🗑 Usuń</button>
+              </div>
+            ` : ''}
+            <div id="zl-model3d-upload-area" style="${z.model_3d_url ? 'display:none' : ''}">
+              <input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP"
+                     style="font-size:13px;width:100%"
+                     onchange="uploadStepFile(this)">
+            </div>
+            <div id="zl-model3d-status" style="font-size:12px;color:var(--dim)"></div>
+          </div>
+          <input type="hidden" id="zl-model3d" value="${z.model_3d_url||''}" >
         </div>
         <div class="field">
           <label>Materiał od klienta</label>
@@ -3575,6 +3587,64 @@ setInterval(() => {
 }, 30000);
 
 render();
+
+// ══════════════════════════════════════════════════════════════
+//  STEP UPLOAD DO CLOUDINARY
+// ══════════════════════════════════════════════════════════════
+async function uploadStepFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('zl-model3d-status');
+  const urlInput = document.getElementById('zl-model3d');
+
+  const MAX = 100 * 1024 * 1024;
+  if (file.size > MAX) {
+    statusEl.textContent = '✗ Plik za duży (maks. 100 MB)';
+    statusEl.style.color = 'var(--red, #e05555)';
+    return;
+  }
+
+  statusEl.textContent = '⏳ Wgrywanie... 0%';
+  statusEl.style.color = 'var(--dim)';
+  input.disabled = true;
+
+  try {
+    const buf = await file.arrayBuffer();
+    // XHR żeby mieć progress
+    const result = await new Promise((res, rej) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', SERVER_URL + '/api/step-upload');
+      xhr.setRequestHeader('x-api-key', API_KEY);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.setRequestHeader('x-filename', encodeURIComponent(file.name));
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable)
+          statusEl.textContent = '⏳ Wgrywanie... ' + Math.round(e.loaded/e.total*100) + '%';
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) res(JSON.parse(xhr.responseText));
+        else rej(new Error(xhr.responseText || 'HTTP ' + xhr.status));
+      };
+      xhr.onerror = () => rej(new Error('Błąd sieci'));
+      xhr.send(buf);
+    });
+
+    if (result.ok && result.url) {
+      urlInput.value = result.url;
+      statusEl.textContent = '✅ Wgrano: ' + file.name + ' (' + Math.round((result.bytes||file.size)/1024) + ' KB)';
+      statusEl.style.color = '#27ae60';
+      // Schowaj input pliku, pokaż info o wgranym pliku
+      const uploadArea = document.getElementById('zl-model3d-upload-area');
+      if (uploadArea) uploadArea.style.display = 'none';
+    } else {
+      throw new Error(result.error || 'Nieznany błąd');
+    }
+  } catch(e) {
+    statusEl.textContent = '✗ Błąd uploadu: ' + e.message;
+    statusEl.style.color = 'var(--red, #e05555)';
+    input.disabled = false;
+  }
+}
 
 // ══════════════════════════════════════════════════════════════
 //  STEP 3D VIEWER

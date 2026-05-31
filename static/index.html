@@ -2131,7 +2131,7 @@ function renderMajsterWydajnosc() {
         + '<label style="padding:7px 12px;font-size:12px;background:var(--orange,#e67e00);color:#fff;border-radius:6px;cursor:pointer">⬆ Wgraj backup<input type="file" accept=".json" style="display:none" onchange="adminBackupUpload(this)"></label>'
         + '<button class="btn" style="padding:7px 12px;font-size:12px" onclick="adminBackupStatus()">ℹ Status</button>'
         + '</div>'
-        + '<div id="backup-status-msg" style="margin-top:6px;font-size:11px;color:var(--dim)">Auto-backup działa w tle co 5 minut.</div>'
+        + '<div id="backup-status-msg" style="margin-top:6px;font-size:11px;color:var(--dim)">✅ Backup zapisywany automatycznie przy każdej zmianie sesji (start/stop/pauza) oraz co 2 min jako fallback.</div>'
         + '</div>';
 
   if (!w) {

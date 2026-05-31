@@ -569,30 +569,39 @@ function renderQRZleceniePickerModal() {
         </div>`;
 
       // Przyciski akcji - zbrojenie pierwsze jeśli jest i nie zostało wykonane
-      if (opZbrMin > 0 && !zbrWykonane) {
+      if (opZbrMin > 0) {
+        // ── Zbrojenie skonfigurowane: pokaż oba przyciski niezależnie ──────
+        // Reguła: albo aktywne zbrojenie ALBO aktywna operacja – nigdy oba naraz
         if (czyZbrAktywne) {
+          // Zbrojenie trwa → pokaż status + stop zbrojenia; operacja zablokowana
           html += `
-          <div style="background:rgba(243,156,18,0.12);border:1px solid var(--orange);border-radius:8px;padding:10px 12px;margin-bottom:8px">
-            <div style="font-size:12px;color:var(--orange);font-weight:700">⚙ Zbrojenie w toku (${opZbrMin} min)</div>
+          <div style="background:rgba(243,156,18,0.12);border:1px solid var(--orange);border-radius:8px;padding:8px 12px;margin-bottom:8px">
+            <div style="font-size:12px;color:var(--orange);font-weight:700">⚙ Zbrojenie w toku (norma: ${opZbrMin} min)</div>
             <div style="font-size:11px;color:var(--dim);margin-top:2px">Zakończ zbrojenie, aby uruchomić operację</div>
-          </div>`;
-          html += `<div class="btn-row">
+          </div>
+          <div style="display:flex;gap:8px;flex-direction:column">
             <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaZbr).replace(/"/g,'&quot;')}})">⏹ Zakończ zbrojenie</button>
+            <button class="btn btn-outline" style="opacity:0.35;cursor:not-allowed" disabled>▶ Uruchom operację (zbrojenie w toku)</button>
           </div>`;
         } else if (czyOpAktywna) {
+          // Operacja trwa → pokaż status + stop operacji; zbrojenie zablokowane
           html += `
-          <div style="background:rgba(39,174,96,0.1);border:1px solid var(--green);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+          <div style="background:rgba(39,174,96,0.1);border:1px solid var(--green);border-radius:8px;padding:8px 12px;margin-bottom:8px">
             <div style="font-size:12px;color:var(--green);font-weight:700">▶ Operacja w toku</div>
-          </div>`;
-          html += `<div class="btn-row">
+          </div>
+          <div style="display:flex;gap:8px;flex-direction:column">
             <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaOp).replace(/"/g,'&quot;')}})">⏹ Zakończ operację</button>
+            <button class="btn btn-outline" style="opacity:0.35;cursor:not-allowed" disabled>⚙ Uruchom zbrojenie (operacja w toku)</button>
           </div>`;
         } else {
-          // Zbrojenie pierwsze - operacja zablokowana
+          // Nic nie aktywne → oba przyciski dostępne swobodnie
+          const zbrLabel = zbrWykonane
+            ? `⚙ Zbrojenie ponownie (${opZbrMin} min)`
+            : `⚙ Uruchom zbrojenie (${opZbrMin} min)`;
           html += `
           <div style="display:flex;gap:8px;flex-direction:column">
-            <button class="btn btn-accent" style="background:var(--orange);color:#1a1f2e" onclick="startZbrojenie(${op.id})">⚙ Uruchom zbrojenie (${opZbrMin} min)</button>
-            <button class="btn btn-outline" style="opacity:0.4;cursor:not-allowed" disabled title="Najpierw uruchom i zakończ zbrojenie">▶ Uruchom operację (po zbroj.)</button>
+            <button class="btn btn-green" onclick="pickOperacjaFromQR(${op.id})">▶ Uruchom operację</button>
+            <button class="btn btn-accent" style="background:var(--orange);color:#1a1f2e" onclick="startZbrojenie(${op.id})">${zbrLabel}</button>
           </div>`;
         }
       } else {

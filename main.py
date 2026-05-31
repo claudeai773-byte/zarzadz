@@ -445,7 +445,7 @@ def start_sesja(req: StartSesjaRequest):
                 if req.typ == "zbrojenie" and typ_blok == "zbrojenie":
                     raise HTTPException(400, "Zbrojenie tej operacji jest już aktywne.")
                 elif req.typ == "operacja" and typ_blok == "zbrojenie":
-                    raise HTTPException(400, "Najpierw zakończ zbrojenie tej operacji.")
+                    raise HTTPException(400, "Trwa zbrojenie tej operacji – najpierw je zakończ.")
                 elif req.typ == "zbrojenie" and typ_blok in ("operacja", "inne_zlecenie"):
                     raise HTTPException(400, "Operacja jest już w toku – nie można uruchomić zbrojenia.")
                 elif req.typ == req.typ:

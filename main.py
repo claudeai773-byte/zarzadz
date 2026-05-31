@@ -26,7 +26,7 @@ DB_PATH       = os.environ.get("DB_PATH",  "/data/produkcja.db")
 API_KEY       = os.environ.get("API_KEY",  "zmien-mnie-na-bezpieczny-klucz")
 PORT          = int(os.environ.get("PORT", 8000))
 BACKUP_PATH   = os.environ.get("BACKUP_PATH", "/data/backup.json")   # persystentny backup JSON
-BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 300))        # co ile sekund auto-backup (domyślnie 5 min)
+BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 120))        # co ile sekund auto-backup (domyślnie 2 min)
 
 # Jeżeli /data nie istnieje (Render bez dysku), używamy katalogu lokalnego
 if not os.path.exists(os.path.dirname(DB_PATH)):
@@ -464,6 +464,7 @@ def start_sesja(req: StartSesjaRequest):
                 "UPDATE operacje SET status='w_toku' WHERE id=? AND status='oczekuje'",
                 (req.operacja_id,)
             )
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
     return {"sesja_id": sesja_id, "start_time": now}
 
 @app.post("/api/sesje/pauza/start", dependencies=[Depends(verify_key)])
@@ -480,6 +481,7 @@ def pauza_start(req: PauzaRequest):
         pauzy.append({"start": now, "koniec": None, "powod": req.powod or ""})
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
     return {"ok": True, "pauza_start": now}
 
 @app.post("/api/sesje/pauza/stop", dependencies=[Depends(verify_key)])
@@ -495,6 +497,7 @@ def pauza_stop(req: PauzaRequest):
         pauzy[-1]["koniec"] = now
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
     return {"ok": True, "pauza_koniec": now}
 
 @app.post("/api/sesje/stop", dependencies=[Depends(verify_key)])
@@ -537,6 +540,7 @@ def stop_sesja(req: StopSesjaRequest):
                         (zl_id,)
                     )
 
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
     return {"status": "ok", "end_time": now}
 
 @app.get("/api/sesje/aktywne/{user_id}", dependencies=[Depends(verify_key)])
@@ -1676,18 +1680,31 @@ def _db_restore_from_json(path: str = None) -> bool:
         conn.commit()
         conn.close()
         total = sum(len(v) for v in tables.values())
+        aktywne = len([r for r in tables.get("sesje_pracy",[]) if r.get("status") == "aktywna"])
         print(f"✓ Przywrócono {total} rekordów z backupu: {path} (ts: {data.get('_ts','?')})")
+        if aktywne:
+            print(f"  ↳ W tym {aktywne} aktywnych sesji pracy (przywrócone ze stanem sprzed restartu)")
         return True
     except Exception as e:
         print(f"✗ Błąd przywracania: {e}")
         return False
 
 def _auto_backup_loop():
-    """Wątek tła – zapisuje backup co BACKUP_INTERVAL sekund."""
+    """Wątek tła – fallback backup co BACKUP_INTERVAL sekund (event-driven pokrywa sesje na bieżąco)."""
     import time as _time
-    _time.sleep(30)  # pierwsze uruchomienie po 30s
+    _time.sleep(60)  # pierwsze uruchomienie po 60s
     while True:
-        _db_backup_to_json()
+        try:
+            db_mtime  = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0
+            bak_mtime = os.path.getmtime(BACKUP_PATH) if os.path.exists(BACKUP_PATH) else 0
+            # Backup jeśli baza zmieniona od ostatniego backupu
+            if db_mtime > bak_mtime:
+                _db_backup_to_json()
+            # Zawsze backup co godzinę niezależnie od zmian (zabezpieczenie)
+            elif db_mtime > 0 and (_time.time() - bak_mtime > 3600):
+                _db_backup_to_json()
+        except Exception as e:
+            print(f"auto-backup loop error: {e}")
         _time.sleep(BACKUP_INTERVAL)
 
 # ─── Endpointy backupu ────────────────────────────────────────────────────────

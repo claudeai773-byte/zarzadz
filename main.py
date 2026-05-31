@@ -5,11 +5,11 @@ Deploy na Railway.app
 
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
-import sqlite3, os, json, hashlib, time, io, datetime as _dt
+import sqlite3, os, json, hashlib, time, io, datetime as _dt, traceback
 from contextlib import contextmanager
 
 def _now():
@@ -37,6 +37,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"[500] {request.method} {request.url.path}\n{tb}", flush=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Błąd serwera [{type(exc).__name__}]: {str(exc)}"}
+    )
 
 # ─── Auth ──────────────────────────────────────────────────────────────────────
 def verify_key(x_api_key: str = Header(..., alias="x-api-key")):
@@ -225,8 +234,8 @@ def scan_qr(qr: str):
 
 
 # ─── Zlecenia CRUD ────────────────────────────────────────────────────────────
-@app.get("/api/zlecenia")
-def get_zlecenia(status: Optional[str] = None, _=Depends(verify_key)):
+@app.get("/api/zlecenia", dependencies=[Depends(verify_key)])
+def get_zlecenia(status: Optional[str] = None):
     with get_db() as conn:
         if status:
             rows = conn.execute(

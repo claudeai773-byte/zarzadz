@@ -1848,29 +1848,27 @@ function adminBackupDownload() {
   if (msg) msg.textContent = '✅ Plik backupu pobrany.';
 }
 
-async function adminBackupUpload(input) {
-  const file = input.files[0];
-  if (!file) return;
+async function adminBackupRestore() {
   const msg = document.getElementById('backup-status-msg');
-  if (!confirm(`Wgrać backup z pliku "${file.name}"?\nUwaga: nadpisze istniejące dane!`)) return;
-  if (msg) msg.textContent = '⏳ Wgrywanie backupu...';
+  const statusR = await get('/api/admin/backup/status').catch(() => null);
+  const path = statusR?.backup_path || 'serwer';
+  const ts = statusR?.backup_ts?.slice(0,19) || '?';
+  if (!confirm(`Przywrócić dane z backupu na serwerze?\n📁 ${path}\n🕐 Ostatni zapis: ${ts}\n\nUwaga: nadpisze istniejące dane!`)) return;
+  if (msg) msg.textContent = '⏳ Przywracanie backupu z serwera...';
   try {
-    const buf = await file.arrayBuffer();
-    const resp = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/restore', {
+    const r = await fetch((SERVER_URL.replace(/\/$/, '')) + '/api/admin/backup/restore', {
       method: 'POST',
       headers: {'x-api-key': API_KEY, 'Content-Type': 'application/json'},
-      body: buf,
     });
-    const r = await resp.json();
-    if (r.ok) {
-      if (msg) msg.innerHTML = '✅ Backup przywrócony! <b>Odśwież stronę</b> aby zobaczyć dane.';
+    const d = await r.json();
+    if (d.ok) {
+      if (msg) msg.innerHTML = '✅ Backup przywrócony ze ścieżki: <b>' + path + '</b><br>Odśwież stronę aby zobaczyć dane.';
     } else {
-      if (msg) msg.textContent = '❌ Błąd przywracania: ' + (r.error || 'nieznany');
+      if (msg) msg.textContent = '❌ Błąd przywracania: ' + (d.error || 'nieznany');
     }
   } catch(e) {
     if (msg) msg.textContent = '❌ Błąd: ' + e.message;
   }
-  input.value = '';
 }
 
 async function adminBackupStatus() {
@@ -2128,7 +2126,7 @@ function renderMajsterWydajnosc() {
         + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
         + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1e8a4c;color:#fff" onclick="adminBackupNow()">💾 Zapisz backup teraz</button>'
         + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1a73e8;color:#fff" onclick="adminBackupDownload()">⬇ Pobierz backup</button>'
-        + '<label style="padding:7px 12px;font-size:12px;background:var(--orange,#e67e00);color:#fff;border-radius:6px;cursor:pointer">⬆ Wgraj backup<input type="file" accept=".json" style="display:none" onchange="adminBackupUpload(this)"></label>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:var(--orange,#e67e00);color:#fff" onclick="adminBackupRestore()">⬆ Wczytaj backup z serwera</button>'
         + '<button class="btn" style="padding:7px 12px;font-size:12px" onclick="adminBackupStatus()">ℹ Status</button>'
         + '</div>'
         + '<div id="backup-status-msg" style="margin-top:6px;font-size:11px;color:var(--dim)">✅ Backup zapisywany automatycznie przy każdej zmianie sesji (start/stop/pauza) oraz co 2 min jako fallback.</div>'

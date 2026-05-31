@@ -28,6 +28,11 @@ PORT          = int(os.environ.get("PORT", 8000))
 BACKUP_PATH   = os.environ.get("BACKUP_PATH", "/data/backup.json")   # persystentny backup JSON
 BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 120))        # co ile sekund auto-backup (domyślnie 2 min)
 
+# ── Cloudinary – storage plików STEP ──────────────────────────────────────────
+CLOUDINARY_CLOUD = os.environ.get("CLOUDINARY_CLOUD_NAME", "")
+CLOUDINARY_KEY   = os.environ.get("CLOUDINARY_API_KEY", "")
+CLOUDINARY_SECRET= os.environ.get("CLOUDINARY_API_SECRET", "")
+
 # ── GitHub Gist backup (zalecany na Render bez dysku) ─────────────────────────
 GIST_TOKEN   = os.environ.get("GIST_TOKEN", "")   # Personal Access Token (scope: gist)
 GIST_ID      = os.environ.get("GIST_ID", "")      # ID Gista – opcjonalnie, wykrywane automatycznie
@@ -1852,14 +1857,17 @@ def admin_backup_download(
     x_api_key: str = "",
     x_api_key_h: str = Header(None, alias="x-api-key")
 ):
-    """Pobierz plik backupu JSON do komputera."""
+    """Pobierz plik backupu JSON (generowany w pamięci – działa bez dysku na Render)."""
     key = x_api_key or x_api_key_h or ""
     if key != API_KEY:
         raise HTTPException(403, "Nieprawidłowy klucz API")
-    _db_backup_to_json()  # odśwież przed pobraniem
-    if not os.path.exists(BACKUP_PATH):
-        raise HTTPException(404, "Brak pliku backupu")
-    return FileResponse(BACKUP_PATH, filename="produkcja_backup.json", media_type="application/json")
+    data = _db_backup_to_json()
+    content = json.dumps(data, ensure_ascii=False, default=str, indent=2)
+    return StreamingResponse(
+        iter([content.encode("utf-8")]),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="produkcja_backup.json"'}
+    )
 
 @app.post("/api/admin/backup/restore", dependencies=[Depends(verify_key)])
 async def admin_backup_restore(request: Request):
@@ -1977,6 +1985,65 @@ def get_oblozenie():
                 "operacje": stanowiska_ops.get(name, []),
             })
         return result
+
+# ─── Upload pliku STEP do Cloudinary ──────────────────────────────────────────
+@app.post("/api/step-upload", dependencies=[Depends(verify_key)])
+async def step_upload(request: Request):
+    """Przyjmuje plik STEP (raw body), wgrywa na Cloudinary, zwraca URL do podglądu."""
+    import hashlib as _hl, hmac as _hmac, base64 as _b64, time as _time
+    if not (CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET):
+        raise HTTPException(503, "Cloudinary nie skonfigurowany – dodaj CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET w zmiennych środowiskowych Render")
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "Brak danych pliku")
+    if len(body) > 100 * 1024 * 1024:
+        raise HTTPException(413, "Plik za duży (maks. 100 MB)")
+
+    # Parametry uploadu
+    ts = str(int(_time.time()))
+    public_id = "step_" + _hl.md5(body[:1024]).hexdigest()[:12]
+    folder = "produkcja_step"
+
+    # Podpis HMAC-SHA1
+    sign_str = f"folder={folder}&public_id={public_id}&resource_type=raw&timestamp={ts}{CLOUDINARY_SECRET}"
+    sig = _hl.sha1(sign_str.encode()).hexdigest()
+
+    # Multipart upload
+    boundary = "----CLD" + _hl.md5(ts.encode()).hexdigest()[:16]
+    def _field(name, value):
+        return f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
+
+    fname = request.headers.get("x-filename", "model.step")
+    multipart = (
+        _field("api_key", CLOUDINARY_KEY) +
+        _field("timestamp", ts) +
+        _field("signature", sig) +
+        _field("public_id", public_id) +
+        _field("folder", folder) +
+        _field("resource_type", "raw") +
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: application/octet-stream\r\n\r\n".encode() +
+        body + f"\r\n--{boundary}--\r\n".encode()
+    )
+
+    try:
+        req = urllib.request.Request(
+            f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD}/raw/upload",
+            data=multipart,
+            method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        )
+        with urllib.request.urlopen(req, timeout=60) as r:
+            resp = json.loads(r.read())
+        url = resp.get("secure_url", "")
+        if not url:
+            raise HTTPException(500, "Cloudinary nie zwrócił URL")
+        return {"ok": True, "url": url, "public_id": resp.get("public_id"), "bytes": resp.get("bytes")}
+    except urllib.error.HTTPError as e:
+        err = e.read().decode()
+        raise HTTPException(502, f"Cloudinary error: {err}")
+    except Exception as e:
+        raise HTTPException(502, f"Upload error: {e}")
 
 # ─── Proxy pobierania pliku STEP (omija CORS dla Google Drive / OneDrive) ─────
 @app.get("/api/step-proxy")

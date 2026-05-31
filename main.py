@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSO
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
-import sqlite3, os, json, hashlib, time, io, datetime as _dt, traceback
+import sqlite3, os, json, hashlib, time, io, datetime as _dt, traceback, urllib.request, urllib.error
 from contextlib import contextmanager
 
 def _now():
@@ -27,6 +27,11 @@ API_KEY       = os.environ.get("API_KEY",  "zmien-mnie-na-bezpieczny-klucz")
 PORT          = int(os.environ.get("PORT", 8000))
 BACKUP_PATH   = os.environ.get("BACKUP_PATH", "/data/backup.json")   # persystentny backup JSON
 BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 120))        # co ile sekund auto-backup (domyślnie 2 min)
+
+# ── GitHub Gist backup (zalecany na Render bez dysku) ─────────────────────────
+GIST_TOKEN   = os.environ.get("GIST_TOKEN", "")   # Personal Access Token (scope: gist)
+GIST_ID      = os.environ.get("GIST_ID", "")      # ID Gista – opcjonalnie, wykrywane automatycznie
+GIST_ID_FILE = os.path.join(os.path.dirname(__file__), ".gist_id")  # cache ID w kontenerze
 
 # Jeżeli /data nie istnieje (Render bez dysku), używamy katalogu lokalnego
 if not os.path.exists(os.path.dirname(DB_PATH)):
@@ -286,6 +291,7 @@ class ZlecenieRequest(BaseModel):
     ilosc_sztuk: Optional[int] = 1
     cena_brutto_szt: Optional[float] = 0
     material_od_klienta: Optional[int] = 0
+    model_3d_url: Optional[str] = None
 
 @app.post("/api/zlecenia", dependencies=[Depends(verify_key)])
 def create_zlecenie(req: ZlecenieRequest):
@@ -295,10 +301,11 @@ def create_zlecenie(req: ZlecenieRequest):
         try:
             cur = conn.execute(
                 """INSERT INTO zlecenia (numer,nazwa,opis,status,termin,ilosc_sztuk,
-                   cena_brutto_szt,material_od_klienta,qr_code)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                   cena_brutto_szt,material_od_klienta,qr_code,model_3d_url)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (req.numer, req.nazwa, req.opis, req.status, req.termin,
-                 req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta, qr)
+                 req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta, qr,
+                 req.model_3d_url)
             )
             return {"id": cur.lastrowid, "qr_code": qr}
         except sqlite3.IntegrityError:
@@ -311,9 +318,10 @@ def update_zlecenie(zid: int, req: ZlecenieRequest):
     with get_db() as conn:
         conn.execute(
             """UPDATE zlecenia SET numer=?,nazwa=?,opis=?,status=?,termin=?,
-               ilosc_sztuk=?,cena_brutto_szt=?,material_od_klienta=? WHERE id=?""",
+               ilosc_sztuk=?,cena_brutto_szt=?,material_od_klienta=?,model_3d_url=? WHERE id=?""",
             (req.numer, req.nazwa, req.opis, req.status, req.termin,
-             req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta, zid)
+             req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta,
+             req.model_3d_url, zid)
         )
     return {"ok": True}
 
@@ -1520,6 +1528,10 @@ def init_db_on_start():
         cena_brutto_szt REAL DEFAULT 0, material_od_klienta INTEGER DEFAULT 0,
         qr_code TEXT)""")
 
+    # Migracja zlecenia – dodaj kolumnę model_3d_url jeśli nie istnieje
+    try: c.execute("ALTER TABLE zlecenia ADD COLUMN model_3d_url TEXT DEFAULT NULL")
+    except: pass
+
     c.execute("""CREATE TABLE IF NOT EXISTS operacje (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         zlecenie_id INTEGER NOT NULL, nazwa TEXT NOT NULL,
@@ -1628,8 +1640,117 @@ _TABLES_TO_BACKUP = [
     "katalog_produktow", "produkty_zlecenia", "opcje_zlecen"
 ]
 
+# ── GitHub Gist helpers ────────────────────────────────────────────────────────
+
+def _gist_get_id() -> str:
+    """Zwraca ID Gista: env > plik cache > szuka po nazwie > pusty string."""
+    if GIST_ID:
+        return GIST_ID
+    if os.path.exists(GIST_ID_FILE):
+        try:
+            return open(GIST_ID_FILE).read().strip()
+        except Exception:
+            pass
+    # Szukaj istniejącego Gista po nazwie pliku
+    if not GIST_TOKEN:
+        return ""
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/gists",
+            headers={"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github+json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            gists = json.loads(r.read())
+        for g in gists:
+            if "produkcja_backup.json" in g.get("files", {}):
+                gid = g["id"]
+                open(GIST_ID_FILE, "w").write(gid)
+                print(f"✓ Znaleziono istniejący Gist: {gid}")
+                return gid
+    except Exception as e:
+        print(f"  Gist search error: {e}")
+    return ""
+
+def _gist_save(data: dict) -> bool:
+    """Zapisuje dane backupu do GitHub Gist (tworzy nowy lub aktualizuje istniejący)."""
+    if not GIST_TOKEN:
+        return False
+    content = json.dumps(data, ensure_ascii=False, default=str)
+    gist_id = _gist_get_id()
+    try:
+        payload = json.dumps({
+            "description": "Produkcja DB backup – auto",
+            "public": False,
+            "files": {"produkcja_backup.json": {"content": content}}
+        }).encode()
+        if gist_id:
+            # PATCH – aktualizuj istniejący
+            req = urllib.request.Request(
+                f"https://api.github.com/gists/{gist_id}",
+                data=payload,
+                method="PATCH",
+                headers={
+                    "Authorization": f"token {GIST_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json"
+                }
+            )
+        else:
+            # POST – utwórz nowy
+            req = urllib.request.Request(
+                "https://api.github.com/gists",
+                data=payload,
+                method="POST",
+                headers={
+                    "Authorization": f"token {GIST_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                    "Content-Type": "application/json"
+                }
+            )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            resp = json.loads(r.read())
+        new_id = resp.get("id", gist_id)
+        if new_id and new_id != gist_id:
+            open(GIST_ID_FILE, "w").write(new_id)
+            print(f"✓ Gist utworzony: {new_id}")
+        print(f"✓ Gist backup zapisany ({len(content)} B, {data.get('_ts','?')})")
+        return True
+    except Exception as e:
+        print(f"✗ Błąd zapisu Gist: {e}")
+        return False
+
+def _gist_load() -> dict | None:
+    """Pobiera dane backupu z GitHub Gist. Zwraca dict lub None."""
+    if not GIST_TOKEN:
+        return None
+    gist_id = _gist_get_id()
+    if not gist_id:
+        print("  Gist: brak ID – nie można pobrać backupu")
+        return None
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/gists/{gist_id}",
+            headers={"Authorization": f"token {GIST_TOKEN}", "Accept": "application/vnd.github+json"}
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            resp = json.loads(r.read())
+        file_info = resp.get("files", {}).get("produkcja_backup.json", {})
+        raw_url = file_info.get("raw_url")
+        if not raw_url:
+            print("  Gist: brak pliku produkcja_backup.json")
+            return None
+        with urllib.request.urlopen(raw_url, timeout=15) as r:
+            data = json.loads(r.read())
+        print(f"✓ Gist backup pobrany (ts: {data.get('_ts','?')})")
+        return data
+    except Exception as e:
+        print(f"✗ Błąd odczytu Gist: {e}")
+        return None
+
+# ── Główne funkcje backup/restore ─────────────────────────────────────────────
+
 def _db_backup_to_json(path: str = None) -> dict:
-    """Eksportuje wszystkie tabele do słownika (lub pliku JSON)."""
+    """Eksportuje wszystkie tabele – zapisuje lokalnie ORAZ do GitHub Gist."""
     path = path or BACKUP_PATH
     data = {"_ts": _now(), "_ver": "v18", "tables": {}}
     try:
@@ -1642,10 +1763,16 @@ def _db_backup_to_json(path: str = None) -> dict:
             except Exception:
                 data["tables"][tbl] = []
         conn.close()
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, default=str)
-        print(f"✓ Backup zapisany: {path} ({len(json.dumps(data))} B, {_now()})")
+        # Zapis lokalny (fallback gdy Gist niedostępny)
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, default=str)
+            print(f"✓ Backup lokalny: {path}")
+        except Exception as e:
+            print(f"  Backup lokalny nieudany: {e}")
+        # Zapis do Gist
+        _gist_save(data)
     except Exception as e:
         print(f"✗ Błąd backupu: {e}")
     return data
@@ -1659,9 +1786,16 @@ def _db_restore_from_json(path: str = None) -> bool:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        tables = data.get("tables", {})
+        return _db_restore_from_dict(data)
+    except Exception as e:
+        print(f"✗ Błąd przywracania z pliku: {e}")
+        return False
+
+def _db_restore_from_dict(data: dict) -> bool:
+    """Przywraca dane ze słownika (backupu) do bazy SQLite."""
+    tables = data.get("tables", {})
+    try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
-        # Wyłącz FK tymczasowo, żeby wgrać bez problemów z zależnościami
         conn.execute("PRAGMA foreign_keys = OFF")
         for tbl, rows in tables.items():
             if not rows:
@@ -1680,27 +1814,25 @@ def _db_restore_from_json(path: str = None) -> bool:
         conn.commit()
         conn.close()
         total = sum(len(v) for v in tables.values())
-        aktywne = len([r for r in tables.get("sesje_pracy",[]) if r.get("status") == "aktywna"])
-        print(f"✓ Przywrócono {total} rekordów z backupu: {path} (ts: {data.get('_ts','?')})")
+        aktywne = len([r for r in tables.get("sesje_pracy", []) if r.get("status") == "aktywna"])
+        print(f"✓ Przywrócono {total} rekordów (ts: {data.get('_ts','?')})")
         if aktywne:
-            print(f"  ↳ W tym {aktywne} aktywnych sesji pracy (przywrócone ze stanem sprzed restartu)")
+            print(f"  ↳ W tym {aktywne} aktywnych sesji pracy")
         return True
     except Exception as e:
         print(f"✗ Błąd przywracania: {e}")
         return False
 
 def _auto_backup_loop():
-    """Wątek tła – fallback backup co BACKUP_INTERVAL sekund (event-driven pokrywa sesje na bieżąco)."""
+    """Wątek tła – backup co BACKUP_INTERVAL sekund jeśli baza zmieniona."""
     import time as _time
     _time.sleep(60)  # pierwsze uruchomienie po 60s
     while True:
         try:
             db_mtime  = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0
             bak_mtime = os.path.getmtime(BACKUP_PATH) if os.path.exists(BACKUP_PATH) else 0
-            # Backup jeśli baza zmieniona od ostatniego backupu
             if db_mtime > bak_mtime:
                 _db_backup_to_json()
-            # Zawsze backup co godzinę niezależnie od zmian (zabezpieczenie)
             elif db_mtime > 0 and (_time.time() - bak_mtime > 3600):
                 _db_backup_to_json()
         except Exception as e:
@@ -1754,13 +1886,8 @@ async def admin_backup_restore_upload(request: Request):
     try:
         body = await request.body()
         data = json.loads(body)
-        tmp_path = BACKUP_PATH + ".upload_tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        ok = _db_restore_from_json(tmp_path)
-        os.remove(tmp_path)
+        ok = _db_restore_from_dict(data)
         if ok:
-            # Policz rekordy z danych
             rows = {k: len(v) if isinstance(v, list) else 1
                     for k, v in data.items() if not k.startswith("_")}
             return {"ok": True, "source": "disk_upload", "rows": rows}
@@ -1772,7 +1899,7 @@ async def admin_backup_restore_upload(request: Request):
 
 @app.get("/api/admin/backup/status", dependencies=[Depends(verify_key)])
 def admin_backup_status():
-    """Status backupu: kiedy ostatni, rozmiar pliku."""
+    """Status backupu: kiedy ostatni, rozmiar pliku, status Gist."""
     exists = os.path.exists(BACKUP_PATH)
     size = os.path.getsize(BACKUP_PATH) if exists else 0
     ts = None
@@ -1783,6 +1910,7 @@ def admin_backup_status():
             ts = d.get("_ts")
         except Exception:
             pass
+    gist_id = _gist_get_id() if GIST_TOKEN else None
     return {
         "backup_path": BACKUP_PATH,
         "db_path": DB_PATH,
@@ -1790,6 +1918,8 @@ def admin_backup_status():
         "backup_size_kb": round(size / 1024, 1),
         "backup_ts": ts,
         "backup_interval_sec": BACKUP_INTERVAL,
+        "gist_enabled": bool(GIST_TOKEN),
+        "gist_id": gist_id or None,
     }
 
 
@@ -1848,6 +1978,37 @@ def get_oblozenie():
             })
         return result
 
+# ─── Proxy pobierania pliku STEP (omija CORS dla Google Drive / OneDrive) ─────
+@app.get("/api/step-proxy")
+async def step_proxy(url: str):
+    """Pobiera plik STEP z zewnętrznego URL i przesyła do przeglądarki.
+    Obsługuje linki Google Drive (konwertuje na link bezpośredniego pobrania)."""
+    import re as _re
+    # Konwersja linku Google Drive: /file/d/ID/view → /uc?export=download&id=ID
+    gdrive = _re.search(r'drive\.google\.com/file/d/([^/?]+)', url)
+    if gdrive:
+        file_id = gdrive.group(1)
+        url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    # Konwersja linku OneDrive: ?e=xxx → dodaj &download=1
+    elif 'onedrive.live.com' in url or '1drv.ms' in url:
+        sep = '&' if '?' in url else '?'
+        url = url + sep + 'download=1'
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "*/*"
+        })
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read()
+        return StreamingResponse(
+            iter([data]),
+            media_type="application/octet-stream",
+            headers={"Access-Control-Allow-Origin": "*",
+                     "Content-Disposition": "inline; filename=model.step"}
+        )
+    except Exception as e:
+        raise HTTPException(502, f"Nie można pobrać pliku STEP: {e}")
+
 # ─── Serwowanie aplikacji ──────────────────────────────────────────────────────
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -1879,9 +2040,30 @@ try:
     _conn_chk = sqlite3.connect(DB_PATH, timeout=5)
     _row_count = _conn_chk.execute("SELECT COUNT(*) FROM zlecenia").fetchone()[0]
     _conn_chk.close()
-    if _row_count == 0 and os.path.exists(BACKUP_PATH):
-        print("⚠ Baza pusta – przywracam dane z backupu...")
-        _db_restore_from_json()
+    if _row_count == 0:
+        print("⚠ Baza pusta – próbuję przywrócić dane...")
+        _restored = False
+        # 1. Najpierw spróbuj GitHub Gist (przeżywa restarty kontenera)
+        if GIST_TOKEN:
+            _gist_data = _gist_load()
+            if _gist_data:
+                init_db_on_start()  # upewnij się że tabele istnieją
+                _restored = _db_restore_from_dict(_gist_data)
+                if _restored:
+                    # Zapisz lokalnie jako cache na wypadek braku sieci
+                    try:
+                        with open(BACKUP_PATH, "w", encoding="utf-8") as _f:
+                            json.dump(_gist_data, _f, ensure_ascii=False, default=str)
+                    except Exception:
+                        pass
+                    print("✓ Dane przywrócone z GitHub Gist")
+        # 2. Fallback: lokalny plik (działa tylko gdy kontener ma persystentny dysk)
+        if not _restored and os.path.exists(BACKUP_PATH):
+            _restored = _db_restore_from_json()
+            if _restored:
+                print("✓ Dane przywrócone z lokalnego backupu")
+        if not _restored:
+            print("  Brak backupu – serwer startuje z pustą bazą")
     else:
         print(f"✓ Baza zawiera {_row_count} zleceń – backup nie jest potrzebny")
 except Exception as _e:

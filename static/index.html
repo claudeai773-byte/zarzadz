@@ -2401,12 +2401,12 @@ function renderMajsterWydajnosc() {
         + '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
         + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1e8a4c;color:#fff" onclick="adminBackupNow()">💾 Zapisz backup teraz</button>'
         + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#1a73e8;color:#fff" onclick="adminBackupDownload()">⬇ Pobierz backup</button>'
-        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:var(--orange,#e67e00);color:#fff" onclick="adminBackupRestore()">⬆ Wczytaj backup z serwera</button>'\
-        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#7b3fa0;color:#fff" onclick="adminBackupRestoreFromDisk()">📂 Wczytaj backup z dysku</button>'\
-        + '<button class="btn" style="padding:7px 12px;font-size:12px" onclick="adminBackupStatus()">ℹ Status</button>'\
-        + '</div>'\
-        + '<div id="backup-status-msg" style="margin-top:6px;font-size:11px;color:var(--dim)">✅ Backup zapisywany automatycznie przy każdej zmianie sesji (start/stop/pauza) oraz co 2 min jako fallback.</div>'\
-        + '<div style="margin-top:3px;font-size:10px;color:var(--dim)">🔁 Auto-monitoring resetu serwera aktywny – dane zostaną przywrócone automatycznie po restarcie.</div>'\
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:var(--orange,#e67e00);color:#fff" onclick="adminBackupRestore()">⬆ Wczytaj backup z serwera</button>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px;background:#7b3fa0;color:#fff" onclick="adminBackupRestoreFromDisk()">📂 Wczytaj backup z dysku</button>'
+        + '<button class="btn" style="padding:7px 12px;font-size:12px" onclick="adminBackupStatus()">ℹ Status</button>'
+        + '</div>'
+        + '<div id="backup-status-msg" style="margin-top:6px;font-size:11px;color:var(--dim)">✅ Backup zapisywany automatycznie przy każdej zmianie sesji (start/stop/pauza) oraz co 2 min jako fallback.</div>'
+        + '<div style="margin-top:3px;font-size:10px;color:var(--dim)">🔁 Auto-monitoring resetu serwera aktywny – dane zostaną przywrócone automatycznie po restarcie.</div>'
         + '</div>';
 
   if (!w) {

@@ -248,7 +248,7 @@ def get_zlecenia(status: Optional[str] = None):
             zd = dict(z)
             # Oblicz pozostały czas w minutach na bazie norm operacji
             ops = conn.execute("""
-                SELECT status, czas_norma, ilosc_wykonana, czas_zbrojenia_min FROM operacje WHERE zlecenie_id=?
+                SELECT id, status, czas_norma, ilosc_wykonana, czas_zbrojenia_min FROM operacje WHERE zlecenie_id=?
             """, (z["id"],)).fetchall()
             ilosc = z["ilosc_sztuk"] or 1
             pozostale_min = 0

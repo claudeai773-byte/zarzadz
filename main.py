@@ -289,6 +289,8 @@ def create_zlecenie(req: ZlecenieRequest):
             return {"id": cur.lastrowid, "qr_code": qr}
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Zlecenie o tym numerze już istnieje")
+        except Exception as e:
+            raise HTTPException(500, f"Błąd bazy danych: {str(e)}")
 
 @app.put("/api/zlecenia/{zid}", dependencies=[Depends(verify_key)])
 def update_zlecenie(zid: int, req: ZlecenieRequest):
@@ -1305,13 +1307,16 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
         for r in users_rows:
             sesje = conn.execute(f"""
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
+                       s.uwagi,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
                        z.numer as zl_numer,
+                       zi.numer as zl_inne_numer,
                        COALESCE(st.stawka_godz, 0) as stawka_godz,
                        COALESCE(st.zbrojenie_stawka_godz, 0) as zbrojenie_stawka_godz
                 FROM sesje_pracy s
                 LEFT JOIN operacje o ON s.operacja_id = o.id
                 LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+                LEFT JOIN zlecenia zi ON s.zlecenie_id_inne = zi.id
                 LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
                 WHERE s.user_id=? AND s.status='zakonczona' AND {filter_sql}
                 ORDER BY s.end_time DESC
@@ -1338,10 +1343,24 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
                 elif s["typ"] == "zbrojenie":
                     koszt_zbrojenia += (elapsed / 60.0) * float(s["zbrojenie_stawka_godz"] or 0)
+                # Nazwa operacji i zlecenia zależnie od typu
+                typ = s["typ"]
+                if typ == "nieprodukcyjna":
+                    display_op = s["uwagi"] or s["op_nazwa"] or "—"
+                    display_zl = ""  # puste dla nieprodukcyjnych
+                elif typ == "inne_zlecenie":
+                    display_op = s["uwagi"] or s["op_nazwa"] or "—"
+                    display_zl = s["zl_inne_numer"] or s["zl_numer"] or "—"
+                elif typ == "zbrojenie":
+                    display_op = (s["op_nazwa"] + " (zbr.)") if s["op_nazwa"] else "— (zbr.)"
+                    display_zl = s["zl_numer"] or "—"
+                else:
+                    display_op = s["op_nazwa"] or "—"
+                    display_zl = s["zl_numer"] or "—"
                 sesje_list.append({
-                    "op_nazwa": s["op_nazwa"] or "—",
+                    "op_nazwa": display_op,
                     "stanowisko": s["stanowisko"] or "—",
-                    "zl_numer": s["zl_numer"] or "—",
+                    "zl_numer": display_zl,
                     "ilosc_sztuk": s["ilosc_sztuk"],
                     "czas_min": round(elapsed, 1),
                     "norma_min": czas_norma,
@@ -1425,7 +1444,7 @@ def raport_zlecenia(data_od: str = "", data_do: str = ""):
                     koszt_pracy += koszt
                 sesje_list.append({
                     "pracownik": s["full_name"],
-                    "operacja": s["op_nazwa"],
+                    "operacja": (s["op_nazwa"] + " (zbr.)" if s["typ"] == "zbrojenie" else s["op_nazwa"]) or "—",
                     "kolejnosc": s["kolejnosc"],
                     "typ": s["typ"],
                     "data": (s["end_time"] or "")[:16].replace("T"," "),

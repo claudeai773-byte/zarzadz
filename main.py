@@ -1748,6 +1748,28 @@ async def admin_backup_restore(request: Request):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+@app.post("/api/admin/backup/restore-upload", dependencies=[Depends(verify_key)])
+async def admin_backup_restore_upload(request: Request):
+    """Przywróć dane z pliku JSON przesłanego przez klienta (z dysku użytkownika)."""
+    try:
+        body = await request.body()
+        data = json.loads(body)
+        tmp_path = BACKUP_PATH + ".upload_tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        ok = _db_restore_from_json(tmp_path)
+        os.remove(tmp_path)
+        if ok:
+            # Policz rekordy z danych
+            rows = {k: len(v) if isinstance(v, list) else 1
+                    for k, v in data.items() if not k.startswith("_")}
+            return {"ok": True, "source": "disk_upload", "rows": rows}
+        return {"ok": False, "error": "Przywracanie nie powiodło się"}
+    except json.JSONDecodeError:
+        return {"ok": False, "error": "Nieprawidłowy format JSON"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 @app.get("/api/admin/backup/status", dependencies=[Depends(verify_key)])
 def admin_backup_status():
     """Status backupu: kiedy ostatni, rozmiar pliku."""
@@ -1769,6 +1791,62 @@ def admin_backup_status():
         "backup_ts": ts,
         "backup_interval_sec": BACKUP_INTERVAL,
     }
+
+
+@app.get("/api/oblozenie", dependencies=[Depends(verify_key)])
+def get_oblozenie():
+    """Zwraca oblozenie stanowisk: lista stanowisk + operacje z terminem i postepem."""
+    with db() as conn:
+        stawki_rows = conn.execute(
+            "SELECT stanowisko, stawka_godz, opis FROM stawki ORDER BY stanowisko"
+        ).fetchall()
+        stawki_set = {r["stanowisko"]: dict(r) for r in stawki_rows}
+
+        op_stanowiska = conn.execute("""
+            SELECT DISTINCT o.stanowisko
+            FROM operacje o JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE z.status IN ('nowe','w_realizacji')
+              AND o.stanowisko IS NOT NULL AND o.stanowisko != ''
+              AND o.status != 'zakonczona'
+        """).fetchall()
+        extra = [r["stanowisko"] for r in op_stanowiska if r["stanowisko"] not in stawki_set]
+
+        ops = conn.execute("""
+            SELECT o.id, o.nazwa, o.stanowisko, o.status, o.kolejnosc,
+                   o.ilosc_wykonana, o.czas_norma,
+                   z.id as zlecenie_id, z.numer, z.nazwa as zlecenie_nazwa,
+                   z.termin, z.ilosc_sztuk, z.status as zlecenie_status
+            FROM operacje o JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE z.status IN ('nowe','w_realizacji')
+              AND o.status != 'zakonczona'
+              AND o.stanowisko IS NOT NULL AND o.stanowisko != ''
+            ORDER BY z.termin ASC, z.id ASC, o.kolejnosc ASC
+        """).fetchall()
+
+        stanowiska_ops = {}
+        for o in ops:
+            st = o["stanowisko"]
+            if st not in stanowiska_ops:
+                stanowiska_ops[st] = []
+            stanowiska_ops[st].append({
+                "op_id": o["id"], "op_nazwa": o["nazwa"], "op_status": o["status"],
+                "op_kolejnosc": o["kolejnosc"], "ilosc_wykonana": o["ilosc_wykonana"],
+                "czas_norma": o["czas_norma"], "zlecenie_id": o["zlecenie_id"],
+                "zlecenie_numer": o["numer"], "zlecenie_nazwa": o["zlecenie_nazwa"],
+                "zlecenie_status": o["zlecenie_status"],
+                "termin": o["termin"], "ilosc_sztuk": o["ilosc_sztuk"],
+            })
+
+        result = []
+        all_names = sorted(set(list(stawki_set.keys()) + extra))
+        for name in all_names:
+            info = stawki_set.get(name, {})
+            result.append({
+                "stanowisko": name, "stawka_godz": info.get("stawka_godz"),
+                "opis": info.get("opis", ""), "in_stawki": name in stawki_set,
+                "operacje": stanowiska_ops.get(name, []),
+            })
+        return result
 
 # ─── Serwowanie aplikacji ──────────────────────────────────────────────────────
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")

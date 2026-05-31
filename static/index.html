@@ -1878,7 +1878,7 @@ async function adminBackupStatus() {
   try {
     const r = await get('/api/admin/backup/status');
     if (msg) msg.innerHTML = r.backup_exists
-      ? `✅ Backup: <b>${r.backup_size_kb} KB</b> | Ostatni: ${r.backup_ts?.slice(0,19)||'?'} | Interwał: co ${r.backup_interval_sec}s`
+      ? `✅ Backup: <b>${r.backup_size_kb} KB</b> | Ostatni: ${r.backup_ts?.slice(0,19)||'?'} | Interwał: co ${r.backup_interval_sec}s<br><span style="color:var(--dim);font-size:10px">📁 ${r.backup_path} (DB: ${r.db_path})</span>`
       : '⚠ Brak pliku backupu – kliknij "Zapisz backup teraz"';
   } catch(e) {
     if (msg) msg.textContent = '❌ ' + e.message;

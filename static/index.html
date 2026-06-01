@@ -3856,47 +3856,35 @@ async function _initStep3DScene(stepUrl) {
     }
     if (!stepData.length) throw new Error('Pobrano pusty plik');
 
-    // 3. OCCT parser
+    // 3. OCCT parser – używamy nowszego API z GitHub (obsługuje SolidWorks AP214)
     _setStep3dStatus('⏳ Parsowanie modelu STEP...', '#e6a020');
-    await _loadScript('https://cdn.jsdelivr.net/npm/occt-import-js@0.0.19/dist/occt-import-js.min.js');
-    const occt = await occtimportjs();
-    // Spróbuj z parametrami tessellacji (lepsze pokrycie geometrii)
-    let result;
-    try {
-      result = occt.ReadStepFile(stepData, {
-        linearDeflection: 0.01,
-        angularDeflection: 0.5,
-        readBRep: true,
-      });
-    } catch(_e1) {
-      // Starsze API – bez parametrów
-      result = occt.ReadStepFile(stepData, null);
-    }
+    // Nowsze wersje (0.0.20+) wymagają lokalnego wasm – ładujemy z GitHub raw
+    const OCCT_BASE = 'https://raw.githubusercontent.com/kovacsv/occt-import-js/master/dist/';
+    await _loadScript(OCCT_BASE + 'occt-import-js.js');
+    const occt = await occtimportjs({
+      locateFile: (f) => OCCT_BASE + f,
+    });
+    const result = occt.ReadStepFile(stepData, null);
 
     if (!result || !result.meshes || result.meshes.length === 0)
       throw new Error('Brak geometrii w pliku – plik STEP jest pusty lub uszkodzony');
 
-    // Zlicz wierzchołki żeby wykryć pusty model
-    // Niektóre pliki STEP (assemblies, AP242, CATIA/NX) mają breps=null w mesh-ach
-    let totalVerts = 0;
-    let totalMeshesWithBreps = 0;
-    for (const m of result.meshes) {
-      const breps = Array.isArray(m.breps) ? m.breps : [];
-      if (breps.length > 0) totalMeshesWithBreps++;
-      for (const b of breps) totalVerts += (b.vertices?.length || 0);
+    // Zlicz wierzchołki – obsługa obu wersji API:
+    // Stare (0.0.19): mesh.breps[].vertices / .normals / .triangles
+    // Nowe (0.0.20+): mesh.attributes.position.array / .normal.array + mesh.index.array
+    function _meshHasGeometry(mesh) {
+      if (Array.isArray(mesh.breps) && mesh.breps.length > 0)
+        return mesh.breps.some(b => b.vertices?.length > 0);
+      return mesh.attributes?.position?.array?.length > 0;
     }
-    if (totalVerts === 0) {
-      // Diagnostyka: pokaż co faktycznie jest w pliku
-      const meshInfo = result.meshes.slice(0,3).map(m =>
-        `"${m.name||'?'}" breps=${Array.isArray(m.breps)?m.breps.length:'null'}`
-      ).join(', ');
-      throw new Error(
-        `Plik STEP nie zawiera geometrii obsługiwanej przez przeglądarkę.\n` +
-        `Biblioteka occt-import-js 0.0.19 nie obsługuje niektórych formatów (AP242, assemblies z CATIA/NX/SolidEdge).\n` +
-        `Znaleziono ${result.meshes.length} mesh(e), żaden bez wierzchołków: [${meshInfo}]\n` +
-        `Spróbuj wyeksportować plik jako STEP AP214 lub zapisać w SolidWorks/FreeCAD.`
-      );
-    }
+    const totalVerts = result.meshes.reduce((sum, m) => {
+      if (Array.isArray(m.breps))
+        return sum + m.breps.reduce((s, b) => s + (b.vertices?.length || 0), 0);
+      return sum + (m.attributes?.position?.array?.length || 0);
+    }, 0);
+
+    if (totalVerts === 0)
+      throw new Error('Plik STEP nie zawiera geometrii. Sprawdź czy plik jest poprawny (zapisz ponownie z SolidWorks/FreeCAD).');
 
     // 4. Scena Three.js
     _setStep3dStatus('⏳ Renderowanie...', '#e6a020');
@@ -3904,7 +3892,7 @@ async function _initStep3DScene(stepUrl) {
     if (!canvas) throw new Error('Brak elementu canvas');
 
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // max 2x dla wydajności na tel.
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x0d1117, 1);
     renderer.shadowMap.enabled = false;
 
@@ -3926,32 +3914,45 @@ async function _initStep3DScene(stepUrl) {
     const dl2 = new THREE.DirectionalLight(0x6688cc, 0.4);
     dl2.position.set(-5, -3, -5); scene.add(dl2);
 
-    // Buduj geometrię
+    // Buduj geometrię – obsługa obu API
     const group = new THREE.Group();
     const defaultMat = new THREE.MeshPhongMaterial({
       color: 0x4a90d9, shininess: 80, specular: 0x224466, side: THREE.DoubleSide
     });
 
     for (const mesh of result.meshes) {
-      const verts = [], norms = [], idxs = [];
-      let vOff = 0;
-      for (const brep of (Array.isArray(mesh.breps) ? mesh.breps : [])) {
-        for (let v = 0; v < brep.vertices.length; v += 3)
-          verts.push(brep.vertices[v], brep.vertices[v+1], brep.vertices[v+2]);
-        if (brep.normals)
-          for (let n = 0; n < brep.normals.length; n += 3)
-            norms.push(brep.normals[n], brep.normals[n+1], brep.normals[n+2]);
-        for (const i of brep.triangles) idxs.push(i + vOff);
-        vOff += brep.vertices.length / 3;
+      let posArr, normArr, idxArr;
+
+      if (Array.isArray(mesh.breps) && mesh.breps.length > 0) {
+        // Stare API: breps[]
+        const verts = [], norms = [], idxs = [];
+        let vOff = 0;
+        for (const brep of mesh.breps) {
+          if (!brep.vertices?.length) continue;
+          for (let v = 0; v < brep.vertices.length; v += 3)
+            verts.push(brep.vertices[v], brep.vertices[v+1], brep.vertices[v+2]);
+          if (brep.normals)
+            for (let n = 0; n < brep.normals.length; n += 3)
+              norms.push(brep.normals[n], brep.normals[n+1], brep.normals[n+2]);
+          for (const i of brep.triangles) idxs.push(i + vOff);
+          vOff += brep.vertices.length / 3;
+        }
+        posArr = verts; normArr = norms; idxArr = idxs;
+      } else {
+        // Nowe API: attributes + index
+        posArr  = Array.from(mesh.attributes?.position?.array || []);
+        normArr = Array.from(mesh.attributes?.normal?.array   || []);
+        idxArr  = Array.from(mesh.index?.array                || []);
       }
-      if (!verts.length || !idxs.length) continue;
+
+      if (!posArr.length || !idxArr.length) continue;
 
       const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-      if (norms.length === verts.length)
-        geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
-      geo.setIndex(idxs);
-      if (!norms.length) geo.computeVertexNormals();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+      if (normArr.length === posArr.length)
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(normArr, 3));
+      geo.setIndex(idxArr);
+      if (!normArr.length) geo.computeVertexNormals();
 
       let mat = defaultMat;
       if (mesh.color && mesh.color.length >= 3) {

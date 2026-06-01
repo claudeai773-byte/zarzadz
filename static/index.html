@@ -3876,7 +3876,7 @@ async function _initStep3DScene(stepUrl) {
     // 3. OCCT parser – używamy nowszego API (obsługuje SolidWorks AP214)
     _setStep3dStatus('⏳ Parsowanie modelu STEP...', '#e6a020');
     // GitHub raw blokuje jako script (MIME text/plain) – ładujemy przez fetch+blob
-    const OCCT_BASE = 'https://raw.githubusercontent.com/kovacsv/occt-import-js/master/dist/';
+    const OCCT_BASE = 'https://cdn.jsdelivr.net/gh/kovacsv/occt-import-js@master/dist/';
     if (typeof occtimportjs === 'undefined') {
       const jsText = await fetch(OCCT_BASE + 'occt-import-js.js').then(r => {
         if (!r.ok) throw new Error('Błąd pobierania biblioteki OCCT: ' + r.status);

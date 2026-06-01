@@ -586,6 +586,18 @@ def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
         )
     return {"status": "ok", "sesja_id": sesja_id, "start_time": new_start, "end_time": new_end}
 
+@app.delete("/api/sesje/{sesja_id}", dependencies=[Depends(verify_key)])
+def delete_sesja(sesja_id: int):
+    """Usunięcie sesji pracy – dostępne dla majstra i admina."""
+    with get_db() as conn:
+        sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (sesja_id,)).fetchone()
+        if not sesja:
+            raise HTTPException(404, "Sesja nie istnieje")
+        if sesja["status"] == "aktywna":
+            raise HTTPException(400, "Nie można usunąć aktywnej sesji – najpierw ją zakończ")
+        conn.execute("DELETE FROM sesje_pracy WHERE id=?", (sesja_id,))
+    return {"status": "ok", "deleted": sesja_id}
+
 @app.get("/api/sesje/aktywne/{user_id}", dependencies=[Depends(verify_key)])
 def get_aktywne_sesje(user_id: int):
     """Zwraca WSZYSTKIE aktywne sesje użytkownika (może być wiele)"""
@@ -945,7 +957,7 @@ def stats_wydajnosc(okres: str = "dzis"):
         for r in users_rows:
             sesje = conn.execute(f"""
                 SELECT s.id, s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
-                       o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
+                       o.nazwa as op_nazwa, o.czas_norma, o.czas_zbrojenia_min, o.stanowisko,
                        z.numer as zl_numer, z.nazwa as zl_nazwa, s.typ,
                        COALESCE(st.stawka_godz,0) as stawka_godz,
                        COALESCE(st.zbrojenie_stawka_godz,0) as zbrojenie_stawka_godz
@@ -977,7 +989,13 @@ def stats_wydajnosc(okres: str = "dzis"):
                 elapsed = max(0.1, elapsed)
                 czas_norma = s["czas_norma"]
                 ilosc = s["ilosc_sztuk"] or 1
-                wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma and s["typ"] == "operacja" else None
+                czas_zbrojenia_min = s["czas_zbrojenia_min"] or 0
+                if s["typ"] == "operacja" and czas_norma:
+                    wyd_pct = round(czas_norma * ilosc / elapsed * 100)
+                elif s["typ"] == "zbrojenie" and czas_zbrojenia_min:
+                    wyd_pct = round(czas_zbrojenia_min / elapsed * 100)
+                else:
+                    wyd_pct = None
                 if wyd_pct is not None:
                     normy_total += 1
                     if wyd_pct >= 90:
@@ -1041,13 +1059,13 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
         """, (user_id,)).fetchone()
 
         sesje = conn.execute(f"""
-            SELECT s.id, s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
-                   o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
+            SELECT s.id, s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
+                   o.nazwa as op_nazwa, o.czas_norma, o.czas_zbrojenia_min, o.stanowisko,
                    z.numer as zl_numer, z.nazwa as zl_nazwa
             FROM sesje_pracy s
             LEFT JOIN operacje o ON s.operacja_id = o.id
             LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
-            WHERE s.user_id=? AND s.status='zakonczona' AND s.typ='operacja'
+            WHERE s.user_id=? AND s.status='zakonczona' AND s.typ IN ('operacja','zbrojenie')
               AND s.start_time IS NOT NULL AND s.end_time IS NOT NULL
               AND {filter_sql}
             ORDER BY s.end_time DESC
@@ -1070,7 +1088,13 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
         elapsed = max(0.1, elapsed)
         czas_norma = s["czas_norma"]
         ilosc = s["ilosc_sztuk"] or 1
-        wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
+        czas_zbrojenia_min = s["czas_zbrojenia_min"] or 0
+        if s["typ"] == "operacja" and czas_norma:
+            wyd_pct = round(czas_norma * ilosc / elapsed * 100)
+        elif s["typ"] == "zbrojenie" and czas_zbrojenia_min:
+            wyd_pct = round(czas_zbrojenia_min / elapsed * 100)
+        else:
+            wyd_pct = None
         if wyd_pct is not None:
             normy_total += 1
             if wyd_pct >= 90:
@@ -1083,8 +1107,9 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
             "zl_nazwa": s["zl_nazwa"],
             "ilosc_sztuk": s["ilosc_sztuk"],
             "czas_min": round(elapsed, 1),
-            "norma_min": czas_norma,
+            "norma_min": czas_norma if s["typ"] == "operacja" else czas_zbrojenia_min or None,
             "wyd_pct": wyd_pct,
+            "typ": s["typ"],
             "data": (s["end_time"] or "")[:10],
             "start_time": s["start_time"],
             "end_time": s["end_time"],

@@ -119,6 +119,21 @@
 // ══════════════════════════════════════════════════════════════
 //  CONFIG
 // ══════════════════════════════════════════════════════════════
+// ── Auto-config z linku (hash #cfg=BASE64) ─────────────────
+(function() {
+  try {
+    const hash = window.location.hash;
+    const m = hash.match(/[#&]cfg=([A-Za-z0-9+/=_-]+)/);
+    if (m) {
+      const decoded = JSON.parse(atob(m[1].replace(/-/g,'+').replace(/_/g,'/')));
+      if (decoded.s && decoded.k) {
+        localStorage.setItem('produkcja_config', JSON.stringify({server_url: decoded.s, api_key: decoded.k}));
+      }
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  } catch(e) { /* nieprawidłowy hash – ignoruj */ }
+})();
+
 let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
 let SERVER_URL = CONFIG.server_url || '';
 let API_KEY    = CONFIG.api_key    || '';
@@ -854,6 +869,25 @@ function fmtDate(d) { return d ? d.substring(0,10) : '—'; }
 // ══════════════════════════════════════════════════════════════
 //  SCREEN: CONFIG
 // ══════════════════════════════════════════════════════════════
+function generateWorkerLink() {
+  if (!SERVER_URL || !API_KEY) { alert('Najpierw skonfiguruj serwer i klucz API'); return; }
+  const payload = btoa(JSON.stringify({s: SERVER_URL.replace(/\/$/, ''), k: API_KEY}))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const base = window.location.origin + window.location.pathname;
+  const link = base + '#cfg=' + payload;
+  const box = document.getElementById('worker-link-box');
+  const input = document.getElementById('worker-link-input');
+  if (box && input) { input.value = link; box.style.display = 'block'; input.select(); }
+}
+function copyWorkerLink() {
+  const input = document.getElementById('worker-link-input');
+  if (!input) return;
+  navigator.clipboard.writeText(input.value).then(() => {
+    const copied = document.getElementById('worker-link-copied');
+    if (copied) { copied.style.display = 'block'; setTimeout(() => { copied.style.display = 'none'; }, 2000); }
+  }).catch(() => { input.select(); document.execCommand('copy'); });
+}
+
 function renderConfig() {
   return `
   <div class="config-wrap">
@@ -3538,6 +3572,23 @@ function renderUstawienia() {
       Serwer: <span style="color:var(--text)">${SERVER_URL||'(nie ustawiony)'}</span>
     </div>
     <button class="btn btn-blue" onclick="setState({screen:'config'})">🔧 Zmień serwer</button>
+  </div>
+  <div class="card" style="margin-top:10px">
+    <div class="card-title" style="margin-bottom:10px">🔗 Link dla pracowników</div>
+    <div style="font-size:13px;color:var(--dim);margin-bottom:10px">
+      Wygeneruj gotowy link – pracownik klika i od razu trafia do logowania, bez konfiguracji.
+    </div>
+    <button class="btn btn-accent" onclick="generateWorkerLink()">🔗 Generuj link</button>
+    <div id="worker-link-box" style="display:none;margin-top:10px">
+      <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Skopiuj i wyślij pracownikom:</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="worker-link-input" type="text" readonly
+               style="flex:1;font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;word-break:break-all"
+               onclick="this.select()">
+        <button class="btn-sm" onclick="copyWorkerLink()">📋</button>
+      </div>
+      <div id="worker-link-copied" style="display:none;font-size:12px;color:#27ae60;margin-top:4px">✓ Skopiowano!</div>
+    </div>
   </div>
   <div class="card" style="margin-top:10px">
     <div class="card-title" style="margin-bottom:6px">ℹ O aplikacji</div>

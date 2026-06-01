@@ -2362,7 +2362,7 @@ function renderMajsterPodsumowanie(stats) {
             const timeColor = czasPrzekroczony ? 'var(--red)' : 'var(--green)';
             const rowBg = czasPrzekroczony ? 'background:rgba(231,76,60,0.08);' : '';
             html += '<div style="padding:7px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;' + rowBg + '">'
-                  + '<div><div style="font-size:13px;font-weight:500">' + (s.full_name||'—') + (czasPrzekroczony?' <span style="font-size:10px;color:var(--red);font-weight:700">⚠ PRZEKROCZONO</span>':'') + '</div>'
+                  + '<div><div style="font-size:13px;font-weight:500">' + (s.full_name||'—') + (s.typ==='zbrojenie'?' <span style="font-size:10px;color:var(--orange);font-weight:700;background:rgba(230,126,0,0.12);border-radius:3px;padding:1px 4px">⚙ zbr</span>':'') + (czasPrzekroczony?' <span style="font-size:10px;color:var(--red);font-weight:700">⚠ PRZEKROCZONO</span>':'') + '</div>'
                   + '<div style="font-size:11px;color:var(--dim)">🕐 ' + dt + '</div>'
                   + (s.uwagi?'<div style="font-size:11px;color:var(--orange)">💬 '+s.uwagi+'</div>':'')
                   + '</div><div style="text-align:right">'
@@ -2522,7 +2522,7 @@ function renderMajsterWydajnosc() {
           <div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3)">
             <div style="display:flex;justify-content:space-between;align-items:flex-start">
               <div style="flex:1;min-width:0">
-                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.op_nazwa}</div>
+                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.op_nazwa}${s.typ==='zbrojenie'?' <span style="font-size:10px;color:var(--orange);font-weight:700;background:rgba(230,126,0,0.12);border-radius:3px;padding:1px 3px">⚙ zbr</span>':''}</div>
                 <div style="font-size:11px;color:var(--accent)">📋 ${s.zl_numer}${s.zl_nazwa && s.zl_nazwa!==s.zl_numer ? ' – '+s.zl_nazwa : ''}</div>
                 <div style="font-size:11px;color:var(--dim)">📅 ${s.data||'—'} | 🏭 ${s.stanowisko||'—'} | 📦 ${s.ilosc_sztuk||0} szt.</div>
               </div>
@@ -2727,16 +2727,29 @@ function renderZlecenia() {
     html += renderOperacjeModal();
   }
 
-  // Modal korekty czasu sesji (majster/admin)
-  if (state.editSesjaModal) {
-    const esm = state.editSesjaModal;
-    const toLocal = (iso) => {
-      if (!iso) return '';
-      const d = new Date(iso.replace('Z','')+'Z');
-      const pad = n => String(n).padStart(2,'0');
-      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    };
-    html += `<div class="modal-overlay" onclick="if(event.target===this)setState({editSesjaModal:null})">
+  // Modal korekty czasu sesji – renderowany globalnie przez renderEditSesjaModalHtml()
+
+  // Modal koszty
+  if (state.zlecenieKoszty) {
+    html += renderKosztyModal();
+  }
+
+  return html;
+}
+
+function renderEditSesjaModalHtml() {
+  if (!state.editSesjaModal) return '';
+  const esm = state.editSesjaModal;
+  const toLocal = (iso) => {
+    if (!iso) return '';
+    // Jeśli string nie ma Z ani +, traktuj jako lokalny (serwer zwraca czas lokalny bez strefy)
+    const hasTimezone = iso.endsWith('Z') || iso.includes('+') || /[0-9]-[0-9]{2}:[0-9]{2}$/.test(iso);
+    const d = hasTimezone ? new Date(iso) : new Date(iso.replace('T',' '));
+    if (isNaN(d)) return '';
+    const pad = n => String(n).padStart(2,'0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  return `<div class="modal-overlay" onclick="if(event.target===this)setState({editSesjaModal:null})">
       <div class="modal">
         <button class="modal-close" onclick="setState({editSesjaModal:null})">×</button>
         <h3>✏ Korekta czasu sesji #${esm.sesja_id}</h3>
@@ -2752,14 +2765,6 @@ function renderZlecenia() {
         <button class="btn btn-accent" onclick="saveEditSesjaModal()">💾 Zapisz korektę</button>
       </div>
     </div>`;
-  }
-
-  // Modal koszty
-  if (state.zlecenieKoszty) {
-    html += renderKosztyModal();
-  }
-
-  return html;
 }
 
 function openEditSesjaModal(sesjaId, startTime, endTime) {
@@ -2771,8 +2776,9 @@ async function saveEditSesjaModal() {
   if (!esm) return;
   const toISO = (localVal) => {
     if (!localVal) return null;
-    // datetime-local daje "YYYY-MM-DDTHH:MM" – traktujemy jako UTC (serwer używa UTC)
-    return localVal + ':00Z';
+    // datetime-local daje "YYYY-MM-DDTHH:MM" w strefie lokalnej – konwertujemy do UTC
+    const d = new Date(localVal + ':00');
+    return d.toISOString();
   };
   const startVal = document.getElementById('esm-start')?.value;
   const endVal   = document.getElementById('esm-end')?.value;
@@ -3635,7 +3641,8 @@ function renderContent() {
       ${tabContent()}
     </div>
     ${renderBottomNav()}
-    ${renderQRZleceniePickerModal()}`;
+    ${renderQRZleceniePickerModal()}
+    ${renderEditSesjaModalHtml()}`;
 }
 
 function render() {

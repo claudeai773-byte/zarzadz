@@ -3764,7 +3764,7 @@ async function uploadStepFile(input) {
     const buf = await file.arrayBuffer();
     const result = await new Promise((res, rej) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', SERVER_URL + '/api/step-upload');
+      xhr.open('POST', SERVER_URL.replace(/\/$/, '') + '/api/step-upload');
       xhr.setRequestHeader('x-api-key', API_KEY);
       xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       xhr.setRequestHeader('x-filename', encodeURIComponent(file.name));
@@ -3855,7 +3855,7 @@ async function _initStep3DScene(stepUrl) {
 
     // 2. Pobranie pliku STEP przez proxy (dłuższy timeout dla telefonu)
     _setStep3dStatus('⏳ Pobieranie pliku STEP...', '#e6a020');
-    const proxyUrl = SERVER_URL + '/api/step-proxy?url=' + encodeURIComponent(stepUrl);
+    const proxyUrl = SERVER_URL.replace(/\/$/, '') + '/api/step-proxy?url=' + encodeURIComponent(stepUrl);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 120000); // 2 min timeout
     let stepData;

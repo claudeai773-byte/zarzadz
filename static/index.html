@@ -3867,7 +3867,10 @@ async function _initStep3DScene(stepUrl) {
 
     // Zlicz wierzchołki żeby wykryć pusty model
     let totalVerts = 0;
-    for (const m of result.meshes) for (const b of m.breps) totalVerts += b.vertices.length;
+    for (const m of result.meshes) {
+      const breps = Array.isArray(m.breps) ? m.breps : [];
+      for (const b of breps) totalVerts += (b.vertices?.length || 0);
+    }
     if (totalVerts === 0) throw new Error('Model nie zawiera geometrii (0 wierzchołków)');
 
     // 4. Scena Three.js
@@ -3907,7 +3910,7 @@ async function _initStep3DScene(stepUrl) {
     for (const mesh of result.meshes) {
       const verts = [], norms = [], idxs = [];
       let vOff = 0;
-      for (const brep of mesh.breps) {
+      for (const brep of (Array.isArray(mesh.breps) ? mesh.breps : [])) {
         for (let v = 0; v < brep.vertices.length; v += 3)
           verts.push(brep.vertices[v], brep.vertices[v+1], brep.vertices[v+2]);
         if (brep.normals)

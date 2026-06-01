@@ -1370,7 +1370,7 @@ function renderMajster() {
             <div style="text-align:right">
               <div style="font-family:Consolas;color:var(--green);font-size:16px">${fmtTime(elapsed)}</div>
               ${s.czas_norma?`<div style="font-size:11px;color:var(--dim)">norma: ${s.czas_norma}min</div>`:''}
-              <button class="btn-sm" style="margin-top:4px;font-size:11px" onclick="openEditSesjaModal(${s.id},'${s.start_time}','${s.end_time||''}')">✏ Koryguj czas</button>
+              <button class="btn-sm" style="margin-top:4px;font-size:11px" onclick="openEditSesjaModal(${s.sesja_id},'${s.start_time}','${s.end_time||''}')">✏ Koryguj czas</button>
             </div>
           </div>
         </div>`;
@@ -2530,6 +2530,8 @@ function renderMajsterWydajnosc() {
                 <div style="font-family:Consolas;font-size:13px;font-weight:700;color:var(--text)">${avgMin}<span style="font-size:10px;color:var(--dim);font-weight:400"> min/szt</span></div>
                 ${s.norma_min?`<div style="font-size:10px;color:var(--dim)">norma: ${s.norma_min} min</div>`:''}
                 ${s.wyd_pct!==null?`<div style="font-weight:700;font-size:14px;color:${wColor}">${s.wyd_pct}%</div>`:''}
+                ${s.sesja_id?`<button class="btn-sm" style="font-size:10px;margin-top:4px"
+                  onclick="openEditSesjaModal(${s.sesja_id},'${s.start_time||''}','${s.end_time||''}')">✏ Koryguj czas</button>`:''}
               </div>
             </div>
           </div>`;
@@ -2776,22 +2778,25 @@ async function saveEditSesjaModal() {
   const endVal   = document.getElementById('esm-end')?.value;
   if (!startVal) { alert('Czas rozpoczęcia jest wymagany'); return; }
   try {
-    await fetch('/api/sesje/' + esm.sesja_id + '/czas', {
+    const r = await fetch(SERVER_URL.replace(/\/$/, '') + '/api/sesje/' + esm.sesja_id + '/czas', {
       method: 'PATCH',
       headers: {'Content-Type':'application/json','x-api-key': API_KEY},
       body: JSON.stringify({
         start_time: toISO(startVal),
         end_time:   toISO(endVal) || null,
       })
-    }).then(async r => {
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({detail: r.statusText}));
-        throw new Error(err.detail || r.statusText);
-      }
-      return r.json();
     });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({detail: r.statusText}));
+      throw new Error(err.detail || r.statusText);
+    }
     setState({editSesjaModal: null});
-    await loadMajster();
+    // Odśwież widok, z którego otwarto modal
+    if (state.majsterSubTab === 'wydajnosc') {
+      await loadWydajnoscMajster(state.wydajnoscOkres);
+    } else {
+      await loadMajster();
+    }
   } catch(e) {
     alert('Błąd korekty czasu: ' + e.message);
   }

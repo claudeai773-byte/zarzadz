@@ -219,6 +219,7 @@ let state = {
   // Autofill operacje
   autofillSourceId: null,
   autofillOperacje: [],
+  editSesjaModal: null,   // {sesja_id, start_time, end_time}
 
   // Print modal
   printModal: null,
@@ -742,9 +743,22 @@ async function saveZlecenie(data) {
           } catch(e2) { console.error('Błąd kopiowania operacji:', e2); }
         }
       }
+      // Skopiuj produkty ze wzorcowego zlecenia
+      const prods = state.autofillProdukty || [];
+      if (prods.length && state.autofillSourceId && newId) {
+        for (const p of prods) {
+          try {
+            await post(`/api/zlecenia/${newId}/produkty`, {
+              nazwa: p.nazwa,
+              ilosc: p.ilosc,
+              cena: p.cena,
+            });
+          } catch(e2) { console.error('Błąd kopiowania produktu:', e2); }
+        }
+      }
       // Najpierw odśwież listę zleceń, potem zamknij modal
       await loadZlecenia();
-      setState({zlecenieModal:null, autofillSourceId:null, autofillOperacje:[]});
+      setState({zlecenieModal:null, autofillSourceId:null, autofillOperacje:[], autofillProdukty:[], autofillStepUrl:null});
     }
   } catch(e) {
     alert('Błąd: ' + e.message);
@@ -1322,6 +1336,7 @@ function renderMajster() {
             <div style="text-align:right">
               <div style="font-family:Consolas;color:var(--green);font-size:16px">${fmtTime(elapsed)}</div>
               ${s.czas_norma?`<div style="font-size:11px;color:var(--dim)">norma: ${s.czas_norma}min</div>`:''}
+              <button class="btn-sm" style="margin-top:4px;font-size:11px" onclick="openEditSesjaModal(${s.id},'${s.start_time}','${s.end_time||''}')">✏ Koryguj czas</button>
             </div>
           </div>
         </div>`;
@@ -2619,6 +2634,22 @@ function renderZlecenia() {
               </div>`
             ).join('')}
           </div>` : ''}
+          ${state.autofillProdukty && state.autofillProdukty.length ? `
+          <div style="margin-top:6px;background:rgba(52,152,219,0.08);border:1px solid var(--blue);border-radius:6px;padding:8px 10px;">
+            <div style="font-size:11px;font-weight:700;color:var(--blue);margin-bottom:6px">
+              🛒 Zostaną skopiowane produkty (${state.autofillProdukty.length}):
+            </div>
+            ${state.autofillProdukty.map(p =>
+              `<div style="font-size:12px;padding:2px 0;border-bottom:1px solid rgba(52,152,219,0.2)">
+                <span>${p.nazwa}</span>
+                <span style="color:var(--dim);margin-left:6px">${p.ilosc} szt. × ${fmtPLN(p.cena)}</span>
+              </div>`
+            ).join('')}
+          </div>` : ''}
+          ${state.autofillStepUrl ? `
+          <div style="margin-top:6px;background:rgba(155,89,182,0.08);border:1px solid #9b59b6;border-radius:6px;padding:8px 10px;font-size:12px;color:#9b59b6;font-weight:700;">
+            📐 Plik STEP zostanie przypisany z wzorca
+          </div>` : ''}
         </div>` : ''}
         <div class="field"><label>Numer</label><input id="zl-numer" type="text" value="${z.numer||''}"></div>
         <div class="field"><label>Nazwa</label><input id="zl-nazwa" type="text" value="${z.nazwa||''}"></div>
@@ -2660,12 +2691,76 @@ function renderZlecenia() {
     html += renderOperacjeModal();
   }
 
+  // Modal korekty czasu sesji (majster/admin)
+  if (state.editSesjaModal) {
+    const esm = state.editSesjaModal;
+    const toLocal = (iso) => {
+      if (!iso) return '';
+      const d = new Date(iso.replace('Z','')+'Z');
+      const pad = n => String(n).padStart(2,'0');
+      return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    html += `<div class="modal-overlay" onclick="if(event.target===this)setState({editSesjaModal:null})">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({editSesjaModal:null})">×</button>
+        <h3>✏ Korekta czasu sesji #${esm.sesja_id}</h3>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:14px">Dostępne dla majstra i admina. Wpisz skorygowane czasy w strefie lokalnej.</div>
+        <div class="field"><label>Czas rozpoczęcia</label>
+          <input id="esm-start" type="datetime-local" value="${toLocal(esm.start_time)}"
+                 style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;width:100%;box-sizing:border-box">
+        </div>
+        <div class="field"><label>Czas zakończenia <span style="color:var(--dim)">(zostaw puste jeśli sesja aktywna)</span></label>
+          <input id="esm-end" type="datetime-local" value="${toLocal(esm.end_time)}"
+                 style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;width:100%;box-sizing:border-box">
+        </div>
+        <button class="btn btn-accent" onclick="saveEditSesjaModal()">💾 Zapisz korektę</button>
+      </div>
+    </div>`;
+  }
+
   // Modal koszty
   if (state.zlecenieKoszty) {
     html += renderKosztyModal();
   }
 
   return html;
+}
+
+function openEditSesjaModal(sesjaId, startTime, endTime) {
+  setState({editSesjaModal: {sesja_id: sesjaId, start_time: startTime, end_time: endTime || ''}});
+}
+
+async function saveEditSesjaModal() {
+  const esm = state.editSesjaModal;
+  if (!esm) return;
+  const toISO = (localVal) => {
+    if (!localVal) return null;
+    // datetime-local daje "YYYY-MM-DDTHH:MM" – traktujemy jako UTC (serwer używa UTC)
+    return localVal + ':00Z';
+  };
+  const startVal = document.getElementById('esm-start')?.value;
+  const endVal   = document.getElementById('esm-end')?.value;
+  if (!startVal) { alert('Czas rozpoczęcia jest wymagany'); return; }
+  try {
+    await fetch('/api/sesje/' + esm.sesja_id + '/czas', {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json','x-api-key': API_KEY},
+      body: JSON.stringify({
+        start_time: toISO(startVal),
+        end_time:   toISO(endVal) || null,
+      })
+    }).then(async r => {
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({detail: r.statusText}));
+        throw new Error(err.detail || r.statusText);
+      }
+      return r.json();
+    });
+    setState({editSesjaModal: null});
+    await loadMajster();
+  } catch(e) {
+    alert('Błąd korekty czasu: ' + e.message);
+  }
 }
 
 function filterZleceniaSearch(query) {
@@ -2727,13 +2822,42 @@ let _autofillToken = 0;
 async function fetchAutofillOperacje(zid) {
   const myToken = ++_autofillToken;
   try {
-    const ops = await get(`/api/zlecenia/${zid}/operacje`);
+    const [ops, produkty] = await Promise.all([
+      get(`/api/zlecenia/${zid}/operacje`),
+      get(`/api/zlecenia/${zid}/produkty`).catch(() => []),
+    ]);
     // Ignoruj wynik jeśli w międzyczasie wybrano inne zlecenie do autofill
     if (myToken !== _autofillToken) return;
-    setState({autofillOperacje: ops});
+    // Pobierz też plik STEP ze wzorcowego zlecenia
+    const srcZlecenie = (state.zlecenia||[]).find(z => z.id === zid);
+    const stepUrl = srcZlecenie?.model_3d_url || null;
+    // Aktualizuj dane autofill + zapowiedź produktów i STEP
+    const currentModal = state.zlecenieModal || {};
+    setState({
+      autofillOperacje: ops,
+      autofillProdukty: produkty,
+      autofillStepUrl: stepUrl,
+      zlecenieModal: {...currentModal, model_3d_url: stepUrl},
+    });
+    // Zaktualizuj ukryty input model_3d i info-box
+    setTimeout(() => {
+      const hiddenInput = document.getElementById('zl-model3d');
+      const infoBox = document.getElementById('zl-model3d-info');
+      const uploadArea = document.getElementById('zl-model3d-upload-area');
+      if (hiddenInput) hiddenInput.value = stepUrl || '';
+      if (infoBox && uploadArea) {
+        if (stepUrl) {
+          infoBox.style.display = 'flex';
+          uploadArea.style.display = 'none';
+        } else {
+          infoBox.style.display = 'none';
+          uploadArea.style.display = '';
+        }
+      }
+    }, 100);
   } catch(e) {
     if (myToken !== _autofillToken) return;
-    setState({autofillOperacje: []});
+    setState({autofillOperacje: [], autofillProdukty: [], autofillStepUrl: null});
   }
 }
 
@@ -3664,25 +3788,23 @@ function openStep3DViewer(url) {
   if (_step3dOverlay) _step3dOverlay.remove();
   _step3dOverlay = document.createElement('div');
   _step3dOverlay.id = 'step3d-overlay';
-  _step3dOverlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#0d1117;display:flex;flex-direction:column;';
+  _step3dOverlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#0d1117;display:flex;flex-direction:column;font-family:sans-serif';
   _step3dOverlay.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;
-                padding:12px 16px;background:#161b22;border-bottom:1px solid #30363d;flex-shrink:0">
-      <span style="color:#e6edf3;font-weight:700;font-size:15px">🧊 Podgląd modelu 3D</span>
+                padding:10px 14px;background:#161b22;border-bottom:1px solid #30363d;flex-shrink:0">
+      <span style="color:#e6edf3;font-weight:700;font-size:14px">🧊 Podgląd modelu 3D</span>
       <div style="display:flex;gap:8px;align-items:center">
-        <span id="step3d-status" style="color:#8b949e;font-size:12px"></span>
+        <span id="step3d-status" style="color:#e6a020;font-size:12px">⏳ Ładowanie...</span>
         <button onclick="closeStep3DViewer()"
                 style="background:#21262d;border:1px solid #30363d;color:#e6edf3;
-                       border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px">✕ Zamknij</button>
+                       border-radius:6px;padding:5px 12px;cursor:pointer;font-size:13px">✕</button>
       </div>
     </div>
-    <div id="step3d-info" style="display:none;padding:8px 16px;background:#161b22;
-         border-bottom:1px solid #30363d;font-size:12px;color:#8b949e;flex-shrink:0">
-      <b style="color:#e6edf3">Obracaj</b> – przeciągnij &nbsp;|&nbsp;
-      <b style="color:#e6edf3">Zoom</b> – scroll / szczypnij &nbsp;|&nbsp;
-      <b style="color:#e6edf3">Przesuń</b> – 2 palce / PPM
+    <div id="step3d-hint" style="display:none;padding:6px 14px;background:#161b22;
+         border-bottom:1px solid #30363d;font-size:11px;color:#8b949e;flex-shrink:0;text-align:center">
+      Obracaj: przeciągnij &nbsp;|&nbsp; Zoom: scroll / szczypnij &nbsp;|&nbsp; Przesuń: PPM / 2 palce
     </div>
-    <canvas id="step3d-canvas" style="flex:1;display:block;width:100%;touch-action:none"></canvas>
+    <canvas id="step3d-canvas" style="flex:1;display:block;width:100%;height:100%;touch-action:none;outline:none"></canvas>
   `;
   document.body.appendChild(_step3dOverlay);
   _initStep3DScene(url);
@@ -3702,103 +3824,175 @@ function _loadScript(src) {
     if (document.querySelector('script[src="' + src + '"]')) { res(); return; }
     const s = document.createElement('script');
     s.src = src; s.onload = res;
-    s.onerror = () => rej(new Error('Brak skryptu: ' + src));
+    s.onerror = () => rej(new Error('Nie można załadować: ' + src));
     document.head.appendChild(s);
   });
 }
 
 async function _initStep3DScene(stepUrl) {
-  _setStep3dStatus('⏳ Ładowanie biblioteki...', '#e6a020');
   try {
+    // 1. Biblioteki Three.js
+    _setStep3dStatus('⏳ Ładowanie Three.js...', '#e6a020');
     await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
     await _loadScript('https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js');
-  } catch(e) { _setStep3dStatus('✗ Brak internetu / biblioteki 3D', '#e05555'); return; }
 
-  _setStep3dStatus('⏳ Pobieranie pliku STEP...', '#e6a020');
-  const proxyUrl = SERVER_URL + '/api/step-proxy?url=' + encodeURIComponent(stepUrl);
-  let stepData;
-  try {
-    const resp = await fetch(proxyUrl);
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    stepData = await resp.arrayBuffer();
-  } catch(e) { _setStep3dStatus('✗ Błąd pobierania: ' + e.message, '#e05555'); return; }
-
-  _setStep3dStatus('⏳ Parsowanie modelu...', '#e6a020');
-  try { await _loadScript('https://cdn.jsdelivr.net/npm/occt-import-js@0.0.19/dist/occt-import-js.min.js'); }
-  catch(e) { _setStep3dStatus('✗ Brak biblioteki OCCT', '#e05555'); return; }
-
-  let result;
-  try {
-    const occt = await occtimportjs();
-    result = occt.ReadStepFile(new Uint8Array(stepData), null);
-  } catch(e) { _setStep3dStatus('✗ Błąd parsowania: ' + e.message, '#e05555'); return; }
-
-  _setStep3dStatus('✓ Gotowe', '#27ae60');
-  const info = document.getElementById('step3d-info');
-  if (info) info.style.display = 'block';
-
-  const canvas = document.getElementById('step3d-canvas');
-  if (!canvas) return;
-  const renderer = new THREE.WebGLRenderer({canvas, antialias: true});
-  renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setClearColor(0x0d1117);
-
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.001, 1000000);
-  const controls = new THREE.OrbitControls(camera, canvas);
-  controls.enableDamping = true; controls.dampingFactor = 0.08;
-
-  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const dl = new THREE.DirectionalLight(0xffffff, 0.9); dl.position.set(1, 2, 3); scene.add(dl);
-  const dl2 = new THREE.DirectionalLight(0x88aaff, 0.4); dl2.position.set(-2, -1, -2); scene.add(dl2);
-
-  const group = new THREE.Group();
-  const defaultMat = new THREE.MeshPhongMaterial({color:0x4a90d9, shininess:60, side:THREE.DoubleSide});
-
-  for (let mi = 0; mi < result.meshes.length; mi++) {
-    const mesh = result.meshes[mi];
-    const geo = new THREE.BufferGeometry();
-    const verts = [], norms = [], idxs = [];
-    let vOff = 0;
-    for (const brep of mesh.breps) {
-      for (let v = 0; v < brep.vertices.length; v+=3)
-        verts.push(brep.vertices[v], brep.vertices[v+1], brep.vertices[v+2]);
-      if (brep.normals) for (let n = 0; n < brep.normals.length; n+=3)
-        norms.push(brep.normals[n], brep.normals[n+1], brep.normals[n+2]);
-      for (const i of brep.triangles) idxs.push(i + vOff);
-      vOff += brep.vertices.length / 3;
+    // 2. Pobranie pliku STEP przez proxy (dłuższy timeout dla telefonu)
+    _setStep3dStatus('⏳ Pobieranie pliku STEP...', '#e6a020');
+    const proxyUrl = SERVER_URL + '/api/step-proxy?url=' + encodeURIComponent(stepUrl);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 120000); // 2 min timeout
+    let stepData;
+    try {
+      const resp = await fetch(proxyUrl, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!resp.ok) throw new Error('Serwer zwrócił błąd HTTP ' + resp.status);
+      const ct = resp.headers.get('content-type') || '';
+      if (ct.includes('text/html')) throw new Error('Plik niedostępny – sprawdź uprawnienia na Cloudinary');
+      stepData = new Uint8Array(await resp.arrayBuffer());
+    } catch(e) {
+      clearTimeout(timer);
+      if (e.name === 'AbortError') throw new Error('Timeout – plik za duży lub wolne łącze');
+      throw e;
     }
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    if (norms.length) geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
-    else geo.computeVertexNormals();
-    geo.setIndex(idxs);
-    let mat = defaultMat;
-    if (mesh.color) { mat = defaultMat.clone(); mat.color.setRGB(mesh.color[0], mesh.color[1], mesh.color[2]); }
-    group.add(new THREE.Mesh(geo, mat));
-  }
-  scene.add(group);
+    if (!stepData.length) throw new Error('Pobrano pusty plik');
 
-  const box = new THREE.Box3().setFromObject(group);
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3()).length();
-  camera.position.copy(center.clone().add(new THREE.Vector3(size, size*0.6, size)));
-  camera.lookAt(center); controls.target.copy(center); controls.update();
+    // 3. OCCT parser
+    _setStep3dStatus('⏳ Parsowanie modelu STEP...', '#e6a020');
+    await _loadScript('https://cdn.jsdelivr.net/npm/occt-import-js@0.0.19/dist/occt-import-js.min.js');
+    const occt = await occtimportjs();
+    const result = occt.ReadStepFile(stepData, null);
 
-  function _resize() {
-    if (!canvas) return;
-    const w = canvas.clientWidth, h = canvas.clientHeight || 400;
+    if (!result || !result.meshes || result.meshes.length === 0)
+      throw new Error('Brak geometrii w pliku – sprawdź czy plik STEP jest poprawny');
+
+    // Zlicz wierzchołki żeby wykryć pusty model
+    let totalVerts = 0;
+    for (const m of result.meshes) for (const b of m.breps) totalVerts += b.vertices.length;
+    if (totalVerts === 0) throw new Error('Model nie zawiera geometrii (0 wierzchołków)');
+
+    // 4. Scena Three.js
+    _setStep3dStatus('⏳ Renderowanie...', '#e6a020');
+    const canvas = document.getElementById('step3d-canvas');
+    if (!canvas) throw new Error('Brak elementu canvas');
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // max 2x dla wydajności na tel.
+    renderer.setClearColor(0x0d1117, 1);
+    renderer.shadowMap.enabled = false;
+
+    const scene = new THREE.Scene();
+    const w = canvas.clientWidth || 400;
+    const h = canvas.clientHeight || 500;
+    const camera = new THREE.PerspectiveCamera(50, w / h, 0.0001, 10000000);
+
+    const controls = new THREE.OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+    controls.screenSpacePanning = true;
+    controls.zoomSpeed = 1.2;
+
+    // Światła
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const dl1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    dl1.position.set(5, 10, 7); scene.add(dl1);
+    const dl2 = new THREE.DirectionalLight(0x6688cc, 0.4);
+    dl2.position.set(-5, -3, -5); scene.add(dl2);
+
+    // Buduj geometrię
+    const group = new THREE.Group();
+    const defaultMat = new THREE.MeshPhongMaterial({
+      color: 0x4a90d9, shininess: 80, specular: 0x224466, side: THREE.DoubleSide
+    });
+
+    for (const mesh of result.meshes) {
+      const verts = [], norms = [], idxs = [];
+      let vOff = 0;
+      for (const brep of mesh.breps) {
+        for (let v = 0; v < brep.vertices.length; v += 3)
+          verts.push(brep.vertices[v], brep.vertices[v+1], brep.vertices[v+2]);
+        if (brep.normals)
+          for (let n = 0; n < brep.normals.length; n += 3)
+            norms.push(brep.normals[n], brep.normals[n+1], brep.normals[n+2]);
+        for (const i of brep.triangles) idxs.push(i + vOff);
+        vOff += brep.vertices.length / 3;
+      }
+      if (!verts.length || !idxs.length) continue;
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+      if (norms.length === verts.length)
+        geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
+      geo.setIndex(idxs);
+      if (!norms.length) geo.computeVertexNormals();
+
+      let mat = defaultMat;
+      if (mesh.color && mesh.color.length >= 3) {
+        mat = defaultMat.clone();
+        mat.color.setRGB(mesh.color[0], mesh.color[1], mesh.color[2]);
+        if (mesh.color[3] !== undefined && mesh.color[3] < 0.99) {
+          mat.transparent = true; mat.opacity = mesh.color[3];
+        }
+      }
+      group.add(new THREE.Mesh(geo, mat));
+    }
+
+    if (group.children.length === 0) throw new Error('Nie udało się zbudować geometrii 3D');
+    scene.add(group);
+
+    // Centrum i kamera – kluczowe dla czarnego ekranu
+    const box = new THREE.Box3().setFromObject(group);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = camera.fov * (Math.PI / 180);
+    let camDist = Math.abs(maxDim / Math.sin(fov / 2)) * 0.8;
+    if (camDist === 0 || !isFinite(camDist)) camDist = 100;
+
+    camera.position.set(
+      center.x + camDist * 0.7,
+      center.y + camDist * 0.5,
+      center.z + camDist * 0.7
+    );
+    camera.near = camDist * 0.0001;
+    camera.far  = camDist * 100;
+    camera.updateProjectionMatrix();
+    camera.lookAt(center);
+    controls.target.copy(center);
+    controls.minDistance = camDist * 0.01;
+    controls.maxDistance = camDist * 50;
+    controls.update();
+
+    // Resize
+    function _resize() {
+      if (!canvas || !_step3dOverlay) return;
+      const cw = canvas.clientWidth  || 400;
+      const ch = canvas.clientHeight || 500;
+      renderer.setSize(cw, ch, false);
+      camera.aspect = cw / ch;
+      camera.updateProjectionMatrix();
+    }
     renderer.setSize(w, h, false);
-    camera.aspect = w / h; camera.updateProjectionMatrix();
-  }
-  _resize();
-  new ResizeObserver(_resize).observe(canvas);
+    new ResizeObserver(_resize).observe(canvas);
 
-  (function _anim() {
-    if (!document.getElementById('step3d-overlay')) return;
-    requestAnimationFrame(_anim);
-    controls.update(); renderer.render(scene, camera);
-  })();
+    // Pętla
+    let _running = true;
+    (function _anim() {
+      if (!_running || !document.getElementById('step3d-overlay')) { _running = false; return; }
+      requestAnimationFrame(_anim);
+      controls.update();
+      renderer.render(scene, camera);
+    })();
+
+    _setStep3dStatus('✓ Model załadowany (' + group.children.length + ' bryły)', '#27ae60');
+    const hint = document.getElementById('step3d-hint');
+    if (hint) hint.style.display = 'block';
+
+  } catch(e) {
+    _setStep3dStatus('✗ ' + e.message, '#e05555');
+    console.error('[STEP viewer]', e);
+  }
 }
+
 </script>
 </body>
 </html>

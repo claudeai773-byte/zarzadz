@@ -1371,6 +1371,7 @@ function renderMajster() {
               <div style="font-family:Consolas;color:var(--green);font-size:16px">${fmtTime(elapsed)}</div>
               ${s.czas_norma?`<div style="font-size:11px;color:var(--dim)">norma: ${s.czas_norma}min</div>`:''}
               <button class="btn-sm" style="margin-top:4px;font-size:11px" onclick="openEditSesjaModal(${s.sesja_id},'${s.start_time}','${s.end_time||''}')">✏ Koryguj czas</button>
+              <button class="btn-sm" style="margin-top:2px;font-size:11px;background:rgba(231,76,60,0.15);color:var(--red);border-color:var(--red)" onclick="deleteSesjaConfirm(${s.sesja_id})">🗑 Usuń</button>
             </div>
           </div>
         </div>`;
@@ -2531,7 +2532,9 @@ function renderMajsterWydajnosc() {
                 ${s.norma_min?`<div style="font-size:10px;color:var(--dim)">norma: ${s.norma_min} min</div>`:''}
                 ${s.wyd_pct!==null?`<div style="font-weight:700;font-size:14px;color:${wColor}">${s.wyd_pct}%</div>`:''}
                 ${s.sesja_id?`<button class="btn-sm" style="font-size:10px;margin-top:4px"
-                  onclick="openEditSesjaModal(${s.sesja_id},'${s.start_time||''}','${s.end_time||''}')">✏ Koryguj czas</button>`:''}
+                  onclick="openEditSesjaModal(${s.sesja_id},'${s.start_time||''}','${s.end_time||''}')">✏ Koryguj czas</button>
+                <button class="btn-sm" style="font-size:10px;margin-top:2px;background:rgba(231,76,60,0.15);color:var(--red);border-color:var(--red)"
+                  onclick="deleteSesjaConfirm(${s.sesja_id})">🗑 Usuń sesję</button>`:''}
               </div>
             </div>
           </div>`;
@@ -2805,6 +2808,27 @@ async function saveEditSesjaModal() {
     }
   } catch(e) {
     alert('Błąd korekty czasu: ' + e.message);
+  }
+}
+
+async function deleteSesjaConfirm(sesjaId) {
+  if (!confirm('Na pewno usunąć tę sesję pracy? Operacja jest nieodwracalna.')) return;
+  try {
+    const r = await fetch(SERVER_URL.replace(/\/$/, '') + '/api/sesje/' + sesjaId, {
+      method: 'DELETE',
+      headers: {'x-api-key': API_KEY}
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({detail: r.statusText}));
+      throw new Error(err.detail || r.statusText);
+    }
+    if (state.majsterSubTab === 'wydajnosc') {
+      await loadWydajnoscMajster(state.wydajnoscOkres);
+    } else {
+      await loadMajster();
+    }
+  } catch(e) {
+    alert('Błąd usuwania sesji: ' + e.message);
   }
 }
 

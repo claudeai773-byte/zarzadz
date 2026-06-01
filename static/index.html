@@ -3202,32 +3202,45 @@ function renderPrintModal() {
 }
 
 function doPrint() {
-  const content = document.getElementById('print-content');
-  if (!content) return;
-  // Convert QR canvas to img before printing
+  const contentEl = document.getElementById('print-content');
+  if (!contentEl) return;
+
+  // Zamień canvas QR na data URL PRZED kopiowaniem HTML
   const qrCanvas = document.getElementById('print-qr-canvas');
   let qrImgSrc = null;
   if (qrCanvas && qrCanvas.width > 0) {
-    qrImgSrc = qrCanvas.toDataURL();
+    qrImgSrc = qrCanvas.toDataURL('image/png');
+  } else if (window._printQrDataUrl) {
+    qrImgSrc = window._printQrDataUrl;
   }
-  let html = content.innerHTML;
-  if (qrImgSrc) {
-    html = html.replace(
-      'id="print-qr-canvas"',
-      `style="display:none" id="print-qr-canvas-hidden"`
-    );
-    html += `<img src="${qrImgSrc}" style="position:absolute;left:0;top:0" />`;
+
+  // Klonuj element żeby nie modyfikować DOM
+  const clone = contentEl.cloneNode(true);
+
+  // Podmień canvas na <img> w klonie
+  const cloneCanvas = clone.querySelector('#print-qr-canvas');
+  if (cloneCanvas && qrImgSrc) {
+    const img = document.createElement('img');
+    img.src = qrImgSrc;
+    img.style.cssText = cloneCanvas.style.cssText || 'display:block;border:1px solid #ccc;padding:4px';
+    cloneCanvas.parentNode.replaceChild(img, cloneCanvas);
+  } else if (cloneCanvas) {
+    // Canvas pusty (QR jeszcze się ładuje) – ukryj
+    cloneCanvas.style.display = 'none';
   }
-  const win = window.open('', '_blank', 'width=720,height:1020');
+
+  const win = window.open('', '_blank', 'width=720,height=1020');
+  if (!win) { alert('Zablokowano otwieranie okna. Zezwól na pop-upy dla tej strony.'); return; }
   win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
     <title>Karta zlecenia – ${state.printModal?.zlecenie?.numer||''}</title>
     <style>
-      body{font-family:Arial,sans-serif;margin:10mm;background:#fff;}
-      @media print{body{margin:5mm;} @page{margin:10mm;}}
-    </style></head><body>${content.outerHTML}</body></html>`);
+      body{font-family:Arial,sans-serif;margin:10mm;background:#fff;color:#000;}
+      @media print{body{margin:5mm;} @page{margin:10mm;} .no-print{display:none!important;}}
+      table{border-collapse:collapse;}
+    </style></head><body>${clone.outerHTML}</body></html>`);
   win.document.close();
   win.focus();
-  setTimeout(() => { win.print(); }, 500);
+  setTimeout(() => { win.print(); }, 600);
 }
 
 // ─── Edycja operacji ─────────────────────────────────────────
@@ -3594,11 +3607,15 @@ function render() {
           img.onload = () => {
             canvas.width = img.width; canvas.height = img.height;
             canvas.getContext('2d').drawImage(img, 0, 0);
+            // Zapisz dataURL żeby doPrint mógł użyć natychmiast
+            window._printQrDataUrl = canvas.toDataURL('image/png');
             URL.revokeObjectURL(img.src);
           };
           img.src = URL.createObjectURL(blob);
-        }).catch(() => {});
+        }).catch(() => { window._printQrDataUrl = null; });
     }, 80);
+  } else {
+    window._printQrDataUrl = null;
   }
 }
 

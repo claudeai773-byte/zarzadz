@@ -944,7 +944,7 @@ def stats_wydajnosc(okres: str = "dzis"):
         wyniki = []
         for r in users_rows:
             sesje = conn.execute(f"""
-                SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
+                SELECT s.id, s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
                        z.numer as zl_numer, z.nazwa as zl_nazwa, s.typ,
                        COALESCE(st.stawka_godz,0) as stawka_godz,
@@ -987,6 +987,7 @@ def stats_wydajnosc(okres: str = "dzis"):
                 elif s["typ"] == "zbrojenie":
                     koszt_zbrojenia += (elapsed / 60.0) * float(s["zbrojenie_stawka_godz"] or 0)
                 sesje_list.append({
+                    "sesja_id": s["id"],
                     "op_nazwa": s["op_nazwa"],
                     "stanowisko": s["stanowisko"],
                     "zl_numer": s["zl_numer"],
@@ -996,6 +997,9 @@ def stats_wydajnosc(okres: str = "dzis"):
                     "norma_min": czas_norma,
                     "wyd_pct": wyd_pct,
                     "data": (s["end_time"] or "")[:10],
+                    "start_time": s["start_time"],
+                    "end_time": s["end_time"],
+                    "typ": s["typ"],
                 })
 
             wyniki.append({
@@ -1037,7 +1041,7 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
         """, (user_id,)).fetchone()
 
         sesje = conn.execute(f"""
-            SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
+            SELECT s.id, s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy,
                    o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
                    z.numer as zl_numer, z.nazwa as zl_nazwa
             FROM sesje_pracy s
@@ -1072,6 +1076,7 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
             if wyd_pct >= 90:
                 normy_ok += 1
         sesje_list.append({
+            "sesja_id": s["id"],
             "op_nazwa": s["op_nazwa"],
             "stanowisko": s["stanowisko"],
             "zl_numer": s["zl_numer"],
@@ -1080,8 +1085,9 @@ def stats_wydajnosc_user(user_id: int, okres: str = "tydzien"):
             "czas_min": round(elapsed, 1),
             "norma_min": czas_norma,
             "wyd_pct": wyd_pct,
-            "end_time": s["end_time"],
             "data": (s["end_time"] or "")[:10],
+            "start_time": s["start_time"],
+            "end_time": s["end_time"],
         })
 
     return {

@@ -2629,12 +2629,10 @@ function renderZlecenia() {
         <div class="field">
           <label>Model 3D (.step / .stp)</label>
           <div id="zl-model3d-wrap" style="display:flex;flex-direction:column;gap:6px">
-            ${z.model_3d_url ? `
-              <div style="display:flex;align-items:center;gap:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
-                <span style="font-size:13px;flex:1;color:var(--text)">✅ Plik wgrany</span>
-                <button type="button" class="btn-sm" onclick="document.getElementById('zl-model3d-url').value='';this.closest('.field').querySelector('#zl-model3d-status').textContent='';this.closest('.field').querySelector('#zl-model3d-wrap').innerHTML=renderStepUploadEmpty()">🗑 Usuń</button>
-              </div>
-            ` : ''}
+            <div id="zl-model3d-info" style="display:${z.model_3d_url ? 'flex' : 'none'};align-items:center;gap:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+              <span style="font-size:13px;flex:1;color:var(--text)">✅ Plik wgrany</span>
+              <button type="button" class="btn-sm" onclick="stepModelRemove()">🗑 Usuń</button>
+            </div>
             <div id="zl-model3d-upload-area" style="${z.model_3d_url ? 'display:none' : ''}">
               <input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP"
                      style="font-size:13px;width:100%"
@@ -3591,11 +3589,24 @@ render();
 // ══════════════════════════════════════════════════════════════
 //  STEP UPLOAD DO CLOUDINARY
 // ══════════════════════════════════════════════════════════════
+function stepModelRemove() {
+  const urlInput = document.getElementById('zl-model3d');
+  if (urlInput) urlInput.value = '';
+  const info = document.getElementById('zl-model3d-info');
+  if (info) info.style.display = 'none';
+  const area = document.getElementById('zl-model3d-upload-area');
+  if (area) { area.style.display = ''; area.innerHTML = '<input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP" style="font-size:13px;width:100%" onchange="uploadStepFile(this)">'; }
+  const status = document.getElementById('zl-model3d-status');
+  if (status) { status.textContent = ''; }
+}
+
 async function uploadStepFile(input) {
   const file = input.files[0];
   if (!file) return;
   const statusEl = document.getElementById('zl-model3d-status');
   const urlInput = document.getElementById('zl-model3d');
+  const infoEl   = document.getElementById('zl-model3d-info');
+  const areaEl   = document.getElementById('zl-model3d-upload-area');
 
   const MAX = 100 * 1024 * 1024;
   if (file.size > MAX) {
@@ -3610,7 +3621,6 @@ async function uploadStepFile(input) {
 
   try {
     const buf = await file.arrayBuffer();
-    // XHR żeby mieć progress
     const result = await new Promise((res, rej) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', SERVER_URL + '/api/step-upload');
@@ -3633,9 +3643,8 @@ async function uploadStepFile(input) {
       urlInput.value = result.url;
       statusEl.textContent = '✅ Wgrano: ' + file.name + ' (' + Math.round((result.bytes||file.size)/1024) + ' KB)';
       statusEl.style.color = '#27ae60';
-      // Schowaj input pliku, pokaż info o wgranym pliku
-      const uploadArea = document.getElementById('zl-model3d-upload-area');
-      if (uploadArea) uploadArea.style.display = 'none';
+      if (areaEl) areaEl.style.display = 'none';
+      if (infoEl) infoEl.style.display = 'flex';
     } else {
       throw new Error(result.error || 'Nieznany błąd');
     }

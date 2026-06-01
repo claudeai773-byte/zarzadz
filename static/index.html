@@ -3856,11 +3856,20 @@ async function _initStep3DScene(stepUrl) {
     }
     if (!stepData.length) throw new Error('Pobrano pusty plik');
 
-    // 3. OCCT parser – używamy nowszego API z GitHub (obsługuje SolidWorks AP214)
+    // 3. OCCT parser – używamy nowszego API (obsługuje SolidWorks AP214)
     _setStep3dStatus('⏳ Parsowanie modelu STEP...', '#e6a020');
-    // Nowsze wersje (0.0.20+) wymagają lokalnego wasm – ładujemy z GitHub raw
+    // GitHub raw blokuje jako script (MIME text/plain) – ładujemy przez fetch+blob
     const OCCT_BASE = 'https://raw.githubusercontent.com/kovacsv/occt-import-js/master/dist/';
-    await _loadScript(OCCT_BASE + 'occt-import-js.js');
+    if (typeof occtimportjs === 'undefined') {
+      const jsText = await fetch(OCCT_BASE + 'occt-import-js.js').then(r => {
+        if (!r.ok) throw new Error('Błąd pobierania biblioteki OCCT: ' + r.status);
+        return r.text();
+      });
+      const blob = new Blob([jsText], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      await _loadScript(blobUrl);
+      URL.revokeObjectURL(blobUrl);
+    }
     const occt = await occtimportjs({
       locateFile: (f) => OCCT_BASE + f,
     });

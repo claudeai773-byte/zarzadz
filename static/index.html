@@ -3860,18 +3860,43 @@ async function _initStep3DScene(stepUrl) {
     _setStep3dStatus('⏳ Parsowanie modelu STEP...', '#e6a020');
     await _loadScript('https://cdn.jsdelivr.net/npm/occt-import-js@0.0.19/dist/occt-import-js.min.js');
     const occt = await occtimportjs();
-    const result = occt.ReadStepFile(stepData, null);
+    // Spróbuj z parametrami tessellacji (lepsze pokrycie geometrii)
+    let result;
+    try {
+      result = occt.ReadStepFile(stepData, {
+        linearDeflection: 0.01,
+        angularDeflection: 0.5,
+        readBRep: true,
+      });
+    } catch(_e1) {
+      // Starsze API – bez parametrów
+      result = occt.ReadStepFile(stepData, null);
+    }
 
     if (!result || !result.meshes || result.meshes.length === 0)
-      throw new Error('Brak geometrii w pliku – sprawdź czy plik STEP jest poprawny');
+      throw new Error('Brak geometrii w pliku – plik STEP jest pusty lub uszkodzony');
 
     // Zlicz wierzchołki żeby wykryć pusty model
+    // Niektóre pliki STEP (assemblies, AP242, CATIA/NX) mają breps=null w mesh-ach
     let totalVerts = 0;
+    let totalMeshesWithBreps = 0;
     for (const m of result.meshes) {
       const breps = Array.isArray(m.breps) ? m.breps : [];
+      if (breps.length > 0) totalMeshesWithBreps++;
       for (const b of breps) totalVerts += (b.vertices?.length || 0);
     }
-    if (totalVerts === 0) throw new Error('Model nie zawiera geometrii (0 wierzchołków)');
+    if (totalVerts === 0) {
+      // Diagnostyka: pokaż co faktycznie jest w pliku
+      const meshInfo = result.meshes.slice(0,3).map(m =>
+        `"${m.name||'?'}" breps=${Array.isArray(m.breps)?m.breps.length:'null'}`
+      ).join(', ');
+      throw new Error(
+        `Plik STEP nie zawiera geometrii obsługiwanej przez przeglądarkę.\n` +
+        `Biblioteka occt-import-js 0.0.19 nie obsługuje niektórych formatów (AP242, assemblies z CATIA/NX/SolidEdge).\n` +
+        `Znaleziono ${result.meshes.length} mesh(e), żaden bez wierzchołków: [${meshInfo}]\n` +
+        `Spróbuj wyeksportować plik jako STEP AP214 lub zapisać w SolidWorks/FreeCAD.`
+      );
+    }
 
     // 4. Scena Three.js
     _setStep3dStatus('⏳ Renderowanie...', '#e6a020');

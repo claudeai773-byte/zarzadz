@@ -556,6 +556,36 @@ def stop_sesja(req: StopSesjaRequest):
     _threading.Thread(target=_db_backup_to_json, daemon=True).start()
     return {"status": "ok", "end_time": now}
 
+class EditSesjaTimeRequest(BaseModel):
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+
+@app.patch("/api/sesje/{sesja_id}/czas", dependencies=[Depends(verify_key)])
+def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
+    """Korekta czasu sesji – dostępna dla majstra i admina."""
+    with get_db() as conn:
+        sesja = conn.execute("SELECT * FROM sesje_pracy WHERE id=?", (sesja_id,)).fetchone()
+        if not sesja:
+            raise HTTPException(404, "Sesja nie istnieje")
+        new_start = req.start_time or sesja["start_time"]
+        new_end   = req.end_time   or sesja["end_time"]
+        # Walidacja: start musi być przed end (jeśli end już ustawiony)
+        if new_end:
+            try:
+                dt_start = _parse(new_start)
+                dt_end   = _parse(new_end)
+                if dt_end <= dt_start:
+                    raise HTTPException(400, "Czas zakończenia musi być późniejszy niż rozpoczęcia")
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(400, "Nieprawidłowy format czasu")
+        conn.execute(
+            "UPDATE sesje_pracy SET start_time=?, end_time=? WHERE id=?",
+            (new_start, new_end, sesja_id)
+        )
+    return {"status": "ok", "sesja_id": sesja_id, "start_time": new_start, "end_time": new_end}
+
 @app.get("/api/sesje/aktywne/{user_id}", dependencies=[Depends(verify_key)])
 def get_aktywne_sesje(user_id: int):
     """Zwraca WSZYSTKIE aktywne sesje użytkownika (może być wiele)"""
@@ -2066,16 +2096,37 @@ async def step_proxy(url: str):
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0",
-            "Accept": "*/*"
+            "Accept": "*/*",
+            "Cache-Control": "no-cache"
         })
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = r.read()
+        # Streaming – czytamy chunkami żeby nie blokować na dużych plikach
+        response = urllib.request.urlopen(req, timeout=120)
+        ct = response.headers.get("Content-Type", "application/octet-stream")
+        # Jeśli dostaliśmy HTML (redirect/captcha) – to błąd
+        if "text/html" in ct:
+            response.close()
+            raise HTTPException(502, "Plik niedostępny – serwer zwrócił stronę HTML zamiast pliku STEP")
+
+        def _stream():
+            try:
+                while True:
+                    chunk = response.read(65536)  # 64KB chunks
+                    if not chunk: break
+                    yield chunk
+            finally:
+                response.close()
+
         return StreamingResponse(
-            iter([data]),
+            _stream(),
             media_type="application/octet-stream",
-            headers={"Access-Control-Allow-Origin": "*",
-                     "Content-Disposition": "inline; filename=model.step"}
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Content-Disposition": "inline; filename=model.step",
+                "Cache-Control": "public, max-age=3600",
+            }
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"Nie można pobrać pliku STEP: {e}")
 

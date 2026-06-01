@@ -2002,12 +2002,11 @@ async def step_upload(request: Request):
 
     # Parametry uploadu
     ts = str(int(_time.time()))
-    public_id = "step_" + _hl.md5(body[:1024]).hexdigest()[:12]
-    folder = "produkcja_step"
+    public_id = "produkcja_step/step_" + _hl.md5(body[:1024]).hexdigest()[:12]
 
-    # Podpis HMAC-SHA1
-    sign_str = f"folder={folder}&public_id={public_id}&resource_type=raw&timestamp={ts}{CLOUDINARY_SECRET}"
-    sig = _hl.sha1(sign_str.encode()).hexdigest()
+    # Podpis – parametry MUSZĄ być posortowane alfabetycznie, bez resource_type w stringu
+    sign_params = f"public_id={public_id}&timestamp={ts}"
+    sig = _hl.sha1(f"{sign_params}{CLOUDINARY_SECRET}".encode()).hexdigest()
 
     # Multipart upload
     boundary = "----CLD" + _hl.md5(ts.encode()).hexdigest()[:16]
@@ -2015,13 +2014,17 @@ async def step_upload(request: Request):
         return f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
 
     fname = request.headers.get("x-filename", "model.step")
+    try:
+        import urllib.parse as _up
+        fname = _up.unquote(fname)
+    except Exception:
+        pass
+
     multipart = (
         _field("api_key", CLOUDINARY_KEY) +
         _field("timestamp", ts) +
         _field("signature", sig) +
         _field("public_id", public_id) +
-        _field("folder", folder) +
-        _field("resource_type", "raw") +
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: application/octet-stream\r\n\r\n".encode() +
         body + f"\r\n--{boundary}--\r\n".encode()
     )
@@ -2080,8 +2083,27 @@ async def step_proxy(url: str):
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-if os.path.exists(os.path.join(STATIC_DIR, "index.html")):
-    app.mount("/app", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+# Wersja buildu – używana do cache-bustingu (zmienia się przy każdym deployu)
+BUILD_VERSION = os.environ.get("BUILD_VERSION", _dt.datetime.utcnow().strftime("%Y%m%d%H%M%S"))
+
+@app.get("/app", response_class=HTMLResponse)
+@app.get("/app/", response_class=HTMLResponse)
+def serve_app():
+    """Serwuje index.html z nagłówkami no-cache – wymusza odświeżenie po każdym deployu."""
+    html_path = os.path.join(STATIC_DIR, "index.html")
+    if not os.path.exists(html_path):
+        raise HTTPException(404, "Brak pliku index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "ETag": f'"{BUILD_VERSION}"',
+        }
+    )
 
 @app.get("/", response_class=HTMLResponse)
 def root():

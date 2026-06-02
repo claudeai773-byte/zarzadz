@@ -194,6 +194,12 @@ let state = {
 
   // Admin
   adminTab: 'uzytkownicy',
+  sesjaGlownaModal: null,    // {operacjaId, aktywne:[]} – wybór sesji głównej
+  importPdfModal: false,     // modal importu technologii z PDF
+  importPdfResult: null,     // wynik importu
+  kjModal: null,             // {op} – modal KJ dla pracownika
+  kontynuacjaModal: null,    // {operacjaId, pracownik, sesjaGlownaId} – dialog kontynuacji operacji innego
+  userPermissions: {},  // {userId: [tabs]}
   users: [],
   stawki: [],
   produktyZlecenia: [],   // produkty aktualnie edytowanego zlecenia
@@ -360,10 +366,10 @@ async function loadZlecenia() {
 async function loadAdmin() {
   setState({loading:true, error:null});
   try {
-    const [users, stawki, katalog] = await Promise.all([
-      get('/api/users'), get('/api/stawki'), get('/api/katalog')
+    const [users, stawki, katalog, userPermissions] = await Promise.all([
+      get('/api/users'), get('/api/stawki'), get('/api/katalog'), get('/api/permissions/all')
     ]);
-    setState({users, stawki, katalog, loading:false});
+    setState({users, stawki, katalog, userPermissions, loading:false});
   } catch(e) {
     setState({loading:false, error:e.message});
   }
@@ -397,8 +403,14 @@ async function doLogin(username, password) {
   try {
     const user = await post('/api/login', {username, password});
     stopWHRefresh();
-    const tab = defaultTab(user.role);
-    setState({user, screen:'main', loading:false, activeTab:tab});
+    // Pobierz uprawnienia użytkownika
+    let userTabs = [];
+    try {
+      const perm = await get('/api/users/' + user.id + '/permissions');
+      userTabs = perm.tabs || [];
+    } catch(e) { /* brak uprawnień = domyślne */ }
+    const tab = defaultTabWithPerms(user.role, userTabs);
+    setState({user, screen:'main', loading:false, activeTab:tab, currentUserTabs: userTabs});
     loadTabData(tab);
   } catch(e) {
     setState({loading:false, error:'Nieprawidłowy login lub hasło'});
@@ -412,13 +424,111 @@ function defaultTab(role) {
   return 'praca';
 }
 
+function defaultTabWithPerms(role, allowedTabs) {
+  if (!allowedTabs || allowedTabs.length === 0) return defaultTab(role);
+  const preferred = defaultTab(role);
+  return allowedTabs.includes(preferred) ? preferred : allowedTabs[0];
+}
+
+// Stałe zakładki z opisami dla systemu uprawnień
+const ALL_TABS_DEF = [
+  {id:'praca',     label:'👷 Praca',     roles:['pracownik','majster','technolog','admin']},
+  {id:'magazyn',   label:'📦 Magazyn',   roles:['magazynier','admin']},
+  {id:'majster',   label:'🔧 Majster',   roles:['majster','admin']},
+  {id:'zlecenia',  label:'📋 Zlecenia',  roles:['majster','admin','technolog']},
+  {id:'admin',     label:'⚙ Admin',      roles:['admin','technolog']},
+  {id:'ustawienia',label:'🔩 Ustawienia',roles:['pracownik','majster','technolog','magazynier','admin']},
+];
+
 async function startSesja(operacjaId) {
   try {
-    await post('/api/sesje/start', {operacja_id:operacjaId, user_id:state.user.id, typ:'operacja'});
-    await loadPracownik();
+    // Sprawdź czy operacja ma już aktywne sesje
+    const aktywne = await get('/api/sesje/aktywne_operacja/' + operacjaId);
+    const cudzeSesje = aktywne.filter(s => s.user_id !== state.user.id);
+    const mojaSesja  = aktywne.find(s => s.user_id === state.user.id);
+
+    if (mojaSesja) {
+      alert('Masz już aktywną sesję tej operacji.');
+      return;
+    }
+
+    if (cudzeSesje.length > 0) {
+      // Inny pracownik(cy) ma sesję → dialog kontynuacji
+      const glowna = cudzeSesje.find(s => s.sesja_glowna === 1);
+      const pracownik = glowna ? glowna.full_name : cudzeSesje[0].full_name;
+      setState({kontynuacjaModal: {
+        operacjaId,
+        pracownik,
+        sesjaGlownaId: glowna ? glowna.id : null,
+        aktywne: cudzeSesje
+      }});
+      return;
+    }
+
+    // Brak innych sesji – sprawdź czy moje własne równoległe sesje istnieją
+    const mojeAktywne = (state.aktywnesje || []).filter(s =>
+      s.typ === 'operacja' || s.typ === 'inne_zlecenie'
+    );
+
+    if (mojeAktywne.length > 0) {
+      // Już mam inne aktywne sesje → pytaj która jest główna
+      setState({sesjaGlownaModal: {
+        operacjaId,
+        aktywne: mojeAktywne,
+        nowaJestGlowna: null  // null = jeszcze nie wybrano
+      }});
+      return;
+    }
+
+    // Czysta sytuacja – start normalnej sesji głównej
+    await _doStartSesja(operacjaId, 1);
   } catch(e) {
     alert('Błąd: ' + e.message);
   }
+}
+
+async function _doStartSesja(operacjaId, sesjaGlowna) {
+  try {
+    await post('/api/sesje/start', {
+      operacja_id: operacjaId,
+      user_id: state.user.id,
+      typ: 'operacja',
+      sesja_glowna: sesjaGlowna
+    });
+    await loadPracownik();
+  } catch(e) {
+    // Obsłuż błąd GLOWNA_ZAJETA (inny pracownik właśnie przejął główną)
+    if (e.message && e.message.startsWith('GLOWNA_ZAJETA:')) {
+      const parts = e.message.split(':');
+      const pracownik = parts[1] || '?';
+      alert(`Sesja główna tej operacji jest już zajęta przez ${pracownik}. Operacja anulowana.`);
+    } else {
+      alert('Błąd: ' + e.message);
+    }
+  }
+}
+
+async function kontynuujOperacje(operacjaId) {
+  // Pracownik potwierdził kontynuację – startuje jako sesja dodatkowa
+  setState({kontynuacjaModal: null});
+  // Sprawdź jeszcze raz czy moje własne sesje wymagają wyboru głównej
+  const mojeAktywne = (state.aktywnesje || []).filter(s =>
+    s.typ === 'operacja' || s.typ === 'inne_zlecenie'
+  );
+  if (mojeAktywne.length > 0) {
+    setState({sesjaGlownaModal: {
+      operacjaId,
+      aktywne: mojeAktywne,
+      nowaJestGlowna: null
+    }});
+  } else {
+    await _doStartSesja(operacjaId, 0);
+  }
+}
+
+async function potwierdzWyborGlownej(operacjaId, nowaJestGlowna) {
+  setState({sesjaGlownaModal: null});
+  await _doStartSesja(operacjaId, nowaJestGlowna ? 1 : 0);
 }
 
 async function startZbrojenie(operacjaId) {
@@ -629,13 +739,48 @@ function renderQRZleceniePickerModal() {
           </div>`;
         }
       } else {
-        // Brak zbrojenia - normalna operacja
-        if (czyOpAktywna) {
-          html += `<div class="btn-row">
-            <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaOp).replace(/"/g,'&quot;')}})">⏹ Zakończ operację</button>
+        // Brak zbrojenia – sprawdź typ operacji
+        const typOp = op.typ_operacji || 'produkcja';
+        if (typOp === 'kj') {
+          // Operacja KJ – przyciski Zgodny / Niezgodny
+          const kjWynikPrev = op.kj_wynik;
+          const kjDone = kjWynikPrev === 'zgodny' || kjWynikPrev === 'niezgodny';
+          html += `
+          <div style="background:rgba(52,152,219,0.08);border:1px solid #3498db;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+            <div style="font-size:12px;color:#2980b9;font-weight:700;margin-bottom:4px">🔍 KONTROLA JAKOŚCI</div>
+            ${op.parametry_kj ? renderKjParams(op.parametry_kj, 'font-size:11px;color:var(--dim)') : ''}
+            ${kjDone ? `<div style="margin-top:6px;font-size:12px;color:${kjWynikPrev==='zgodny'?'var(--green)':'var(--red)'}">
+              ${kjWynikPrev==='zgodny'?'✅ Zatwierdzono jako ZGODNY':'❌ Zatwierdzono jako NIEZGODNY'}
+            </div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-green" style="flex:1" onclick="setState({kjModal:{op:${JSON.stringify(op).replace(/"/g,'&quot;')},wynik:'zgodny'}})">
+              ✅ ZGODNY
+            </button>
+            <button class="btn btn-red" style="flex:1" onclick="setState({kjModal:{op:${JSON.stringify(op).replace(/"/g,'&quot;')},wynik:'niezgodny'}})">
+              ❌ NIEZGODNY
+            </button>
+          </div>`;
+        } else if (typOp === 'kooperacja') {
+          // Kooperacja – majster zatwierdza ręcznie
+          const koop_done = op.status === 'zakonczona';
+          html += `
+          <div style="background:rgba(155,89,182,0.08);border:1px solid #9b59b6;border-radius:8px;padding:10px 12px">
+            <div style="font-size:12px;color:#8e44ad;font-weight:700">🤝 KOOPERACJA</div>
+            <div style="font-size:11px;color:var(--dim);margin:4px 0">${op.opis_czynnosci||''}</div>
+            ${koop_done
+              ? `<div style="color:var(--green);font-size:12px">✅ Wykonane</div>`
+              : `<button class="btn btn-accent" style="background:#9b59b6;color:#fff;margin-top:8px" onclick="majsterZatwierdzKooperacje(${op.id})">✅ Zatwierdź wykonanie kooperacji</button>`
+            }
           </div>`;
         } else {
-          html += `<button class="btn btn-green" onclick="pickOperacjaFromQR(${op.id})">▶ Uruchom operację</button>`;
+          if (czyOpAktywna) {
+            html += `<div class="btn-row">
+              <button class="btn btn-red" onclick="setState({stopModal:${JSON.stringify(sesjaOp).replace(/"/g,'&quot;')}})">⏹ Zakończ operację</button>
+            </div>`;
+          } else {
+            html += `<button class="btn btn-green" onclick="pickOperacjaFromQR(${op.id})">▶ Uruchom operację</button>`;
+          }
         }
       }
 
@@ -694,7 +839,7 @@ async function startQRInne() {
 }
 
 function statusBadge_txt(s) {
-  const m = {nowe:'Nowe', w_toku:'W toku', zakonczone:'Zakończone', oczekuje:'Oczekuje', anulowane:'Anulowane'};
+  const m = {nowe:'Nowe', w_toku:'W toku', zakonczone:'Zakończone', oczekuje:'Oczekuje', anulowane:'Anulowane', wstrzymane:'Wstrzymane', oczekuje_potwierdzenia:'⏳ Oczekuje potwierdzenia'};
   return m[s]||s;
 }
 
@@ -1012,13 +1157,26 @@ function renderTopbar() {
 
 function renderBottomNav() {
   const role = state.user?.role;
-  const tabs = [];
-  if (role !== 'magazynier') tabs.push({id:'praca',icon:'👷',label:'Praca'});
-  if (role === 'magazynier' || role === 'admin') tabs.push({id:'magazyn',icon:'📦',label:'Magazyn'});
-  if (role === 'majster' || role === 'admin')    tabs.push({id:'majster',icon:'🔧',label:'Majster'});
-  if (role !== 'pracownik' && role !== 'magazynier') tabs.push({id:'zlecenia',icon:'📋',label:'Zlecenia'});
-  if (role === 'admin' || role === 'technolog')  tabs.push({id:'admin',icon:'⚙',label:'Admin'});
-  tabs.push({id:'ustawienia',icon:'🔩',label:'Ustawienia'});
+  const customTabs = state.currentUserTabs || [];
+  const hasCustom = customTabs.length > 0;
+
+  let tabs = [];
+  if (hasCustom) {
+    // Użytkownik ma niestandardowe uprawnienia
+    ALL_TABS_DEF.forEach(td => {
+      if (customTabs.includes(td.id)) tabs.push({id:td.id, icon:td.label.split(' ')[0], label:td.label.split(' ').slice(1).join(' ')});
+    });
+    // Ustawienia zawsze dostępne
+    if (!customTabs.includes('ustawienia')) tabs.push({id:'ustawienia',icon:'🔩',label:'Ustawienia'});
+  } else {
+    // Domyślne wg roli
+    if (role !== 'magazynier') tabs.push({id:'praca',icon:'👷',label:'Praca'});
+    if (role === 'magazynier' || role === 'admin') tabs.push({id:'magazyn',icon:'📦',label:'Magazyn'});
+    if (role === 'majster' || role === 'admin')    tabs.push({id:'majster',icon:'🔧',label:'Majster'});
+    if (role !== 'pracownik' && role !== 'magazynier') tabs.push({id:'zlecenia',icon:'📋',label:'Zlecenia'});
+    if (role === 'admin' || role === 'technolog')  tabs.push({id:'admin',icon:'⚙',label:'Admin'});
+    tabs.push({id:'ustawienia',icon:'🔩',label:'Ustawienia'});
+  }
   return `
   <nav class="bottom-nav">
     ${tabs.map(t => `
@@ -1070,7 +1228,9 @@ function renderPracaWydajnosc() {
     return html;
   }
 
-  const wydPct = w.normy_total > 0 ? Math.round(w.normy_ok/w.normy_total*100) : null;
+  const wydPct = (w.norma_wydajnosc_pct !== null && w.norma_wydajnosc_pct !== undefined)
+    ? w.norma_wydajnosc_pct
+    : (w.normy_total > 0 ? Math.round(w.normy_ok/w.normy_total*100) : null);
   const barColor = wydPct === null ? 'var(--dim)' : wydPct >= 90 ? 'var(--green)' : wydPct >= 70 ? 'var(--orange)' : 'var(--red)';
 
   html += `
@@ -1189,11 +1349,15 @@ function renderPracaGlowna() {
       const cardStyle = isZbrojenie
         ? 'background:linear-gradient(135deg,#2e2a1a,#2a2510);border:2px solid var(--orange)'
         : (isNieprod ? '' : '');
-      const labelTxt = isZbrojenie ? '⚙ ZBROJENIE' : (isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : (paused ? '⏸ PAUZA' : '⏱ AKTYWNA'));
+      const isGlowna = sesja.sesja_glowna === 1 || sesja.sesja_glowna === undefined;
+      const labelTxt = isZbrojenie ? '⚙ ZBROJENIE' : (isNieprod ? '⏸ PRACA NIEPRODUKCYJNA' : (paused ? '⏸ PAUZA' : (isGlowna ? '⏱ GŁÓWNA' : '⏱ DODATKOWA')));
       const timerColor = isZbrojenie ? 'var(--orange)' : (paused ? 'var(--orange)' : 'var(--green)');
       html += `
       <div class="timer-card ${paused?'paused':''} ${isNieprod?'nieprodukcyjna-card':''}" ${cardStyle?`style="${cardStyle}"`:''}> 
-        <div class="timer-label" style="${isZbrojenie?'color:var(--orange)':''}">${labelTxt}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div class="timer-label" style="${isZbrojenie ? 'color:var(--orange)' : (!isGlowna ? 'color:var(--dim)' : '')}">${labelTxt}</div>
+          ${(!isNieprod && !isZbrojenie) ? '<span style="font-size:10px;padding:2px 7px;border-radius:4px;background:' + (isGlowna ? 'rgba(39,174,96,0.2)' : 'rgba(255,165,0,0.15)') + ';color:' + (isGlowna ? 'var(--green)' : 'var(--orange)') + '">' + (isGlowna ? '⭐ Główna' : '➕ Dodatkowa') + '</span>' : ''}
+        </div>
         <div class="timer-display" id="timer-${sesja.id}" style="color:${timerColor}">00:00:00</div>
         <div class="timer-op">${sesja.op_nazwa || sesja.uwagi || '—'}</div>
         ${sesja.zl_numer ? `<div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>` : ''}
@@ -1243,6 +1407,100 @@ function renderPracaGlowna() {
         <button class="btn btn-red" onclick="stopSesjaModal()">
           ✅ Potwierdź zakończenie
         </button>
+      </div>
+    </div>`;
+  }
+
+  // Modal KJ – potwierdzenie wyniku kontroli jakości
+  if (state.kjModal) {
+    const {op, wynik} = state.kjModal;
+    const isZgodny = wynik === 'zgodny';
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({kjModal:null})">×</button>
+        <h3>🔍 Kontrola jakości</h3>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">${op.nazwa}</div>
+        ${op.parametry_kj ? renderKjParamsBlock(op.parametry_kj) : ''}
+        <div style="background:${isZgodny?'rgba(39,174,96,0.1)':'rgba(231,76,60,0.1)'};border:1px solid ${isZgodny?'var(--green)':'var(--red)'};border-radius:8px;padding:12px;margin-bottom:14px;font-size:15px;font-weight:700;color:${isZgodny?'var(--green)':'var(--red)'};text-align:center">
+          ${isZgodny ? '✅ WYNIK: ZGODNY' : '❌ WYNIK: NIEZGODNY'}
+        </div>
+        ${!isZgodny ? `
+        <div class="field">
+          <label>Opis niezgodności (opcjonalnie)</label>
+          <textarea id="kj-uwagi" placeholder="Opisz stwierdzoną niezgodność..."></textarea>
+        </div>` : ''}
+        <div style="display:flex;gap:8px">
+          <button class="btn" style="flex:1" onclick="setState({kjModal:null})">Anuluj</button>
+          <button class="btn ${isZgodny?'btn-green':'btn-red'}" style="flex:2"
+            onclick="kjWynik(${op.id}, '${wynik}')">
+            Potwierdź ${isZgodny ? '✅ ZGODNY' : '❌ NIEZGODNY'}
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Modal: kontynuacja operacji innego pracownika
+  if (state.kontynuacjaModal) {
+    const m = state.kontynuacjaModal;
+    const inni = (m.aktywne || []).map(s => `${s.full_name} (od ${(s.start_time||'').slice(0,16).replace('T',' ')})`).join(', ');
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({kontynuacjaModal:null})">×</button>
+        <h3>⚡ Operacja w toku</h3>
+        <p style="font-size:14px;margin-bottom:6px">Tę operację wykonuje już:</p>
+        <div style="background:var(--entry);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+          ${inni}
+        </div>
+        <p style="font-size:13px;color:var(--dim);margin-bottom:16px">
+          Możesz dołączyć jako sesja dodatkowa. Twoje sztuki będą liczone niezależnie, 
+          a koszt zostanie obliczony na podstawie normy czasowej.
+        </p>
+        <div style="display:flex;gap:8px;flex-direction:column">
+          <button class="btn btn-accent" onclick="kontynuujOperacje(${m.operacjaId})">
+            ✅ Dołącz do operacji (sesja dodatkowa)
+          </button>
+          <button class="btn" onclick="setState({kontynuacjaModal:null})">
+            ✖ Anuluj
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Modal: wybór sesji głównej przy równoległych
+  if (state.sesjaGlownaModal) {
+    const m = state.sesjaGlownaModal;
+    const aktywneLabels = (m.aktywne || []).map(s =>
+      `${s.op_nazwa || s.uwagi || '—'} (${s.zl_numer || 'brak zlecenia'})`
+    ).join('<br>');
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({sesjaGlownaModal:null})">×</button>
+        <h3>⭐ Wybierz sesję główną</h3>
+        <p style="font-size:13px;color:var(--dim);margin-bottom:10px">
+          Masz już aktywne sesje produkcyjne:<br>
+          <span style="font-size:12px">${aktywneLabels}</span>
+        </p>
+        <div style="background:var(--entry);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:16px;line-height:1.6">
+          <b>Sesja główna</b> – norma i wydajność liczone na podstawie czasu faktycznego<br>
+          <b>Sesja dodatkowa</b> – koszt liczony normatywnie (sztuki × czas normy)
+        </div>
+        <p style="font-size:14px;font-weight:600;margin-bottom:12px">Którą sesją ma być <u>nowa</u> operacja?</p>
+        <div style="display:flex;gap:8px;flex-direction:column">
+          <button class="btn btn-green" onclick="potwierdzWyborGlownej(${m.operacjaId}, true)">
+            ⭐ Nowa jest GŁÓWNA (tamte stają się dodatkowymi)
+          </button>
+          <button class="btn btn-accent" onclick="potwierdzWyborGlownej(${m.operacjaId}, false)">
+            ➕ Nowa jest DODATKOWA (dotychczasowe główne bez zmian)
+          </button>
+          <button class="btn" onclick="setState({sesjaGlownaModal:null})">
+            ✖ Anuluj
+          </button>
+        </div>
       </div>
     </div>`;
   }
@@ -1741,7 +1999,7 @@ function printRaportZlecenia(data, od, doDt) {
   const totalKoszt   = zl.reduce((a,z)=>a+(z.koszt_total||0),0);
   const totalZysk    = zl.reduce((a,z)=>a+(z.zysk||0),0);
 
-  const statusColor = {aktywne:'#1a73e8', zakonczone:'#1e8a4c', anulowane:'#888', wstrzymane:'#e67e00'};
+  const statusColor = {aktywne:'#1a73e8', zakonczone:'#1e8a4c', anulowane:'#888', wstrzymane:'#e67e00', oczekuje_potwierdzenia:'#8e44ad'};
   const fmtPLNr = v => (parseFloat(v)||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' zł';
   const fmtMinr = v => fmtHMS(v);
 
@@ -1918,11 +2176,17 @@ function printRaportWydajnosc(data, od, doDt, typ) {
       // Jeśli brak czasu nieproduktywnego/zbrojenia – pokazuj na podstawie norm
       const normy_ok = p.normy_ok || 0;
       const normy_total = p.normy_total || 0;
-      const efektNormy = normy_total > 0 ? Math.round(normy_ok / normy_total * 100) : null;
+      // Użyj norma_wydajnosc_pct (zbiorcze normy) jeśli dostępne, fallback na per-sesję
+      const efektNormy = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined
+        ? p.norma_wydajnosc_pct
+        : (normy_total > 0 ? Math.round(normy_ok / normy_total * 100) : null);
       const efektCzas = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
       // Pokaż efektywność norm jeśli dostępna, inaczej efektywność czasu
       const efekt = efektNormy !== null ? efektNormy : (efektCzas !== null ? efektCzas : 0);
-      const efLabel = efektNormy !== null ? efekt + '% norm' : (efektCzas !== null ? efekt + '% czasu' : '—');
+      const hasNorma = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined;
+      const efLabel = hasNorma
+        ? efekt + '% norm (' + Math.round(p.suma_norma_min||0) + '/' + Math.round(p.suma_fakty_min||0) + ' min)'
+        : (normy_total > 0 ? efektNormy + '% norm' : (efektCzas !== null ? efekt + '% czasu' : '—'));
       const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
       tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
         <td style="padding:7px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
@@ -1943,10 +2207,15 @@ function printRaportWydajnosc(data, od, doDt, typ) {
       const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
       const normy_ok2 = p.normy_ok || 0;
       const normy_total2 = p.normy_total || 0;
-      const efektNormy2 = normy_total2 > 0 ? Math.round(normy_ok2 / normy_total2 * 100) : null;
+      const efektNormy2 = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined
+        ? p.norma_wydajnosc_pct
+        : (normy_total2 > 0 ? Math.round(normy_ok2 / normy_total2 * 100) : null);
       const efektCzas2 = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
       const efekt = efektNormy2 !== null ? efektNormy2 : (efektCzas2 !== null ? efektCzas2 : 0);
-      const efLabel2 = efektNormy2 !== null ? efekt + '% norm (' + normy_ok2 + '/' + normy_total2 + ')' : (efektCzas2 !== null ? efekt + '% czasu' : '—');
+      const hasNorma2 = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined;
+      const efLabel2 = hasNorma2
+        ? efekt + '% norm (' + Math.round(p.suma_norma_min||0) + '/' + Math.round(p.suma_fakty_min||0) + ' min)'
+        : (normy_total2 > 0 ? efektNormy2 + '% norm (' + normy_ok2 + '/' + normy_total2 + ')' : (efektCzas2 !== null ? efekt + '% czasu' : '—'));
       const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
       tabelaHtml += `
       <div style="border:1px solid #ddd;border-radius:6px;margin-bottom:16px;break-inside:avoid;overflow:hidden">
@@ -2484,7 +2753,9 @@ function renderMajsterWydajnosc() {
 
   w.pracownicy.forEach((p, idx) => {
     const medal = idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':'';
-    const wydPct = p.normy_total > 0 ? Math.round(p.normy_ok/p.normy_total*100) : null;
+    const wydPct = (p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined)
+      ? p.norma_wydajnosc_pct
+      : (p.normy_total > 0 ? Math.round(p.normy_ok/p.normy_total*100) : null);
     const barColor = wydPct===null ? 'var(--dim)' : wydPct>=90 ? 'var(--green)' : wydPct>=70 ? 'var(--orange)' : 'var(--red)';
     const expanded = state.majsterExpandedUser === p.user_id;
 
@@ -2518,12 +2789,13 @@ function renderMajsterWydajnosc() {
         <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Sesje (${p.sesje.length}):</div>
         ${p.sesje.slice(0,15).map(s => {
           const wColor = s.wyd_pct===null ? 'var(--dim)' : s.wyd_pct>=90 ? 'var(--green)' : s.wyd_pct>=70 ? 'var(--orange)' : 'var(--red)';
+          const isGlownaSesja = s.sesja_glowna === 1 || s.sesja_glowna === undefined;
           const avgMin = s.ilosc_sztuk > 0 ? (s.czas_min / s.ilosc_sztuk).toFixed(1) : s.czas_min;
           return `
           <div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3)">
             <div style="display:flex;justify-content:space-between;align-items:flex-start">
               <div style="flex:1;min-width:0">
-                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.op_nazwa}${s.typ==='zbrojenie'?' <span style="font-size:10px;color:var(--orange);font-weight:700;background:rgba(230,126,0,0.12);border-radius:3px;padding:1px 3px">⚙ zbr</span>':''}</div>
+                <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${s.op_nazwa}${s.typ==='zbrojenie'?' <span style="font-size:10px;color:var(--orange);font-weight:700;background:rgba(230,126,0,0.12);border-radius:3px;padding:1px 3px">⚙ zbr</span>':''}${!isGlownaSesja?' <span style="font-size:10px;color:#e67e00;background:rgba(230,126,0,0.12);border-radius:3px;padding:1px 4px">➕ dod.</span>':''}</div>
                 <div style="font-size:11px;color:var(--accent)">📋 ${s.zl_numer}${s.zl_nazwa && s.zl_nazwa!==s.zl_numer ? ' – '+s.zl_nazwa : ''}</div>
                 <div style="font-size:11px;color:var(--dim)">📅 ${s.data||'—'} | 🏭 ${s.stanowisko||'—'} | 📦 ${s.ilosc_sztuk||0} szt.</div>
               </div>
@@ -3430,7 +3702,7 @@ function renderKosztyModal() {
 // ══════════════════════════════════════════════════════════════
 function renderAdmin() {
   if (state.loading) return '<div class="spinner">⏳</div>';
-  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'stawki',label:'💰 Stawki'},{id:'katalog',label:'📦 Katalog'}];
+  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'uprawnienia',label:'🔐 Uprawnienia'},{id:'import_pdf',label:'📄 Import PDF'},{id:'stawki',label:'💰 Stawki'},{id:'katalog',label:'📦 Katalog'}];
   let html = `
   <div class="tabs">
     ${subTabs.map(t => `<button class="tab ${state.adminTab===t.id?'active':''}"
@@ -3477,6 +3749,86 @@ function renderAdmin() {
         </div>
       </div>`;
     }
+  }
+
+  if (state.adminTab === 'uprawnienia') {
+    const perms = state.userPermissions || {};
+    const users = state.users || [];
+    html += `
+    <div style="font-size:12px;color:var(--dim);margin-bottom:12px;line-height:1.6">
+      🔐 Uprawnienia niestandardowe nadpisują domyślny dostęp wynikający z roli.<br>
+      Puste = domyślne zakładki wg roli. Zaznacz wybrane zakładki i kliknij <b>Zapisz</b>.
+    </div>`;
+    users.filter(u => u.role !== 'admin').forEach(u => {
+      const uid = u.id;
+      const savedTabs = perms[uid] || [];
+      const hasCustom = savedTabs.length > 0;
+      html += `
+      <div class="card" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div>
+            <div class="card-title">👤 ${u.full_name}</div>
+            <div class="card-sub">@${u.username} | ${roleName(u.role)} ${hasCustom ? '| <span style="color:var(--orange)">🔐 niestandardowe</span>' : '| <span style="color:var(--dim)">domyślne wg roli</span>'}</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn-sm btn-accent" onclick="savePermissions(${uid})">💾 Zapisz</button>
+            ${hasCustom ? `<button class="btn-sm btn-red" onclick="resetPermissions(${uid})">↩ Reset</button>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          ${ALL_TABS_DEF.map(td => {
+            const checked = hasCustom ? savedTabs.includes(td.id) : td.roles.includes(u.role);
+            return `<label style="display:flex;align-items:center;gap:6px;font-size:13px;background:var(--entry);padding:5px 10px;border-radius:6px;cursor:pointer;border:1px solid var(--border)">
+              <input type="checkbox" id="perm-${uid}-${td.id}" ${checked ? 'checked' : ''} style="width:15px;height:15px">
+              ${td.label}
+            </label>`;
+          }).join('')}
+        </div>
+      </div>`;
+    });
+  }
+
+  if (state.adminTab === 'import_pdf') {
+    const res = state.importPdfResult;
+    html += `
+    <div style="max-width:520px">
+      <div style="font-size:13px;color:var(--dim);margin-bottom:16px;line-height:1.6">
+        Wgraj kartę technologiczną w formacie PDF. System automatycznie rozpozna operacje,
+        stanowiska i czasy normatywne. Zlecenie zostanie utworzone ze statusem
+        <b>Oczekuje potwierdzenia</b>.
+      </div>
+      <div class="card" style="padding:20px;text-align:center;border:2px dashed var(--border)">
+        <div style="font-size:40px;margin-bottom:10px">📄</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:6px">Karta technologiczna (.pdf)</div>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:16px">Format: KARTA TECHNOLOGICZNA z polami Nr oper. / Opis / Stanowisko pracy</div>
+        <input type="file" id="pdf-import-input" accept=".pdf" style="display:none"
+          onchange="handlePdfImport(this)">
+        <button class="btn btn-accent" onclick="document.getElementById('pdf-import-input').click()">
+          📂 Wybierz plik PDF
+        </button>
+      </div>
+
+      ${res ? `
+      <div class="card" style="margin-top:16px;padding:16px;background:${res.errors&&res.errors.length?'rgba(231,76,60,0.06)':'rgba(39,174,96,0.06)'};border:1px solid ${res.errors&&res.errors.length?'var(--red)':'var(--green)'}">
+        <div style="font-size:15px;font-weight:700;margin-bottom:10px">
+          ${res.errors&&res.errors.length ? '⚠ Import z ostrzeżeniami' : '✅ Import zakończony pomyślnie'}
+        </div>
+        <div style="font-size:13px;line-height:2">
+          📋 Zlecenie: <b>${res.numer}</b> – ${res.nazwa}<br>
+          🔢 Operacje: <b>${res.operacje_created}</b><br>
+          ${res.nowe_stanowiska&&res.nowe_stanowiska.length ? `🏭 Nowe stanowiska (stawka 0 PLN/h): <b>${res.nowe_stanowiska.join(', ')}</b><br>` : ''}
+          ${res.errors&&res.errors.length ? `<span style="color:var(--red)">⛔ Błędy: ${res.errors.join('; ')}</span>` : ''}
+        </div>
+        ${res.nowe_stanowiska&&res.nowe_stanowiska.length ? `
+        <div style="font-size:12px;background:rgba(230,126,0,0.1);border:1px solid var(--orange);border-radius:6px;padding:8px 12px;margin-top:10px">
+          ⚠ Uzupełnij stawki dla nowych stanowisk w zakładce <b>Stawki</b>
+        </div>` : ''}
+        <button class="btn btn-green" style="margin-top:12px" onclick="setState({activeTab:'zlecenia'});loadTabData('zlecenia')">
+          📋 Przejdź do zleceń →
+        </button>
+      </div>
+      ` : ''}
+    </div>`;
   }
 
   if (state.adminTab === 'stawki') {
@@ -3584,6 +3936,93 @@ function saveStawkaForm(id) {
   if (id) data.id = id;
   saveStawka(data);
 }
+function renderKjParams(json, style) {
+  try {
+    return JSON.parse(json).map(function(p){ return '<div style="' + style + '">' + p + '</div>'; }).join('');
+  } catch(e) { return ''; }
+}
+
+function renderKjParamsBlock(json) {
+  try {
+    return '<div style="background:var(--entry);border-radius:6px;padding:8px 12px;font-size:12px;margin-bottom:12px">' + JSON.parse(json).join('<br>') + '</div>';
+  } catch(e) { return ''; }
+}
+
+async function handlePdfImport(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append('file', file);
+  setState({importPdfResult: null});
+  try {
+    const response = await fetch('/api/import-technologia', {
+      method: 'POST',
+      headers: {'X-API-Key': state.apiKey || ''},
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Błąd importu');
+    setState({importPdfResult: data});
+    input.value = '';
+  } catch(e) {
+    alert('Błąd importu PDF: ' + e.message);
+    input.value = '';
+  }
+}
+
+async function majsterZatwierdzKooperacje(opId) {
+  if (!confirm('Zatwierdzić wykonanie kooperacji?')) return;
+  try {
+    await fetch('/api/operacje/' + opId + '/kj', {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json', 'X-API-Key': state.apiKey || ''},
+      body: JSON.stringify({wynik: 'zgodny', uwagi: 'Kooperacja zatwierdzona przez majstra'}),
+    });
+    setState({qrZleceniePickerModal: null});
+    await loadPracownik();
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function kjWynik(opId, wynik) {
+  const uwagi = document.getElementById('kj-uwagi')?.value || '';
+  try {
+    await fetch('/api/operacje/' + opId + '/kj', {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json', 'X-API-Key': state.apiKey || ''},
+      body: JSON.stringify({wynik, uwagi}),
+    });
+    setState({kjModal: null, qrZleceniePickerModal: null});
+    await loadPracownik();
+  } catch(e) {
+    alert('Błąd: ' + e.message);
+  }
+}
+
+async function savePermissions(uid) {
+  const tabs = ALL_TABS_DEF
+    .filter(td => document.getElementById('perm-' + uid + '-' + td.id)?.checked)
+    .map(td => td.id);
+  try {
+    await put('/api/users/' + uid + '/permissions', {tabs});
+    await loadAdmin();
+    // Jeśli to aktualny użytkownik – odśwież jego widoczne zakładki
+    if (state.user && state.user.id === uid) {
+      setState({currentUserTabs: tabs});
+    }
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function resetPermissions(uid) {
+  if (!confirm('Przywrócić domyślne uprawnienia (wg roli) dla tego użytkownika?')) return;
+  try {
+    await del('/api/users/' + uid + '/permissions');
+    await loadAdmin();
+    if (state.user && state.user.id === uid) {
+      setState({currentUserTabs: []});
+    }
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
 function saveProduktForm(id) {
   const data = {
     nazwa: document.getElementById('pr-nazwa')?.value?.trim(),

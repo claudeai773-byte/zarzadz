@@ -3773,18 +3773,45 @@ function renderPrintModal() {
             </tr>
           </thead>
           <tbody>
-            ${ops.map((op,i) => `
-            <tr style="background:${i%2===0?'#f9f9f9':'#fff'}">
-              <td style="padding:7px 8px;border:1px solid #ddd;font-weight:700">${op.kolejnosc}</td>
-              <td style="padding:7px 8px;border:1px solid #ddd">
-                <div style="font-weight:600">${op.nazwa}</div>
-                ${op.opis_czynnosci ? `<div style="font-size:11px;color:#555;margin-top:4px;line-height:1.7">${op.opis_czynnosci.split(/\n|(?<=;)\s*(?=[A-ZŚŹŻĆŃÓĄĘ])/g).map(l=>l.trim()).filter(Boolean).map(l=>`<div style="display:flex;gap:5px"><span style="color:#999;flex-shrink:0">•</span><span>${l.endsWith(';') ? l : l}</span></div>`).join('')}</div>` : ''}
-              </td>
-              <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
-              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center">${op.czas_norma||'—'} min</td>
-              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:60px"></td>
-              <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:30px"></td>
-            </tr>`).join('')}
+            ${(()=>{
+              // Rozwin operacje: przed kazdą operacją z czas_zbrojenia_min > 0 wstaw wiersz zbrojenia
+              // oraz operacje typ='zbrojenie' wyswietlaj jako osobny wiersz
+              const rows = [];
+              let lp = 0;
+              ops.forEach((op) => {
+                const isZbrojenie = op.typ_operacji === 'zbrojenie';
+                if (isZbrojenie) {
+                  lp++;
+                  rows.push(`<tr style="background:#fff8e8;border-left:3px solid #e8a020">
+                    <td style="padding:7px 8px;border:1px solid #ddd;font-weight:700;color:#e8a020">${op.kolejnosc}</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd">
+                      <div style="font-weight:700;color:#c07000">⚙ ZBROJENIE – ${op.nazwa}</div>
+                      ${op.opis_czynnosci ? `<div style="font-size:11px;color:#888;margin-top:3px">${op.opis_czynnosci}</div>` : ''}
+                    </td>
+                    <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;font-weight:700;color:#c07000">${op.czas_zbrojenia_min||'—'} min</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:60px"></td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:30px"></td>
+                  </tr>`);
+                } else {
+                  lp++;
+                  const bg = lp%2===0?'#f9f9f9':'#fff';
+                  rows.push(`<tr style="background:${bg}">
+                    <td style="padding:7px 8px;border:1px solid #ddd;font-weight:700">${op.kolejnosc}</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd">
+                      <div style="font-weight:600">${op.nazwa}</div>
+                      ${op.opis_czynnosci ? `<div style="font-size:11px;color:#555;margin-top:4px;line-height:1.7">${op.opis_czynnosci.split(/\n|(?<=;)\s*(?=[A-ZŚŹŻĆŃÓĄĘ])/g).map(l=>l.trim()).filter(Boolean).map(l=>`<div style="display:flex;gap:5px"><span style="color:#999;flex-shrink:0">•</span><span>${l}</span></div>`).join('')}</div>` : ''}
+                      ${op.czas_zbrojenia_min > 0 ? `<div style="font-size:11px;color:#c07000;margin-top:3px">⚙ zbrojenie: ${op.czas_zbrojenia_min} min</div>` : ''}
+                    </td>
+                    <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;text-align:center">${op.czas_norma||'—'} min</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:60px"></td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;width:30px"></td>
+                  </tr>`);
+                }
+              });
+              return rows.join('');
+            })()}
           </tbody>
         </table>` : '<div style="color:#666;font-size:13px;margin-bottom:16px">Brak zdefiniowanych operacji</div>'}
 

@@ -432,6 +432,9 @@ def _parse_technologia_pdf(pdf_bytes: bytes) -> dict:
     import re, io
     try:
         from pdfminer.high_level import extract_text as _extract
+    except ImportError:
+        raise ValueError("Nie można odczytać PDF: brak biblioteki pdfminer.six – dodaj 'pdfminer.six' do requirements.txt i zrestartuj serwer")
+    try:
         text = _extract(io.BytesIO(pdf_bytes))
     except Exception as e:
         raise ValueError(f"Nie można odczytać PDF: {e}")
@@ -1693,7 +1696,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
         for r in users_rows:
             sesje = conn.execute(f"""
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
-                       s.uwagi,
+                       s.uwagi, COALESCE(s.sesja_glowna, 1) as sesja_glowna,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
                        z.numer as zl_numer,
                        zi.numer as zl_inne_numer,
@@ -1723,7 +1726,9 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                 elapsed = max(0.1, elapsed)
                 czas_norma = s["czas_norma"]
                 ilosc = s["ilosc_sztuk"] or 1
-                sesja_glowna = s["sesja_glowna"] if s["sesja_glowna"] is not None else 1
+                sesja_glowna = dict(s).get("sesja_glowna", 1)
+                if sesja_glowna is None:
+                    sesja_glowna = 1
                 wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
                 if s["typ"] in ("operacja", "inne_zlecenie"):
                     if sesja_glowna == 1 and czas_norma and czas_norma > 0:

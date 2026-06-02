@@ -3,7 +3,7 @@ Serwer FastAPI dla Systemu Zarządzania Produkcją v4.0
 Deploy na Railway.app
 """
 
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -342,7 +342,7 @@ def delete_zlecenie(zid: int):
 @app.patch("/api/zlecenia/{zid}/status", dependencies=[Depends(verify_key)])
 def change_zlecenie_status(zid: int, body: dict):
     status = body.get("status")
-    if status not in ("nowe","w_toku","zakonczone","anulowane"):
+    if status not in ("nowe","w_toku","zakonczone","anulowane","oczekuje_potwierdzenia","wstrzymane"):
         raise HTTPException(400, "Nieprawidłowy status")
     with get_db() as conn:
         conn.execute("UPDATE zlecenia SET status=? WHERE id=?", (status, zid))
@@ -398,6 +398,232 @@ def delete_operacja(oid: int):
         conn.execute("DELETE FROM operacje WHERE id=?", (oid,))
     return {"ok": True}
 
+# Endpoint KJ – zapis wyniku kontroli jakości
+class KJRequest(BaseModel):
+    wynik: str  # 'zgodny' | 'niezgodny'
+    uwagi: Optional[str] = ""
+
+@app.patch("/api/operacje/{oid}/kj", dependencies=[Depends(verify_key)])
+def zapisz_wynik_kj(oid: int, req: KJRequest):
+    if req.wynik not in ("zgodny", "niezgodny"):
+        raise HTTPException(400, "Wynik musi być: zgodny lub niezgodny")
+    with get_db() as conn:
+        op = conn.execute("SELECT * FROM operacje WHERE id=?", (oid,)).fetchone()
+        if not op:
+            raise HTTPException(404, "Operacja nie istnieje")
+        nowy_status = "zakonczona" if req.wynik == "zgodny" else "niezgodna_kj"
+        conn.execute(
+            "UPDATE operacje SET kj_wynik=?, status=?, opis_czynnosci=CASE WHEN ?!='' THEN opis_czynnosci||'\n[KJ '||datetime('now')||']: '||? ELSE opis_czynnosci END WHERE id=?",
+            (req.wynik, nowy_status, req.uwagi, req.uwagi, oid)
+        )
+        # Jeśli niezgodny – zatrzymaj dalsze operacje (status zlecenia -> wstrzymane)
+        if req.wynik == "niezgodny":
+            conn.execute(
+                "UPDATE zlecenia SET status='wstrzymane' WHERE id=(SELECT zlecenie_id FROM operacje WHERE id=?)",
+                (oid,)
+            )
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True, "wynik": req.wynik}
+
+
+# ─── Import technologii z PDF ─────────────────────────────────────────────────
+def _parse_technologia_pdf(pdf_bytes: bytes) -> dict:
+    """Parsuje kartę technologiczną PDF → dict z numerem, nazwą i operacjami."""
+    import re, io
+    try:
+        from pdfminer.high_level import extract_text as _extract
+        text = _extract(io.BytesIO(pdf_bytes))
+    except Exception as e:
+        raise ValueError(f"Nie można odczytać PDF: {e}")
+
+    # Nagłówek – numer i nazwa
+    hdr = re.search(r'WYRÓB / DETAL:.*?\n(\S+)\s*\n(.+?)\n', text, re.DOTALL)
+    numer = hdr.group(1).strip() if hdr else ""
+    nazwa = hdr.group(2).strip() if hdr else ""
+    if not numer:
+        # fallback: pierwsza linia po WYRÓB / DETAL:
+        m2 = re.search(r'\n(P\d+)\n', text)
+        numer = m2.group(1) if m2 else "IMPORT"
+    if not nazwa:
+        m3 = re.search(numer + r'\s*\n(.+?)\n', text)
+        nazwa = m3.group(1).strip() if m3 else "Importowana technologia"
+
+    # Operacje
+    op_pattern = re.compile(
+        r'(\d{3})\s*\n\s*(OT-[A-Z0-9]+-\d+\s*-\s*[^\n]+?)\s*\n'
+        r'\s*([\d\s,\.]+)\s*\n\s*([\d\s,\.]+)\s*\n\s*([^\n]+?)\s*\n'
+        r'\s*Uwagi:\s*\n\s*(.*?)(?=\n\d{3}\s*\n|Suma Tj:|\Z)',
+        re.DOTALL
+    )
+
+    operacje = []
+    for m in op_pattern.finditer(text):
+        nr_str   = m.group(1)
+        kod_nazwa = m.group(2).strip()
+        tj_str   = m.group(3).strip().replace(' ','').replace(',','.')
+        tpz_str  = m.group(4).strip().replace(' ','').replace(',','.')
+        stanowisko_raw = m.group(5).strip()
+        opis_raw = m.group(6).strip()
+
+        try: tj  = float(re.search(r'[\d\.]+', tj_str).group())
+        except: tj = 0.0
+        try: tpz = float(re.search(r'[\d\.]+', tpz_str).group())
+        except: tpz = 0.0
+
+        # Wyciągnij czyste stanowisko (po myślniku)
+        st_match = re.match(r'^[A-Z0-9]+ - (.+)$', stanowisko_raw)
+        stanowisko = st_match.group(1).strip() if st_match else stanowisko_raw
+
+        # Kod operacji – fragment przed myślnikiem i numerem
+        kod_match = re.match(r'(OT-[A-Z]+)-\d+', kod_nazwa)
+        kod_prefix = kod_match.group(1) if kod_match else "OT"
+
+        # Klasyfikacja operacji
+        if 'KJ' in kod_prefix or 'KJ' in stanowisko_raw:
+            typ_op = 'kj'
+        elif 'KOOP' in kod_prefix or 'KOOP' in stanowisko_raw:
+            typ_op = 'kooperacja'
+        elif 'ZP' in kod_prefix or 'Zbrojenie' in stanowisko or 'zbrojenie' in opis_raw.lower():
+            typ_op = 'zbrojenie_zewn'
+        else:
+            typ_op = 'produkcja'
+
+        # Nazwa operacji (bez kodu OT-XXX-000)
+        nazwa_op_match = re.match(r'OT-[A-Z0-9]+-\d+\s*-\s*(.+)', kod_nazwa)
+        nazwa_op = nazwa_op_match.group(1).strip() if nazwa_op_match else kod_nazwa
+
+        # Parametry KJ z opisu
+        kj_params = []
+        for line in opis_raw.splitlines():
+            if 'Niezgodny' in line and 'Zgodny' in line:
+                kj_params.append(line.strip())
+
+        # Opis – usuń parametry KJ (zostaną w parametry_kj)
+        opis_clean = re.sub(r'Parametry KJ:.*', '', opis_raw, flags=re.DOTALL).strip()
+
+        operacje.append({
+            "kolejnosc": int(nr_str),
+            "nazwa": nazwa_op,
+            "stanowisko_raw": stanowisko_raw,
+            "stanowisko": stanowisko,
+            "czas_norma": tj,
+            "czas_tpz_min": tpz,
+            "opis_czynnosci": opis_clean,
+            "typ_operacji": typ_op,
+            "parametry_kj": json.dumps(kj_params, ensure_ascii=False) if kj_params else None,
+        })
+
+    # Op 010 (lista materiałów) – dodaj ją ręcznie jeśli nie złapana
+    if not any(o["kolejnosc"] == 10 for o in operacje):
+        m010 = re.search(r'010\s*\n\s*(OT-[^\n]+)\s*\n.*?([\d,]+)\s*\n\s*([\d,]+)\s*\n\s*([^\n]+?)\s*\n', text, re.DOTALL)
+        if m010:
+            nazwa_010 = re.sub(r'OT-[A-Z0-9]+-\d+\s*-\s*','', m010.group(1).strip())
+            operacje.insert(0, {
+                "kolejnosc": 10, "nazwa": nazwa_010,
+                "stanowisko_raw": m010.group(4).strip(),
+                "stanowisko": re.sub(r'^[A-Z0-9]+ - ','', m010.group(4).strip()),
+                "czas_norma": 0.0, "czas_tpz_min": 0.0,
+                "opis_czynnosci": "Kontrola jakości materiału",
+                "typ_operacji": "kj",
+                "parametry_kj": json.dumps(["Materiał wejściowy: Niezgodny - Zgodny"], ensure_ascii=False),
+            })
+
+    operacje.sort(key=lambda x: x["kolejnosc"])
+    return {"numer": numer, "nazwa": nazwa, "operacje": operacje}
+
+
+class ImportTechnologiaResponse(BaseModel):
+    zlecenie_id: int
+    numer: str
+    nazwa: str
+    operacje_created: int
+    nowe_stanowiska: List[str]
+    errors: List[str]
+
+@app.post("/api/import-technologia", dependencies=[Depends(verify_key)])
+async def import_technologia(file: UploadFile = File(...)):
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(400, "Pusty plik")
+    try:
+        parsed = _parse_technologia_pdf(pdf_bytes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    errors = []
+    nowe_stanowiska = []
+
+    with get_db() as conn:
+        # Sprawdź czy zlecenie już istnieje
+        existing = conn.execute(
+            "SELECT id FROM zlecenia WHERE numer=?", (parsed["numer"],)
+        ).fetchone()
+        if existing:
+            raise HTTPException(400, f"Zlecenie {parsed['numer']} już istnieje w systemie")
+
+        # Utwórz zlecenie ze statusem 'oczekuje_potwierdzenia'
+        import uuid as _uuid
+        qr_zl = "ZL-" + str(_uuid.uuid4())[:8].upper()
+        cur = conn.execute(
+            """INSERT INTO zlecenia (numer, nazwa, opis, status, ilosc_sztuk, qr_code)
+               VALUES (?, ?, ?, 'oczekuje_potwierdzenia', 1, ?)""",
+            (parsed["numer"], parsed["nazwa"],
+             f"Zaimportowano z karty technologicznej {_now()[:10]}", qr_zl)
+        )
+        zlecenie_id = cur.lastrowid
+
+        # Zapewnij istnienie stanowisk (utwórz jeśli brak)
+        istniejace_stanowiska = {
+            r["stanowisko"] for r in conn.execute("SELECT stanowisko FROM stawki").fetchall()
+        }
+
+        for op in parsed["operacje"]:
+            st = op["stanowisko"]
+            if st and st not in istniejace_stanowiska:
+                try:
+                    conn.execute(
+                        "INSERT INTO stawki (stanowisko, stawka_godz, opis) VALUES (?, 0.0, ?)",
+                        (st, f"Dodano automatycznie podczas importu {_now()[:10]}")
+                    )
+                    istniejace_stanowiska.add(st)
+                    nowe_stanowiska.append(st)
+                except Exception as e:
+                    errors.append(f"Nie można dodać stanowiska {st}: {e}")
+
+        # Utwórz operacje
+        op_count = 0
+        for op in parsed["operacje"]:
+            try:
+                qr_op = "OP-" + str(_uuid.uuid4())[:8].upper()
+                # Dla zbrojenia – czas normy idzie do czas_zbrojenia_min
+                czas_norma = op["czas_norma"] if op["typ_operacji"] != "zbrojenie_zewn" else 0.0
+                czas_zbrojenia = op["czas_tpz_min"] if op["typ_operacji"] == "zbrojenie_zewn" else 0.0
+                conn.execute(
+                    """INSERT INTO operacje
+                        (zlecenie_id, nazwa, kolejnosc, czas_norma, stanowisko,
+                         opis_czynnosci, qr_code, czas_zbrojenia_min,
+                         typ_operacji, parametry_kj, czas_tpz_min)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (zlecenie_id, op["nazwa"], op["kolejnosc"],
+                     czas_norma, op["stanowisko"], op["opis_czynnosci"],
+                     qr_op, czas_zbrojenia,
+                     op["typ_operacji"], op["parametry_kj"], op["czas_tpz_min"])
+                )
+                op_count += 1
+            except Exception as e:
+                errors.append(f"Operacja {op['kolejnosc']} {op['nazwa']}: {e}")
+
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {
+        "zlecenie_id": zlecenie_id,
+        "numer": parsed["numer"],
+        "nazwa": parsed["nazwa"],
+        "operacje_created": op_count,
+        "nowe_stanowiska": nowe_stanowiska,
+        "errors": errors,
+    }
+
+
 @app.get("/api/operacje/aktywne", dependencies=[Depends(verify_key)])
 def get_aktywne_operacje():
     with get_db() as conn:
@@ -432,6 +658,7 @@ class StartSesjaRequest(BaseModel):
     typ: str = "operacja"   # operacja | nieprodukcyjna | inne_zlecenie
     opis_nieprodukcyjnej: Optional[str] = ""
     zlecenie_id_inne: Optional[int] = None  # dla typ='inne_zlecenie'
+    sesja_glowna: int = 1   # 1=główna (liczy normę), 0=równoległa dodatkowa
 
 class StopSesjaRequest(BaseModel):
     sesja_id: int
@@ -442,34 +669,64 @@ class PauzaRequest(BaseModel):
     sesja_id: int
     powod: Optional[str] = ""
 
+@app.get("/api/sesje/aktywne_operacja/{operacja_id}", dependencies=[Depends(verify_key)])
+def get_aktywne_sesje_operacja(operacja_id: int):
+    """Zwraca aktywne sesje dla danej operacji (do dialogu kontynuacji/wyboru głównej)."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT s.id, s.user_id, s.typ, s.start_time, s.sesja_glowna, s.pauzy,
+                   u.full_name
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.operacja_id=? AND s.status='aktywna'
+            ORDER BY s.start_time
+        """, (operacja_id,)).fetchall()
+    return [dict(r) for r in rows]
+
 @app.post("/api/sesje/start", dependencies=[Depends(verify_key)])
 def start_sesja(req: StartSesjaRequest):
     now = _now()
     with get_db() as conn:
-        # Dla pracy nieprodukcyjnej pozwalamy na równoległe sesje
         if req.typ in ("operacja", "inne_zlecenie", "zbrojenie") and req.operacja_id:
-            # sprawdź czy ta konkretna operacja nie jest już aktywna przez KOGOKOLWIEK (operacja lub zbrojenie)
-            existing = conn.execute(
-                "SELECT id, typ FROM sesje_pracy WHERE operacja_id=? AND status='aktywna'",
+            aktywne = conn.execute(
+                """SELECT s.id, s.typ, s.user_id, s.sesja_glowna, u.full_name
+                   FROM sesje_pracy s JOIN users u ON s.user_id=u.id
+                   WHERE s.operacja_id=? AND s.status='aktywna'""",
                 (req.operacja_id,)
-            ).fetchone()
-            if existing:
-                typ_blok = existing["typ"]
-                if req.typ == "zbrojenie" and typ_blok == "zbrojenie":
+            ).fetchall()
+
+            zbrojenie_akt = [r for r in aktywne if r["typ"] == "zbrojenie"]
+            operacja_akt  = [r for r in aktywne if r["typ"] in ("operacja", "inne_zlecenie")]
+
+            # Zbrojenie blokuje operację i vice versa
+            if req.typ == "zbrojenie":
+                if zbrojenie_akt:
                     raise HTTPException(400, "Zbrojenie tej operacji jest już aktywne.")
-                elif req.typ == "operacja" and typ_blok == "zbrojenie":
-                    raise HTTPException(400, "Trwa zbrojenie tej operacji – najpierw je zakończ.")
-                elif req.typ == "zbrojenie" and typ_blok in ("operacja", "inne_zlecenie"):
+                if operacja_akt:
                     raise HTTPException(400, "Operacja jest już w toku – nie można uruchomić zbrojenia.")
-                elif req.typ == req.typ:
-                    raise HTTPException(400, "Ta operacja jest już aktywna.")
+            elif req.typ in ("operacja", "inne_zlecenie"):
+                if zbrojenie_akt:
+                    raise HTTPException(400, "Trwa zbrojenie tej operacji – najpierw je zakończ.")
+                # Sesje równoległe są dozwolone – frontend zarządza wyborem głównej
+                # Jeśli sesja_glowna=1 a inna główna już istnieje → error
+                if req.sesja_glowna == 1:
+                    glowna_akt = [r for r in operacja_akt if r["sesja_glowna"] == 1]
+                    if glowna_akt:
+                        raise HTTPException(400,
+                            f"GLOWNA_ZAJETA:{glowna_akt[0]['full_name']}:{glowna_akt[0]['id']}")
+                # Ten sam pracownik nie może mieć dwóch sesji na tej samej operacji
+                moja = [r for r in operacja_akt if r["user_id"] == req.user_id]
+                if moja:
+                    raise HTTPException(400, "Masz już aktywną sesję tej operacji.")
 
         cur = conn.execute(
-            """INSERT INTO sesje_pracy (operacja_id, user_id, typ, start_time, status, uwagi, zlecenie_id_inne)
-               VALUES (?,?,?,?,?,?,?)""",
+            """INSERT INTO sesje_pracy
+                   (operacja_id, user_id, typ, start_time, status, uwagi, zlecenie_id_inne, sesja_glowna)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (req.operacja_id, req.user_id, req.typ, now, "aktywna",
              req.opis_nieprodukcyjnej or "",
-             req.zlecenie_id_inne if req.typ == "inne_zlecenie" else None)
+             req.zlecenie_id_inne if req.typ == "inne_zlecenie" else None,
+             req.sesja_glowna)
         )
         sesja_id = cur.lastrowid
         if req.operacja_id and req.typ in ("operacja", "inne_zlecenie"):
@@ -738,6 +995,43 @@ def update_user(uid: int, req: EditUserRequest):
 def delete_user(uid: int):
     with get_db() as conn:
         conn.execute("DELETE FROM users WHERE id=?", (uid,))
+    return {"ok": True}
+
+
+# ─── Uprawnienia użytkowników (dostęp do zakładek) ───────────────────────────
+@app.get("/api/users/{uid}/permissions", dependencies=[Depends(verify_key)])
+def get_user_permissions(uid: int):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT tabs FROM user_permissions WHERE user_id=?", (uid,)
+        ).fetchone()
+    if row:
+        return {"user_id": uid, "tabs": json.loads(row["tabs"])}
+    return {"user_id": uid, "tabs": []}
+
+@app.get("/api/permissions/all", dependencies=[Depends(verify_key)])
+def get_all_permissions():
+    with get_db() as conn:
+        rows = conn.execute("SELECT user_id, tabs FROM user_permissions").fetchall()
+    return {r["user_id"]: json.loads(r["tabs"]) for r in rows}
+
+class PermissionsRequest(BaseModel):
+    tabs: List[str]
+
+@app.put("/api/users/{uid}/permissions", dependencies=[Depends(verify_key)])
+def set_user_permissions(uid: int, req: PermissionsRequest):
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO user_permissions (user_id, tabs, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET tabs=excluded.tabs, updated_at=excluded.updated_at
+        """, (uid, json.dumps(req.tabs), _now()))
+    return {"ok": True, "user_id": uid, "tabs": req.tabs}
+
+@app.delete("/api/users/{uid}/permissions", dependencies=[Depends(verify_key)])
+def reset_user_permissions(uid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM user_permissions WHERE user_id=?", (uid,))
     return {"ok": True}
 
 
@@ -1417,6 +1711,9 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
             sesje_list = []
             normy_ok = 0; normy_total = 0
             koszt_pracy = 0.0; koszt_zbrojenia = 0.0
+            # Agregaty do liczenia zbiorczej wydajności vs normy
+            suma_norma_min = 0.0   # łączny czas normatywny (czas_norma × ilosc_sztuk)
+            suma_fakty_min = 0.0   # łączny czas faktyczny sesji produkcyjnych z normą
             for s in sesje:
                 elapsed = (_parse(s["end_time"]) - _parse(s["start_time"])).total_seconds() / 60
                 pauzy = json.loads(s["pauzy"] or "[]")
@@ -1426,13 +1723,27 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                 elapsed = max(0.1, elapsed)
                 czas_norma = s["czas_norma"]
                 ilosc = s["ilosc_sztuk"] or 1
+                sesja_glowna = s["sesja_glowna"] if s["sesja_glowna"] is not None else 1
                 wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
-                if wyd_pct is not None and s["typ"] in ("operacja", "inne_zlecenie"):
-                    normy_total += 1
-                    if wyd_pct >= 90: normy_ok += 1
+                if s["typ"] in ("operacja", "inne_zlecenie"):
+                    if sesja_glowna == 1 and czas_norma and czas_norma > 0:
+                        # Tylko sesja główna wchodzi do licznika norm
+                        normy_total += 1
+                        suma_norma_min += czas_norma * ilosc
+                        suma_fakty_min += elapsed
+                        if wyd_pct is not None and wyd_pct >= 90:
+                            normy_ok += 1
                 # Koszt sesji
                 if s["typ"] in ("operacja", "inne_zlecenie"):
-                    koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
+                    if sesja_glowna == 1:
+                        # Sesja główna: koszt = faktyczny czas × stawka
+                        koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
+                    else:
+                        # Sesja dodatkowa: koszt = czas_norma × ilosc × stawka (normatywny)
+                        if czas_norma and czas_norma > 0:
+                            koszt_pracy += (czas_norma * ilosc / 60.0) * float(s["stawka_godz"] or 0)
+                        else:
+                            koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
                 elif s["typ"] == "zbrojenie":
                     koszt_zbrojenia += (elapsed / 60.0) * float(s["zbrojenie_stawka_godz"] or 0)
                 # Nazwa operacji i zlecenia zależnie od typu
@@ -1459,7 +1770,11 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     "wyd_pct": wyd_pct,
                     "typ": s["typ"],
                     "data": (s["end_time"] or "")[:10],
+                    "sesja_glowna": sesja_glowna,
                 })
+
+            # Zbiorcza wydajność vs norma: ile % normy osiągnięto łącznie
+            norma_wydajnosc_pct = round(suma_norma_min / suma_fakty_min * 100) if suma_fakty_min > 0 else None
 
             wyniki.append({
                 "user_id": r["id"],
@@ -1472,6 +1787,9 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                 "dni_pracy": r["dni_pracy"],
                 "normy_ok": normy_ok,
                 "normy_total": normy_total,
+                "norma_wydajnosc_pct": norma_wydajnosc_pct,  # zbiorcze % normy
+                "suma_norma_min": round(suma_norma_min, 1),
+                "suma_fakty_min": round(suma_fakty_min, 1),
                 "koszt_pracy": round(koszt_pracy, 2),
                 "koszt_zbrojenia": round(koszt_zbrojenia, 2),
                 "koszt_total": round(koszt_pracy + koszt_zbrojenia, 2),
@@ -1609,6 +1927,14 @@ def init_db_on_start():
     # Migracja operacje
     try: c.execute("ALTER TABLE operacje ADD COLUMN czas_zbrojenia_min REAL DEFAULT 0.0")
     except: pass
+    try: c.execute("ALTER TABLE operacje ADD COLUMN typ_operacji TEXT DEFAULT 'produkcja'")
+    except: pass  # produkcja | kj | kooperacja | zbrojenie_zewn
+    try: c.execute("ALTER TABLE operacje ADD COLUMN parametry_kj TEXT DEFAULT NULL")
+    except: pass  # JSON lista parametrów KJ np. ["Wyrób: Niezgodny - Zgodny"]
+    try: c.execute("ALTER TABLE operacje ADD COLUMN kj_wynik TEXT DEFAULT NULL")
+    except: pass  # NULL | 'zgodny' | 'niezgodny'
+    try: c.execute("ALTER TABLE operacje ADD COLUMN czas_tpz_min REAL DEFAULT 0.0")
+    except: pass  # czas przygotowawczo-zakończeniowy (Tpz)
 
     c.execute("""CREATE TABLE IF NOT EXISTS sesje_pracy (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1693,6 +2019,17 @@ def init_db_on_start():
         ]
         c.executemany("INSERT INTO stawki (stanowisko,stawka_godz,czas_norma_min) VALUES (?,?,?)", stawki)
 
+    # Migracja sesje_pracy – kolumna sesja_glowna (1=główna, 0=równoległa dodatkowa)
+    try: c.execute("ALTER TABLE sesje_pracy ADD COLUMN sesja_glowna INTEGER DEFAULT 1")
+    except: pass
+
+    c.execute("""CREATE TABLE IF NOT EXISTS user_permissions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL UNIQUE,
+        tabs TEXT NOT NULL DEFAULT '[]',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""")
+
     conn.commit()
     conn.close()
     print(f"✓ Baza danych gotowa: {DB_PATH}")
@@ -1703,7 +2040,7 @@ import threading as _threading
 
 _TABLES_TO_BACKUP = [
     "zlecenia", "operacje", "sesje_pracy", "users", "stawki",
-    "katalog_produktow", "produkty_zlecenia", "opcje_zlecen"
+    "katalog_produktow", "produkty_zlecenia", "opcje_zlecen", "user_permissions"
 ]
 
 # ── GitHub Gist helpers ────────────────────────────────────────────────────────

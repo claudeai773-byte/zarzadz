@@ -432,9 +432,6 @@ def _parse_technologia_pdf(pdf_bytes: bytes) -> dict:
     import re, io
     try:
         from pdfminer.high_level import extract_text as _extract
-    except ImportError:
-        raise ValueError("Nie można odczytać PDF: brak biblioteki pdfminer.six – dodaj 'pdfminer.six' do requirements.txt i zrestartuj serwer")
-    try:
         text = _extract(io.BytesIO(pdf_bytes))
     except Exception as e:
         raise ValueError(f"Nie można odczytać PDF: {e}")
@@ -593,14 +590,62 @@ async def import_technologia(file: UploadFile = File(...)):
                 except Exception as e:
                     errors.append(f"Nie można dodać stanowiska {st}: {e}")
 
+        # ── Scal operacje zbrojenia (ZP*) z operacją macierzystą ─────────────────
+        # Operacja ZPFBK powinna dołączyć swój czas do operacji PFBK jako czas_zbrojenia_min,
+        # tak jak działa ręczne dodawanie operacji z polem "Czas zbrojenia".
+        # Klucz: usuń prefix "ZP" z nazwy/stanowiska zbrojenia → szukaj operacji o tej samej nazwie.
+        import re as _re
+        operacje_finalne = []
+        zbrojenia_do_scalenia = []
+        for op in parsed["operacje"]:
+            if op["typ_operacji"] == "zbrojenie_zewn":
+                zbrojenia_do_scalenia.append(op)
+            else:
+                operacje_finalne.append(op)
+
+        for zbr in zbrojenia_do_scalenia:
+            # Wyciągnij nazwę bazową: usuń prefix "ZP" z kodu stanowiska (np. ZPFBK → PFBK)
+            zbr_st_raw = zbr.get("stanowisko_raw", "") or zbr.get("stanowisko", "")
+            # Kod stanowiska zbrojenia ma format "ZP<KOD>" lub "ZP-<KOD>", szukamy bazowego kodu
+            base_kod = _re.sub(r'^ZP[-_]?', '', zbr_st_raw, flags=_re.IGNORECASE).strip()
+            # Szukaj operacji macierzystej: ta której stanowisko_raw zawiera base_kod
+            matched = None
+            for op in operacje_finalne:
+                op_st_raw = op.get("stanowisko_raw", "") or op.get("stanowisko", "")
+                if base_kod and base_kod.upper() in op_st_raw.upper():
+                    matched = op
+                    break
+            # Fallback: szukaj po kolejności (zbrojenie zazwyczaj tuż przed lub tuż po operacji)
+            if not matched:
+                zbr_kol = zbr["kolejnosc"]
+                najblizsze = sorted(operacje_finalne, key=lambda x: abs(x["kolejnosc"] - zbr_kol))
+                if najblizsze:
+                    matched = najblizsze[0]
+
+            if matched:
+                # Dołącz czas zbrojenia do operacji macierzystej
+                czas_zbr = zbr.get("czas_tpz_min") or zbr.get("czas_norma") or 0.0
+                matched["czas_zbrojenia_min"] = (matched.get("czas_zbrojenia_min") or 0.0) + czas_zbr
+                # Aktywuj zbrojenie na stanowisku macierzystym w stawkach
+                try:
+                    conn.execute(
+                        "UPDATE stawki SET zbrojenie_aktywne=1 WHERE stanowisko=? AND zbrojenie_aktywne=0",
+                        (matched["stanowisko"],)
+                    )
+                except Exception:
+                    pass
+            else:
+                # Nie znaleziono macierzystej – zostaw jako osobną operację
+                operacje_finalne.append(zbr)
+                errors.append(f"Nie scalono zbrojenia '{zbr['nazwa']}' – nie znaleziono operacji macierzystej")
+
         # Utwórz operacje
         op_count = 0
-        for op in parsed["operacje"]:
+        for op in operacje_finalne:
             try:
                 qr_op = "OP-" + str(_uuid.uuid4())[:8].upper()
-                # Dla zbrojenia – czas normy idzie do czas_zbrojenia_min
                 czas_norma = op["czas_norma"] if op["typ_operacji"] != "zbrojenie_zewn" else 0.0
-                czas_zbrojenia = op["czas_tpz_min"] if op["typ_operacji"] == "zbrojenie_zewn" else 0.0
+                czas_zbrojenia = op.get("czas_zbrojenia_min") or 0.0
                 conn.execute(
                     """INSERT INTO operacje
                         (zlecenie_id, nazwa, kolejnosc, czas_norma, stanowisko,
@@ -610,7 +655,7 @@ async def import_technologia(file: UploadFile = File(...)):
                     (zlecenie_id, op["nazwa"], op["kolejnosc"],
                      czas_norma, op["stanowisko"], op["opis_czynnosci"],
                      qr_op, czas_zbrojenia,
-                     op["typ_operacji"], op["parametry_kj"], op["czas_tpz_min"])
+                     op["typ_operacji"], op["parametry_kj"], op.get("czas_tpz_min", 0.0))
                 )
                 op_count += 1
             except Exception as e:
@@ -1696,7 +1741,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
         for r in users_rows:
             sesje = conn.execute(f"""
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
-                       s.uwagi, COALESCE(s.sesja_glowna, 1) as sesja_glowna,
+                       s.uwagi,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko,
                        z.numer as zl_numer,
                        zi.numer as zl_inne_numer,
@@ -1726,9 +1771,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                 elapsed = max(0.1, elapsed)
                 czas_norma = s["czas_norma"]
                 ilosc = s["ilosc_sztuk"] or 1
-                sesja_glowna = dict(s).get("sesja_glowna", 1)
-                if sesja_glowna is None:
-                    sesja_glowna = 1
+                sesja_glowna = s["sesja_glowna"] if s["sesja_glowna"] is not None else 1
                 wyd_pct = round(czas_norma * ilosc / elapsed * 100) if czas_norma else None
                 if s["typ"] in ("operacja", "inne_zlecenie"):
                     if sesja_glowna == 1 and czas_norma and czas_norma > 0:

@@ -2984,6 +2984,7 @@ function renderZlecenia() {
           <button class="btn-sm btn-blue" onclick="openEditZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">✏ Edytuj</button>
           <button class="btn-sm btn-accent" onclick="openOperacje(${JSON.stringify(z).replace(/"/g,'&quot;')})">🔧 Operacje</button>
           <button class="btn-sm btn-green" onclick="loadKoszty(${z.id})">💰 Koszty</button>
+	  <button class="btn-sm btn-accent" style="background:var(--orange,#e67e00);color:#1a1f2e" onclick="openStawkiZleceniaModal(${z.id}, '${(z.numer||'').replace(/'/g,"\\'")}', '${(z.nazwa||'').replace(/'/g,"\\'")}')">⚙ Stawki</button>
           <select style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px"
                   onchange="changeZlecenieStatus(${z.id},this.value);this.value='${z.status}'">
             <option value="${z.status}" disabled selected>▶ Status</option>

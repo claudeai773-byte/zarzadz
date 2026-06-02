@@ -3955,9 +3955,9 @@ async function handlePdfImport(input) {
   formData.append('file', file);
   setState({importPdfResult: null});
   try {
-    const response = await fetch('/api/import-technologia', {
+    const response = await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/import-technologia', {
       method: 'POST',
-      headers: {'X-API-Key': state.apiKey || ''},
+      headers: {'x-api-key': API_KEY},
       body: formData,
     });
     const data = await response.json();
@@ -3973,9 +3973,9 @@ async function handlePdfImport(input) {
 async function majsterZatwierdzKooperacje(opId) {
   if (!confirm('Zatwierdzić wykonanie kooperacji?')) return;
   try {
-    await fetch('/api/operacje/' + opId + '/kj', {
+    await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/operacje/' + opId + '/kj', {
       method: 'PATCH',
-      headers: {'Content-Type':'application/json', 'X-API-Key': state.apiKey || ''},
+      headers: {'Content-Type':'application/json', 'x-api-key': API_KEY},
       body: JSON.stringify({wynik: 'zgodny', uwagi: 'Kooperacja zatwierdzona przez majstra'}),
     });
     setState({qrZleceniePickerModal: null});
@@ -3986,9 +3986,9 @@ async function majsterZatwierdzKooperacje(opId) {
 async function kjWynik(opId, wynik) {
   const uwagi = document.getElementById('kj-uwagi')?.value || '';
   try {
-    await fetch('/api/operacje/' + opId + '/kj', {
+    await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/operacje/' + opId + '/kj', {
       method: 'PATCH',
-      headers: {'Content-Type':'application/json', 'X-API-Key': state.apiKey || ''},
+      headers: {'Content-Type':'application/json', 'x-api-key': API_KEY},
       body: JSON.stringify({wynik, uwagi}),
     });
     setState({kjModal: null, qrZleceniePickerModal: null});

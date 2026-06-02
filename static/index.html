@@ -3592,7 +3592,7 @@ function renderPrintModal() {
               <td style="padding:7px 8px;border:1px solid #ddd;font-weight:700">${op.kolejnosc}</td>
               <td style="padding:7px 8px;border:1px solid #ddd">
                 <div style="font-weight:600">${op.nazwa}</div>
-                ${op.opis_czynnosci ? `<div style="font-size:11px;color:#666;margin-top:2px">${op.opis_czynnosci}</div>` : ''}
+                ${op.opis_czynnosci ? `<div style="font-size:11px;color:#555;margin-top:4px;line-height:1.7">${op.opis_czynnosci.split(/\n|(?<=;)\s*(?=[A-ZŚŹŻĆŃÓĄĘ])/g).map(l=>l.trim()).filter(Boolean).map(l=>`<div style="display:flex;gap:5px"><span style="color:#999;flex-shrink:0">•</span><span>${l.endsWith(';') ? l : l}</span></div>`).join('')}</div>` : ''}
               </td>
               <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
               <td style="padding:7px 8px;border:1px solid #ddd;text-align:center">${op.czas_norma||'—'} min</td>

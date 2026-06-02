@@ -7,6 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>⚙ Produkcja</title>
+<script src="stawki_zlecenia.js"></script>
 <style>
   :root {
     --bg:#1a1f2e;--panel:#242938;--accent:#e8a020;
@@ -2740,12 +2741,16 @@ function renderMajsterPodsumowanie(stats) {
       }
     }
     const canDelete = state.user?.role === 'admin' || state.user?.role === 'majster';
-    html += '<div style="display:flex;gap:8px;margin-top:12px">';
-    if (canDelete) {
-      html += '<button class="btn btn-red" style="flex:1" onclick="deleteZlecenieFromModal(' + m.id + ')">🗑 Usuń zlecenie</button>';
-    }
-    html += '<button class="btn btn-outline" style="flex:1" onclick="setState({zlecenieModal:null})">Zamknij</button>';
-    html += '</div></div></div>';
+const canEditStawki = ['admin','technolog','majster'].includes(state.user?.role);
+html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">';
+if (canEditStawki) {
+html += '<button class="btn btn-accent" style="flex:1;background:var(--orange,#e67e00);color:#1a1f2e" onclick="openStawkiZleceniaModal(' + m.id + ', \'' + (m.numer||'').replace(/'/g,"\\'") + '\', \'' + (m.nazwa||'').replace(/'/g,"\\'") + '\')">⚙ Stawki zlecenia</button>';
+}
+if (canDelete) {
+html += '<button class="btn btn-red" style="flex:1" onclick="deleteZlecenieFromModal(' + m.id + ')">🗑 Usuń zlecenie</button>';
+}
+html += '<button class="btn btn-outline" style="flex:1" onclick="setState({zlecenieModal:null})">Zamknij</button>';
+html += '</div></div></div>';
   }
 
   return html;

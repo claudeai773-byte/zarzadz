@@ -2154,131 +2154,222 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   const ZMIANA_MIN = 450;
   const fmtPLNr = v => (parseFloat(v)||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2}) + ' zł';
 
-  let tabelaHtml = '';
-  if (typ === 'skrocony') {
-    tabelaHtml += `
-    <table style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead><tr style="background:#2e3548;color:#fff">
-        <th style="padding:8px 10px;text-align:left">Pracownik</th>
-        <th style="padding:8px 10px;text-align:center">Czas roboczy (min)</th>
-        <th style="padding:8px 10px;text-align:center">Zbrojenie (min)</th>
-        <th style="padding:8px 10px;text-align:center">Nieprodukcyjny (min)</th>
-        <th style="padding:8px 10px;text-align:center">Razem (min)</th>
-        <th style="padding:8px 10px;text-align:center">Zmian (×450 min)</th>
-        <th style="padding:8px 10px;text-align:center">Koszt łączny</th>
-        <th style="padding:8px 10px;text-align:center">Efektywność</th>
-      </tr></thead><tbody>`;
-    pr.forEach((p,i) => {
-      const razem = p.min_roboczy + p.min_zbrojenie + p.min_nieproduktywny;
-      const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
-      const kosztTotal = (p.koszt_total || 0);
-      // Efektywność: % czasu spędzonego na pracy produkcyjnej vs łącznego czasu zarejestrowanego
-      // Jeśli brak czasu nieproduktywnego/zbrojenia – pokazuj na podstawie norm
-      const normy_ok = p.normy_ok || 0;
-      const normy_total = p.normy_total || 0;
-      // Użyj norma_wydajnosc_pct (zbiorcze normy) jeśli dostępne, fallback na per-sesję
-      const efektNormy = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined
-        ? p.norma_wydajnosc_pct
-        : (normy_total > 0 ? Math.round(normy_ok / normy_total * 100) : null);
-      const efektCzas = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
-      // Pokaż efektywność norm jeśli dostępna, inaczej efektywność czasu
-      const efekt = efektNormy !== null ? efektNormy : (efektCzas !== null ? efektCzas : 0);
-      const hasNorma = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined;
-      const efLabel = hasNorma
-        ? efekt + '% norm (' + Math.round(p.suma_norma_min||0) + '/' + Math.round(p.suma_fakty_min||0) + ' min)'
-        : (normy_total > 0 ? efektNormy + '% norm' : (efektCzas !== null ? efekt + '% czasu' : '—'));
-      const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
-      tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8">${Math.round(p.min_roboczy)}</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${Math.round(p.min_zbrojenie)}</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;color:#888">${Math.round(p.min_nieproduktywny)}</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700">${Math.round(razem)}</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center">${zmiany}</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:600;color:#1e8a4c">${kosztTotal.toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</td>
-        <td style="padding:7px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${efKolor}">${efLabel}</td>
-      </tr>`;
+  // ── Pomocnicze: oblicz efektywność dla zbioru sesji ──────────────────────────
+  function calcEfekt(p) {
+    const efektNormy = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined
+      ? p.norma_wydajnosc_pct : null;
+    const normy_ok = p.normy_ok || 0;
+    const normy_total = p.normy_total || 0;
+    const razem = (p.min_roboczy||0) + (p.min_zbrojenie||0) + (p.min_nieproduktywny||0);
+    const efektCzas = razem > 0 ? Math.round((p.min_roboczy||0) / razem * 100) : null;
+    const efekt = efektNormy !== null ? efektNormy
+                : normy_total > 0 ? Math.round(normy_ok / normy_total * 100)
+                : efektCzas !== null ? efektCzas : 0;
+    const hasNorma = efektNormy !== null;
+    const label = hasNorma
+      ? efekt + '% norm (' + Math.round(p.suma_norma_min||0) + '/' + Math.round(p.suma_fakty_min||0) + ' min)'
+      : normy_total > 0 ? Math.round(normy_ok/normy_total*100) + '% norm'
+      : efektCzas !== null ? efekt + '% czasu' : '—';
+    const kolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
+    return {efekt, label, kolor};
+  }
+
+  // ── Zbierz wszystkie unikalne daty z sesji pracowników ──────────────────────
+  const allDates = new Set();
+  pr.forEach(p => (p.sesje||[]).forEach(s => { if (s.data) allDates.add(s.data); }));
+  const sortedDates = Array.from(allDates).sort();
+
+  // ── Dla każdego pracownika i każdej daty oblicz agregaty ────────────────────
+  // dayStats[data][user_id] = {min_roboczy, min_zbrojenie, min_nieproduktywny, norma_min, fakty_min, sesje}
+  const dayStats = {};
+  sortedDates.forEach(d => { dayStats[d] = {}; });
+  pr.forEach(p => {
+    (p.sesje||[]).forEach(s => {
+      const d = s.data;
+      if (!d) return;
+      if (!dayStats[d][p.user_id]) {
+        dayStats[d][p.user_id] = {
+          full_name: p.full_name, min_roboczy:0, min_zbrojenie:0,
+          min_nieproduktywny:0, norma_min:0, fakty_min:0, sesje:[]
+        };
+      }
+      const ds = dayStats[d][p.user_id];
+      const m = parseFloat(s.czas_min) || 0;
+      if (s.typ === 'zbrojenie') ds.min_zbrojenie += m;
+      else if (s.typ === 'nieprodukcyjna') ds.min_nieproduktywny += m;
+      else ds.min_roboczy += m;
+      if (s.norma_min && s.norma_min > 0 && s.typ !== 'zbrojenie' && s.sesja_glowna !== 0) {
+        ds.norma_min += (s.norma_min * (s.ilosc_sztuk || 1));
+        ds.fakty_min += m;
+      }
+      ds.sesje.push(s);
     });
-    tabelaHtml += `</tbody></table>`;
-  } else {
-    // PEŁNY raport
-    pr.forEach(p => {
-      const razem = p.min_roboczy + p.min_zbrojenie + p.min_nieproduktywny;
-      const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
-      const normy_ok2 = p.normy_ok || 0;
-      const normy_total2 = p.normy_total || 0;
-      const efektNormy2 = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined
-        ? p.norma_wydajnosc_pct
-        : (normy_total2 > 0 ? Math.round(normy_ok2 / normy_total2 * 100) : null);
-      const efektCzas2 = razem > 0 ? Math.round(p.min_roboczy / razem * 100) : null;
-      const efekt = efektNormy2 !== null ? efektNormy2 : (efektCzas2 !== null ? efektCzas2 : 0);
-      const hasNorma2 = p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined;
-      const efLabel2 = hasNorma2
-        ? efekt + '% norm (' + Math.round(p.suma_norma_min||0) + '/' + Math.round(p.suma_fakty_min||0) + ' min)'
-        : (normy_total2 > 0 ? efektNormy2 + '% norm (' + normy_ok2 + '/' + normy_total2 + ')' : (efektCzas2 !== null ? efekt + '% czasu' : '—'));
-      const efKolor = efekt >= 80 ? '#1e8a4c' : efekt >= 60 ? '#e67e00' : '#c0392b';
+  });
+
+  function fmtDatePL(d) {
+    if (!d) return d;
+    const [y,m,dd] = d.split('-');
+    const dni = ['niedziela','poniedziałek','wtorek','środa','czwartek','piątek','sobota'];
+    const dow = new Date(d).getDay();
+    return `${parseInt(dd,10)}.${parseInt(m,10)}.${y} (${dni[dow]})`;
+  }
+
+  // ── Buduj HTML raportu ───────────────────────────────────────────────────────
+  let tabelaHtml = '';
+
+  // ────── Sekcje dzienne ──────────────────────────────────────────────────────
+  sortedDates.forEach(date => {
+    const dzienPracownicy = pr.filter(p => dayStats[date][p.user_id]);
+    if (!dzienPracownicy.length) return;
+
+    tabelaHtml += `
+    <div style="margin-bottom:4px;margin-top:20px;page-break-inside:avoid">
+      <div style="background:#2e3548;color:#fff;padding:8px 14px;border-radius:6px 6px 0 0;font-size:14px;font-weight:700">
+        📅 ${fmtDatePL(date)}
+      </div>`;
+
+    if (typ === 'skrocony') {
       tabelaHtml += `
-      <div style="border:1px solid #ddd;border-radius:6px;margin-bottom:16px;break-inside:avoid;overflow:hidden">
-        <div style="background:#2e3548;color:#fff;padding:8px 14px;display:flex;justify-content:space-between;align-items:center">
-          <span style="font-weight:700;font-size:14px">${p.full_name}</span>
-          <span style="font-size:12px">${p.sesji} sesji | ${p.sztuki} szt. | efektywność: <b style="color:${efKolor}">${efLabel2}</b></span>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid #ddd">
-          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ROBOCZY</div><b style="color:#1a73e8">${Math.round(p.min_roboczy)} min</b></div>
-          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ZBROJENIE</div><b style="color:#e67e00">${Math.round(p.min_zbrojenie)} min</b></div>
-          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">NIEPRODUKTYWNY</div><b style="color:#888">${Math.round(p.min_nieproduktywny)} min</b></div>
-          <div style="padding:7px 12px;border-right:1px solid #ddd;font-size:12px"><div style="color:#888;font-size:10px">ZMIANY (${ZMIANA_MIN} min)</div><b>${zmiany}</b></div>
-          <div style="padding:7px 12px;font-size:12px"><div style="color:#888;font-size:10px">KOSZT ŁĄCZNY</div><b style="color:#1e8a4c">${(p.koszt_total||0).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</b></div>
-        </div>`;
-      if (p.sesje && p.sesje.length) {
-        tabelaHtml += `<div style="padding:8px 14px">
-          <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:#3d4a63;color:#fff">
+          <th style="padding:7px 10px;text-align:left">Pracownik</th>
+          <th style="padding:7px 10px;text-align:center">Roboczy (min)</th>
+          <th style="padding:7px 10px;text-align:center">Zbrojenie (min)</th>
+          <th style="padding:7px 10px;text-align:center">Nieprodukt. (min)</th>
+          <th style="padding:7px 10px;text-align:center">Razem (min)</th>
+          <th style="padding:7px 10px;text-align:center">Zmian</th>
+          <th style="padding:7px 10px;text-align:center">Efektywność</th>
+        </tr></thead><tbody>`;
+      dzienPracownicy.forEach((p, i) => {
+        const ds = dayStats[date][p.user_id];
+        const razem = ds.min_roboczy + ds.min_zbrojenie + ds.min_nieproduktywny;
+        const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
+        const efPct = ds.fakty_min > 0 ? Math.round(ds.norma_min / ds.fakty_min * 100) : null;
+        const efLabel = efPct !== null ? efPct + '% norm' : (razem > 0 ? Math.round(ds.min_roboczy/razem*100) + '% czasu' : '—');
+        const efVal = efPct !== null ? efPct : (razem > 0 ? Math.round(ds.min_roboczy/razem*100) : 0);
+        const efKolor = efVal >= 80 ? '#1e8a4c' : efVal >= 60 ? '#e67e00' : '#c0392b';
+        tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8">${Math.round(ds.min_roboczy)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${Math.round(ds.min_zbrojenie)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#888">${Math.round(ds.min_nieproduktywny)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700">${Math.round(razem)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${zmiany}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${efKolor}">${efLabel}</td>
+        </tr>`;
+      });
+      tabelaHtml += `</tbody></table>`;
+    } else {
+      // PEŁNY – każdy pracownik z rozpiską sesji dla tego dnia
+      dzienPracownicy.forEach(p => {
+        const ds = dayStats[date][p.user_id];
+        const razem = ds.min_roboczy + ds.min_zbrojenie + ds.min_nieproduktywny;
+        const zmiany = razem > 0 ? (razem / ZMIANA_MIN).toFixed(2) : '0';
+        const efPct = ds.fakty_min > 0 ? Math.round(ds.norma_min / ds.fakty_min * 100) : null;
+        const efLabel = efPct !== null ? efPct + '% norm' : (razem > 0 ? Math.round(ds.min_roboczy/razem*100) + '% czasu' : '—');
+        const efVal = efPct !== null ? efPct : (razem > 0 ? Math.round(ds.min_roboczy/razem*100) : 0);
+        const efKolor = efVal >= 80 ? '#1e8a4c' : efVal >= 60 ? '#e67e00' : '#c0392b';
+        tabelaHtml += `
+        <div style="border:1px solid #ddd;margin-bottom:10px;break-inside:avoid;overflow:hidden">
+          <div style="background:#4a5568;color:#fff;padding:6px 12px;display:flex;justify-content:space-between;align-items:center">
+            <span style="font-weight:700;font-size:13px">${p.full_name}</span>
+            <span style="font-size:11px">${Math.round(razem)} min | ${zmiany} zmian | efektywność: <b style="color:${efKolor}">${efLabel}</b></span>
+          </div>`;
+        if (ds.sesje.length) {
+          tabelaHtml += `<table style="width:100%;border-collapse:collapse;font-size:11px">
             <thead><tr style="background:#f5f7fa">
               <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Operacja / Typ</th>
               <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Zlecenie</th>
-              <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Data</th>
               <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas/szt.</th>
               <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas łączny</th>
               <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
             </tr></thead><tbody>`;
-        p.sesje.forEach((s,i) => {
-          const sztuk = s.ilosc_sztuk || 1;
-          const avgMinVal = sztuk > 0 ? parseFloat(s.czas_min) / sztuk : parseFloat(s.czas_min);
-          const avgHMS = fmtHMS(avgMinVal);
-          const totalHMS = fmtHMS(parseFloat(s.czas_min));
-          const isNieprod = s.typ === 'nieprodukcyjna';
-          const isInne = s.typ === 'inne_zlecenie';
-          const isZbr = s.typ === 'zbrojenie';
-          const rowBg = isNieprod ? '#f5f0ff' : isInne ? '#f0f7ff' : (i%2?'#fff':'#f9fafb');
-          const typBadge = isNieprod
-            ? `<span style="font-size:9px;background:#9b59b6;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">NIEPRODUKCYJNA</span>`
-            : isInne
-            ? `<span style="font-size:9px;background:#2980b9;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">INNE ZLECENIE</span>`
-            : isZbr
-            ? `<span style="font-size:9px;background:#e67e00;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">ZBROJENIE</span>`
-            : '';
-          const opNazwa = s.op_nazwa || (isNieprod ? '⏸ Praca nieprodukcyjna' : isInne ? '🔧 Inne zlecenie' : '—');
-          const zlNumer = isNieprod ? '—' : (s.zl_numer || '—');
-          tabelaHtml += `<tr style="background:${rowBg}">
-            <td style="padding:3px 8px;border:1px solid #eee">${opNazwa}${typBadge}</td>
-            <td style="padding:3px 8px;border:1px solid #eee">${zlNumer}</td>
-            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data}</td>
-            <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace">${isNieprod ? totalHMS : avgHMS}</td>
-            <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#888">${isNieprod ? '—' : totalHMS}</td>
-            <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod ? '—' : (s.ilosc_sztuk||'—')}</td>
-          </tr>`;
-        });
-        tabelaHtml += `</tbody></table></div>`;
-      }
-      tabelaHtml += `</div>`;
+          ds.sesje.forEach((s, i) => {
+            const sztuk = s.ilosc_sztuk || 1;
+            const avgHMS = fmtHMS(parseFloat(s.czas_min) / sztuk);
+            const totalHMS = fmtHMS(parseFloat(s.czas_min));
+            const isNieprod = s.typ === 'nieprodukcyjna';
+            const isInne = s.typ === 'inne_zlecenie';
+            const isZbr = s.typ === 'zbrojenie';
+            const rowBg = isNieprod ? '#f5f0ff' : isInne ? '#f0f7ff' : (i%2?'#fff':'#f9fafb');
+            const typBadge = isNieprod
+              ? `<span style="font-size:9px;background:#9b59b6;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">NIEPRODUKCYJNA</span>`
+              : isInne ? `<span style="font-size:9px;background:#2980b9;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">INNE ZLECENIE</span>`
+              : isZbr ? `<span style="font-size:9px;background:#e67e00;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">ZBROJENIE</span>` : '';
+            const opNazwa = s.op_nazwa || (isNieprod ? '⏸ Praca nieprodukcyjna' : isInne ? '🔧 Inne zlecenie' : '—');
+            tabelaHtml += `<tr style="background:${rowBg}">
+              <td style="padding:3px 8px;border:1px solid #eee">${opNazwa}${typBadge}</td>
+              <td style="padding:3px 8px;border:1px solid #eee">${isNieprod ? '—' : (s.zl_numer||'—')}</td>
+              <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace">${isNieprod ? totalHMS : avgHMS}</td>
+              <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#888">${isNieprod ? '—' : totalHMS}</td>
+              <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod ? '—' : (s.ilosc_sztuk||'—')}</td>
+            </tr>`;
+          });
+          tabelaHtml += `</tbody></table>`;
+        }
+        tabelaHtml += `</div>`;
+      });
+    }
+
+    tabelaHtml += `</div>`; // koniec sekcji dnia
+  });
+
+  // ────── Tabelka podsumowania: pracownicy × dni ──────────────────────────────
+  if (sortedDates.length > 0 && pr.length > 0) {
+    tabelaHtml += `
+    <div style="margin-top:30px;page-break-before:auto">
+      <div style="background:#1a2233;color:#fff;padding:9px 14px;border-radius:6px 6px 0 0;font-size:14px;font-weight:700">
+        📊 Podsumowanie wydajności — ${od} – ${doDt}
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead>
+          <tr style="background:#2e3548;color:#fff">
+            <th style="padding:7px 10px;text-align:left;border:1px solid #3d4a63;min-width:120px">Pracownik</th>`;
+    sortedDates.forEach(d => {
+      const [y,m,dd] = d.split('-');
+      tabelaHtml += `<th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63;min-width:68px">${parseInt(dd,10)}.${parseInt(m,10)}</th>`;
     });
+    tabelaHtml += `<th style="padding:7px 10px;text-align:center;border:1px solid #3d4a63">Łącznie</th>
+          </tr>
+        </thead><tbody>`;
+
+    pr.forEach((p, pi) => {
+      let totalMin = 0;
+      tabelaHtml += `<tr style="background:${pi%2?'#fff':'#f9fafb'}">
+        <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>`;
+      sortedDates.forEach(d => {
+        const ds = dayStats[d][p.user_id];
+        if (!ds) {
+          tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#bbb">—</td>`;
+        } else {
+          const razem = ds.min_roboczy + ds.min_zbrojenie + ds.min_nieproduktywny;
+          totalMin += razem;
+          const efPct = ds.fakty_min > 0 ? Math.round(ds.norma_min / ds.fakty_min * 100)
+                      : razem > 0 ? Math.round(ds.min_roboczy / razem * 100) : 0;
+          const efKolor = efPct >= 80 ? '#1e8a4c' : efPct >= 60 ? '#e67e00' : '#c0392b';
+          const zmiany = (razem / ZMIANA_MIN).toFixed(1);
+          tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center">
+            <div style="font-weight:700;color:${efKolor};font-size:12px">${efPct}%</div>
+            <div style="font-size:10px;color:#666">${Math.round(razem)} min</div>
+            <div style="font-size:10px;color:#999">${zmiany} zm.</div>
+          </td>`;
+        }
+      });
+      const totalZmiany = (totalMin / ZMIANA_MIN).toFixed(1);
+      tabelaHtml += `<td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;background:#f0f4ff">
+        <div style="font-size:12px">${Math.round(totalMin)} min</div>
+        <div style="font-size:10px;color:#666">${totalZmiany} zmian</div>
+      </td></tr>`;
+    });
+
+    tabelaHtml += `</tbody></table></div>`;
   }
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
   <title>Raport wydajności ${od} – ${doDt}</title>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; color: #222; }
-    @media print { body { padding: 0; } }
+    @media print { body { padding: 0; } .no-print { display:none; } }
   </style>
   </head><body>
   <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:18px">
@@ -2291,7 +2382,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   ${tabelaHtml}
   </body></html>`;
 
-  const w = window.open('','_blank','width=900,height=700');
+  const w = window.open('','_blank','width=1000,height=800');
   w.document.write(html);
   w.document.close();
   setTimeout(() => w.print(), 600);

@@ -584,17 +584,43 @@ async def import_technologia(file: UploadFile = File(...), force: bool = False):
 
         for zbr in zbrojenia_do_scalenia:
             zbr_st_raw = zbr.get("stanowisko_raw", "") or zbr.get("stanowisko", "")
+            zbr_nazwa = zbr.get("nazwa", "")
             base_kod = _re.sub(r'^ZP[-_]?', '', zbr_st_raw, flags=_re.IGNORECASE).strip()
             matched = None
-            for op in operacje_finalne:
-                op_st_raw = op.get("stanowisko_raw", "") or op.get("stanowisko", "")
-                if base_kod and base_kod.upper() in op_st_raw.upper():
-                    matched = op
-                    break
-            if not matched and not base_kod:
+
+            # Próba 1: dopasowanie po kodzie stanowiska (ZP-XXX → XXX w stanowisku operacji)
+            if base_kod:
+                for op in operacje_finalne:
+                    op_st_raw = op.get("stanowisko_raw", "") or op.get("stanowisko", "")
+                    if base_kod.upper() in op_st_raw.upper():
+                        matched = op
+                        break
+
+            # Próba 2: dopasowanie po słowach kluczowych z nazwy zbrojenia do stanowiska operacji
+            # np. "Zbrojenie frezarki bramowej-kątowej" → szukaj "bram" w stanowiskach
+            if not matched:
+                # Wyciągnij rdzenie słów z nazwy zbrojenia, szukaj ich w stanowiskach operacji
+                IGNOROWANE = {'zbrojenie', 'frezarki', 'tokarki', 'szlifierki', 'wiertarki', 'operacji', 'stanowiska'}
+                zbr_slowa = list({w.lower()[:6] for w in _re.split(r'[\s\-]+', zbr_nazwa) if len(w) > 3 and w.lower() not in IGNOROWANE})
+                zbr_slowa += list({w.lower()[:4] for w in _re.split(r'[\s\-]+', zbr_nazwa) if len(w) > 5 and w.lower() not in IGNOROWANE})
+                for op in operacje_finalne:
+                    if op["typ_operacji"] != "produkcja":
+                        continue
+                    op_st = (op.get("stanowisko", "") + " " + op.get("stanowisko_raw", "")).lower()
+                    if any(sl in op_st for sl in zbr_slowa):
+                        matched = op
+                        break
+
+            # Próba 3: zbrojenie tuż PRZED operacją produkcyjną (najbliższe po kolejności)
+            if not matched:
                 kandydaci = [o for o in operacje_finalne if o["typ_operacji"] == "produkcja"]
                 if kandydaci:
-                    matched = sorted(kandydaci, key=lambda x: abs(x["kolejnosc"] - zbr["kolejnosc"]))[0]
+                    # Preferuj następną operację produkcyjną (zbrojenie logicznie ją poprzedza)
+                    nastepne = [o for o in kandydaci if o["kolejnosc"] > zbr["kolejnosc"]]
+                    if nastepne:
+                        matched = min(nastepne, key=lambda x: x["kolejnosc"])
+                    else:
+                        matched = min(kandydaci, key=lambda x: abs(x["kolejnosc"] - zbr["kolejnosc"]))
 
             if matched:
                 czas_zbr = zbr.get("czas_tpz_min") or zbr.get("czas_norma") or 0.0

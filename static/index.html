@@ -4039,19 +4039,33 @@ function renderKjParamsBlock(json) {
   } catch(e) { return ''; }
 }
 
-async function handlePdfImport(input) {
+async function handlePdfImport(input, force) {
   const file = input.files[0];
   if (!file) return;
   const formData = new FormData();
   formData.append('file', file);
   setState({importPdfResult: null});
   try {
-    const response = await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/import-technologia', {
+    const url = (SERVER_URL.replace(/\/$/,'')) + '/api/import-technologia' + (force ? '?force=true' : '');
+    const response = await fetch(url, {
       method: 'POST',
       headers: {'x-api-key': API_KEY},
       body: formData,
     });
     const data = await response.json();
+    if (response.status === 409) {
+      // Zlecenie już istnieje – zapytaj użytkownika
+      const potwierdzenie = confirm(
+        (data.detail || 'Zlecenie o tym numerze już istnieje w systemie.') +
+        '\n\nCzy chcesz mimo to utworzyć nowe zlecenie (duplikat)?'
+      );
+      if (potwierdzenie) {
+        await handlePdfImport(input, true);
+      } else {
+        input.value = '';
+      }
+      return;
+    }
     if (!response.ok) throw new Error(data.detail || 'Błąd importu');
     setState({importPdfResult: data});
     input.value = '';

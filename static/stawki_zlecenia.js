@@ -8,9 +8,26 @@
 
   window.__stawkiZl_currentZid = null;
 
+  function _getServerUrl() {
+    // Priorytet: window.SERVER_URL (let z index.html) → localStorage
+    if (typeof window.SERVER_URL !== 'undefined' && window.SERVER_URL) return window.SERVER_URL;
+    try {
+      const cfg = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
+      return cfg.server_url || '';
+    } catch(_) { return ''; }
+  }
+
+  function _getApiKey() {
+    if (typeof window.API_KEY !== 'undefined' && window.API_KEY) return window.API_KEY;
+    try {
+      const cfg = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
+      return cfg.api_key || '';
+    } catch(_) { return ''; }
+  }
+
   async function _api(path, opts = {}) {
-    const url = (SERVER_URL||'').replace(/\/$/, '') + path;
-    const headers = { 'x-api-key': API_KEY, ...(opts.headers || {}) };
+    const url = _getServerUrl().replace(/\/$/, '') + path;
+    const headers = { 'x-api-key': _getApiKey(), ...(opts.headers || {}) };
     if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(opts.body);

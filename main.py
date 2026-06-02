@@ -572,12 +572,46 @@ async def import_technologia(file: UploadFile = File(...)):
         )
         zlecenie_id = cur.lastrowid
 
-        # Zapewnij istnienie stanowisk (utwórz jeśli brak)
+        # ── Scal operacje zbrojenia (ZP*) z operacją macierzystą ─────────────────
+        # Robimy to PRZED tworzeniem stanowisk, żeby ZP* nie trafiały do stawek.
+        import re as _re
+        operacje_finalne = []
+        zbrojenia_do_scalenia = []
+        for op in parsed["operacje"]:
+            if op["typ_operacji"] == "zbrojenie_zewn":
+                zbrojenia_do_scalenia.append(op)
+            else:
+                operacje_finalne.append(op)
+
+        for zbr in zbrojenia_do_scalenia:
+            zbr_st_raw = zbr.get("stanowisko_raw", "") or zbr.get("stanowisko", "")
+            base_kod = _re.sub(r'^ZP[-_]?', '', zbr_st_raw, flags=_re.IGNORECASE).strip()
+            matched = None
+            for op in operacje_finalne:
+                op_st_raw = op.get("stanowisko_raw", "") or op.get("stanowisko", "")
+                if base_kod and base_kod.upper() in op_st_raw.upper():
+                    matched = op
+                    break
+            # Fallback po kolejności tylko gdy base_kod pusty
+            if not matched and not base_kod:
+                kandydaci = [o for o in operacje_finalne if o["typ_operacji"] == "produkcja"]
+                if kandydaci:
+                    matched = sorted(kandydaci, key=lambda x: abs(x["kolejnosc"] - zbr["kolejnosc"]))[0]
+
+            if matched:
+                czas_zbr = zbr.get("czas_tpz_min") or zbr.get("czas_norma") or 0.0
+                matched["czas_zbrojenia_min"] = (matched.get("czas_zbrojenia_min") or 0.0) + czas_zbr
+            else:
+                zbr["typ_operacji"] = "produkcja"
+                operacje_finalne.append(zbr)
+                errors.append(f"Nie scalono zbrojenia '{zbr['nazwa']}' – dodano jako osobną operację")
+
+        # Zapewnij istnienie stanowisk – tylko dla finalnych operacji (bez ZP*)
         istniejace_stanowiska = {
             r["stanowisko"] for r in conn.execute("SELECT stanowisko FROM stawki").fetchall()
         }
 
-        for op in parsed["operacje"]:
+        for op in operacje_finalne:
             st = op["stanowisko"]
             if st and st not in istniejace_stanowiska:
                 try:
@@ -590,54 +624,16 @@ async def import_technologia(file: UploadFile = File(...)):
                 except Exception as e:
                     errors.append(f"Nie można dodać stanowiska {st}: {e}")
 
-        # ── Scal operacje zbrojenia (ZP*) z operacją macierzystą ─────────────────
-        # Operacja ZPFBK powinna dołączyć swój czas do operacji PFBK jako czas_zbrojenia_min,
-        # tak jak działa ręczne dodawanie operacji z polem "Czas zbrojenia".
-        # Klucz: usuń prefix "ZP" z nazwy/stanowiska zbrojenia → szukaj operacji o tej samej nazwie.
-        import re as _re
-        operacje_finalne = []
-        zbrojenia_do_scalenia = []
-        for op in parsed["operacje"]:
-            if op["typ_operacji"] == "zbrojenie_zewn":
-                zbrojenia_do_scalenia.append(op)
-            else:
-                operacje_finalne.append(op)
-
-        for zbr in zbrojenia_do_scalenia:
-            # Wyciągnij nazwę bazową: usuń prefix "ZP" z kodu stanowiska (np. ZPFBK → PFBK)
-            zbr_st_raw = zbr.get("stanowisko_raw", "") or zbr.get("stanowisko", "")
-            # Kod stanowiska zbrojenia ma format "ZP<KOD>" lub "ZP-<KOD>", szukamy bazowego kodu
-            base_kod = _re.sub(r'^ZP[-_]?', '', zbr_st_raw, flags=_re.IGNORECASE).strip()
-            # Szukaj operacji macierzystej: ta której stanowisko_raw zawiera base_kod
-            matched = None
-            for op in operacje_finalne:
-                op_st_raw = op.get("stanowisko_raw", "") or op.get("stanowisko", "")
-                if base_kod and base_kod.upper() in op_st_raw.upper():
-                    matched = op
-                    break
-            # Fallback: szukaj po kolejności (zbrojenie zazwyczaj tuż przed lub tuż po operacji)
-            if not matched:
-                zbr_kol = zbr["kolejnosc"]
-                najblizsze = sorted(operacje_finalne, key=lambda x: abs(x["kolejnosc"] - zbr_kol))
-                if najblizsze:
-                    matched = najblizsze[0]
-
-            if matched:
-                # Dołącz czas zbrojenia do operacji macierzystej
-                czas_zbr = zbr.get("czas_tpz_min") or zbr.get("czas_norma") or 0.0
-                matched["czas_zbrojenia_min"] = (matched.get("czas_zbrojenia_min") or 0.0) + czas_zbr
-                # Aktywuj zbrojenie na stanowisku macierzystym w stawkach
+        # Aktywuj zbrojenie na stanowiskach które mają czas_zbrojenia_min > 0
+        for op in operacje_finalne:
+            if (op.get("czas_zbrojenia_min") or 0.0) > 0:
                 try:
                     conn.execute(
                         "UPDATE stawki SET zbrojenie_aktywne=1 WHERE stanowisko=? AND zbrojenie_aktywne=0",
-                        (matched["stanowisko"],)
+                        (op["stanowisko"],)
                     )
                 except Exception:
                     pass
-            else:
-                # Nie znaleziono macierzystej – zostaw jako osobną operację
-                operacje_finalne.append(zbr)
-                errors.append(f"Nie scalono zbrojenia '{zbr['nazwa']}' – nie znaleziono operacji macierzystej")
 
         # Utwórz operacje
         op_count = 0
@@ -660,6 +656,158 @@ async def import_technologia(file: UploadFile = File(...)):
                 op_count += 1
             except Exception as e:
                 errors.append(f"Operacja {op['kolejnosc']} {op['nazwa']}: {e}")
+
+
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True, "wynik": req.wynik}
+
+
+# ─── Import technologii z PDF ─────────────────────────────────────────────────
+def _parse_technologia_pdf(pdf_bytes: bytes) -> dict:
+    """Parsuje kartę technologiczną PDF → dict z numerem, nazwą i operacjami."""
+    import re, io
+    try:
+        from pdfminer.high_level import extract_text as _extract
+        text = _extract(io.BytesIO(pdf_bytes))
+    except Exception as e:
+        raise ValueError(f"Nie można odczytać PDF: {e}")
+
+    # Nagłówek – numer i nazwa
+    hdr = re.search(r'WYRÓB / DETAL:.*?\n(\S+)\s*\n(.+?)\n', text, re.DOTALL)
+    numer = hdr.group(1).strip() if hdr else ""
+    nazwa = hdr.group(2).strip() if hdr else ""
+    if not numer:
+        # fallback: pierwsza linia po WYRÓB / DETAL:
+        m2 = re.search(r'\n(P\d+)\n', text)
+        numer = m2.group(1) if m2 else "IMPORT"
+    if not nazwa:
+        m3 = re.search(numer + r'\s*\n(.+?)\n', text)
+        nazwa = m3.group(1).strip() if m3 else "Importowana technologia"
+
+    # Operacje
+    op_pattern = re.compile(
+        r'(\d{3})\s*\n\s*(OT-[A-Z0-9]+-\d+\s*-\s*[^\n]+?)\s*\n'
+        r'\s*([\d\s,\.]+)\s*\n\s*([\d\s,\.]+)\s*\n\s*([^\n]+?)\s*\n'
+        r'\s*Uwagi:\s*\n\s*(.*?)(?=\n\d{3}\s*\n|Suma Tj:|\Z)',
+        re.DOTALL
+    )
+
+    operacje = []
+    for m in op_pattern.finditer(text):
+        nr_str   = m.group(1)
+        kod_nazwa = m.group(2).strip()
+        tj_str   = m.group(3).strip().replace(' ','').replace(',','.')
+        tpz_str  = m.group(4).strip().replace(' ','').replace(',','.')
+        stanowisko_raw = m.group(5).strip()
+        opis_raw = m.group(6).strip()
+
+        try: tj  = float(re.search(r'[\d\.]+', tj_str).group())
+        except: tj = 0.0
+        try: tpz = float(re.search(r'[\d\.]+', tpz_str).group())
+        except: tpz = 0.0
+
+        # Wyciągnij czyste stanowisko (po myślniku)
+        st_match = re.match(r'^[A-Z0-9]+ - (.+)$', stanowisko_raw)
+        stanowisko = st_match.group(1).strip() if st_match else stanowisko_raw
+
+        # Kod operacji – fragment przed myślnikiem i numerem
+        kod_match = re.match(r'(OT-[A-Z]+)-\d+', kod_nazwa)
+        kod_prefix = kod_match.group(1) if kod_match else "OT"
+
+        # Klasyfikacja operacji
+        if 'KJ' in kod_prefix or 'KJ' in stanowisko_raw:
+            typ_op = 'kj'
+        elif 'KOOP' in kod_prefix or 'KOOP' in stanowisko_raw:
+            typ_op = 'kooperacja'
+        elif 'ZP' in kod_prefix or 'Zbrojenie' in stanowisko or 'zbrojenie' in opis_raw.lower():
+            typ_op = 'zbrojenie_zewn'
+        else:
+            typ_op = 'produkcja'
+
+        # Nazwa operacji (bez kodu OT-XXX-000)
+        nazwa_op_match = re.match(r'OT-[A-Z0-9]+-\d+\s*-\s*(.+)', kod_nazwa)
+        nazwa_op = nazwa_op_match.group(1).strip() if nazwa_op_match else kod_nazwa
+
+        # Parametry KJ z opisu
+        kj_params = []
+        for line in opis_raw.splitlines():
+            if 'Niezgodny' in line and 'Zgodny' in line:
+                kj_params.append(line.strip())
+
+        # Opis – usuń parametry KJ (zostaną w parametry_kj)
+        opis_clean = re.sub(r'Parametry KJ:.*', '', opis_raw, flags=re.DOTALL).strip()
+
+        operacje.append({
+            "kolejnosc": int(nr_str),
+            "nazwa": nazwa_op,
+            "stanowisko_raw": stanowisko_raw,
+            "stanowisko": stanowisko,
+            "czas_norma": tj,
+            "czas_tpz_min": tpz,
+            "opis_czynnosci": opis_clean,
+            "typ_operacji": typ_op,
+            "parametry_kj": json.dumps(kj_params, ensure_ascii=False) if kj_params else None,
+        })
+
+    # Op 010 (lista materiałów) – dodaj ją ręcznie jeśli nie złapana
+    if not any(o["kolejnosc"] == 10 for o in operacje):
+        m010 = re.search(r'010\s*\n\s*(OT-[^\n]+)\s*\n.*?([\d,]+)\s*\n\s*([\d,]+)\s*\n\s*([^\n]+?)\s*\n', text, re.DOTALL)
+        if m010:
+            nazwa_010 = re.sub(r'OT-[A-Z0-9]+-\d+\s*-\s*','', m010.group(1).strip())
+            operacje.insert(0, {
+                "kolejnosc": 10, "nazwa": nazwa_010,
+                "stanowisko_raw": m010.group(4).strip(),
+                "stanowisko": re.sub(r'^[A-Z0-9]+ - ','', m010.group(4).strip()),
+                "czas_norma": 0.0, "czas_tpz_min": 0.0,
+                "opis_czynnosci": "Kontrola jakości materiału",
+                "typ_operacji": "kj",
+                "parametry_kj": json.dumps(["Materiał wejściowy: Niezgodny - Zgodny"], ensure_ascii=False),
+            })
+
+    operacje.sort(key=lambda x: x["kolejnosc"])
+    return {"numer": numer, "nazwa": nazwa, "operacje": operacje}
+
+
+class ImportTechnologiaResponse(BaseModel):
+    zlecenie_id: int
+    numer: str
+    nazwa: str
+    operacje_created: int
+    nowe_stanowiska: List[str]
+    errors: List[str]
+
+@app.post("/api/import-technologia", dependencies=[Depends(verify_key)])
+async def import_technologia(file: UploadFile = File(...)):
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(400, "Pusty plik")
+    try:
+        parsed = _parse_technologia_pdf(pdf_bytes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    errors = []
+    nowe_stanowiska = []
+
+    with get_db() as conn:
+        # Sprawdź czy zlecenie już istnieje
+        existing = conn.execute(
+            "SELECT id FROM zlecenia WHERE numer=?", (parsed["numer"],)
+        ).fetchone()
+        if existing:
+            raise HTTPException(400, f"Zlecenie {parsed['numer']} już istnieje w systemie")
+
+        # Utwórz zlecenie ze statusem 'oczekuje_potwierdzenia'
+        import uuid as _uuid
+        qr_zl = "ZL-" + str(_uuid.uuid4())[:8].upper()
+        cur = conn.execute(
+            """INSERT INTO zlecenia (numer, nazwa, opis, status, ilosc_sztuk, qr_code)
+               VALUES (?, ?, ?, 'oczekuje_potwierdzenia', 1, ?)""",
+            (parsed["numer"], parsed["nazwa"],
+             f"Zaimportowano z karty technologicznej {_now()[:10]}", qr_zl)
+        )
+        zlecenie_id = cur.lastrowid
+
 
     _threading.Thread(target=_db_backup_to_json, daemon=True).start()
     return {

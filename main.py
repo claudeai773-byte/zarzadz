@@ -2,7 +2,7 @@
 Serwer FastAPI dla Systemu Zarządzania Produkcją v4.1
 Deploy na Railway.app
 """
-from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile, File, Body
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -896,7 +896,8 @@ def get_aktywne_sesje(user_id: int):
         rows = conn.execute("""
             SELECT s.*, o.nazwa as op_nazwa, o.stanowisko,
                    COALESCE(z.numer, zi.numer) as zl_numer,
-                   COALESCE(z.nazwa, zi.nazwa) as zl_nazwa
+                   COALESCE(z.nazwa, zi.nazwa) as zl_nazwa,
+                   COALESCE(z.id, zi.id) as zlecenie_id
             FROM sesje_pracy s
             LEFT JOIN operacje o ON s.operacja_id = o.id
             LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
@@ -1138,6 +1139,33 @@ def update_user(uid: int, req: EditUserRequest):
                 (req.full_name, req.role, uid)
             )
         return {"ok": True}
+
+@app.post("/api/users/{uid}/change-password", dependencies=[Depends(verify_key)])
+def change_password(uid: int, req: dict = Body(...)):
+    old_pass = req.get("old_password", "")
+    new_pass = req.get("new_password", "")
+    if not new_pass or len(new_pass) < 4:
+        raise HTTPException(400, "Nowe hasło musi mieć co najmniej 4 znaki")
+    with get_db() as conn:
+        user = conn.execute(
+            "SELECT id FROM users WHERE id=? AND password=?",
+            (uid, _hash(old_pass))
+        ).fetchone()
+        if not user:
+            raise HTTPException(400, "Aktualne hasło jest nieprawidłowe")
+        conn.execute("UPDATE users SET password=? WHERE id=?", (_hash(new_pass), uid))
+        return {"ok": True}
+
+@app.post("/api/users/{uid}/reset-password", dependencies=[Depends(verify_key)])
+def reset_password(uid: int):
+    import random, string
+    new_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    with get_db() as conn:
+        user = conn.execute("SELECT full_name FROM users WHERE id=?", (uid,)).fetchone()
+        if not user:
+            raise HTTPException(404, "Użytkownik nie znaleziony")
+        conn.execute("UPDATE users SET password=? WHERE id=?", (_hash(new_pass), uid))
+        return {"ok": True, "new_password": new_pass, "full_name": user["full_name"]}
 
 @app.delete("/api/users/{uid}", dependencies=[Depends(verify_key)])
 def delete_user(uid: int):
@@ -2516,7 +2544,7 @@ def get_oblozenie():
 
         ops = conn.execute("""
             SELECT o.id, o.nazwa, o.stanowisko, o.status, o.kolejnosc,
-                   o.ilosc_wykonana, o.czas_norma,
+                   o.ilosc_wykonana, o.czas_norma, o.czas_zbrojenia_min, o.opis_czynnosci,
                    z.id as zlecenie_id, z.numer, z.nazwa as zlecenie_nazwa,
                    z.termin, z.ilosc_sztuk, z.status as zlecenie_status
             FROM operacje o JOIN zlecenia z ON o.zlecenie_id = z.id
@@ -2534,7 +2562,8 @@ def get_oblozenie():
             stanowiska_ops[st].append({
                 "op_id": o["id"], "op_nazwa": o["nazwa"], "op_status": o["status"],
                 "op_kolejnosc": o["kolejnosc"], "ilosc_wykonana": o["ilosc_wykonana"],
-                "czas_norma": o["czas_norma"], "zlecenie_id": o["zlecenie_id"],
+                "czas_norma": o["czas_norma"], "czas_zbrojenia_min": o["czas_zbrojenia_min"] or 0,
+                "opis_czynnosci": o["opis_czynnosci"] or "", "zlecenie_id": o["zlecenie_id"],
                 "zlecenie_numer": o["numer"], "zlecenie_nazwa": o["zlecenie_nazwa"],
                 "zlecenie_status": o["zlecenie_status"],
                 "termin": o["termin"], "ilosc_sztuk": o["ilosc_sztuk"],

@@ -431,6 +431,10 @@ let state = {
   zlecenieModal: null,
   qrInneMode: false,
   qrManualMode: false,
+
+  // Nowe modale: równoległa obróbka + zmiana maszyny
+  parallelModal: null,       // {operacjaId, stanowisko, aktywne:[]} – drugi scan uruchomionej op
+  zmianaMaszynyModal: null,  // {operacjaId, stanowiskoOryginalne, stanowiskoLista:[]}
 };
 
 function setState(p, noRender) {
@@ -621,7 +625,8 @@ const ALL_TABS_DEF = [
   {id:'ustawienia',label:'🔩 Ustawienia',roles:['pracownik','majster','technolog','magazynier','admin']},
 ];
 
-async function startSesja(operacjaId) {
+async function startSesja(operacjaId, opcje = {}) {
+  // opcje: { rzeczywisteSt: string|null }
   try {
     // Sprawdź czy operacja ma już aktywne sesje
     const aktywne = await get('/api/sesje/aktywne_operacja/' + operacjaId);
@@ -633,15 +638,29 @@ async function startSesja(operacjaId) {
       return;
     }
 
-    if (cudzeSesje.length > 0) {
-      // Inny pracownik(cy) ma sesję → dialog kontynuacji
-      const glowna = cudzeSesje.find(s => s.sesja_glowna === 1);
-      const pracownik = glowna ? glowna.full_name : cudzeSesje[0].full_name;
+    const sesjeOp = aktywne.filter(s => s.typ === 'operacja' || s.typ === 'inne_zlecenie');
+    const sesjeZbr = aktywne.filter(s => s.typ === 'zbrojenie');
+
+    // Jeśli trwa zbrojenie na tej operacji przez kogoś innego – blokada równoległa nie ma sensu
+    if (sesjeZbr.length > 0 && sesjeOp.length === 0) {
       setState({kontynuacjaModal: {
         operacjaId,
-        pracownik,
-        sesjaGlownaId: glowna ? glowna.id : null,
-        aktywne: cudzeSesje
+        pracownik: sesjeZbr[0].full_name,
+        sesjaGlownaId: null,
+        aktywne: sesjeZbr,
+        trwaZbrojenie: true
+      }});
+      return;
+    }
+
+    if (sesjeOp.length > 0) {
+      // Operacja jest w toku → zapytaj o obróbkę równoległą na dwa stanowiska
+      const op = state.qrZleceniePickerModal?.operacje?.find(o => o.id === operacjaId);
+      setState({parallelModal: {
+        operacjaId,
+        stanowisko: op?.stanowisko || '—',
+        aktywne: sesjeOp,
+        rzeczywisteSt: opcje.rzeczywisteSt || null
       }});
       return;
     }
@@ -668,17 +687,18 @@ async function startSesja(operacjaId) {
   }
 }
 
-async function _doStartSesja(operacjaId, sesjaGlowna) {
+async function _doStartSesja(operacjaId, sesjaGlowna, rzeczywisteSt = null) {
   try {
-    await post('/api/sesje/start', {
+    const body = {
       operacja_id: operacjaId,
       user_id: state.user.id,
       typ: 'operacja',
       sesja_glowna: sesjaGlowna
-    });
+    };
+    if (rzeczywisteSt) body.rzeczywiste_stanowisko = rzeczywisteSt;
+    await post('/api/sesje/start', body);
     await loadPracownik();
   } catch(e) {
-    // Obsłuż błąd GLOWNA_ZAJETA (inny pracownik właśnie przejął główną)
     if (e.message && e.message.startsWith('GLOWNA_ZAJETA:')) {
       const parts = e.message.split(':');
       const pracownik = parts[1] || '?';
@@ -689,10 +709,9 @@ async function _doStartSesja(operacjaId, sesjaGlowna) {
   }
 }
 
-async function kontynuujOperacje(operacjaId) {
+async function kontynuujOperacje(operacjaId, rzeczywisteSt = null) {
   // Pracownik potwierdził kontynuację – startuje jako sesja dodatkowa
   setState({kontynuacjaModal: null});
-  // Sprawdź jeszcze raz czy moje własne sesje wymagają wyboru głównej
   const mojeAktywne = (state.aktywnesje || []).filter(s =>
     s.typ === 'operacja' || s.typ === 'inne_zlecenie'
   );
@@ -700,16 +719,18 @@ async function kontynuujOperacje(operacjaId) {
     setState({sesjaGlownaModal: {
       operacjaId,
       aktywne: mojeAktywne,
-      nowaJestGlowna: null
+      nowaJestGlowna: null,
+      rzeczywisteSt
     }});
   } else {
-    await _doStartSesja(operacjaId, 0);
+    await _doStartSesja(operacjaId, 0, rzeczywisteSt);
   }
 }
 
 async function potwierdzWyborGlownej(operacjaId, nowaJestGlowna) {
+  const rzeczywisteSt = state.sesjaGlownaModal?.rzeczywisteSt || null;
   setState({sesjaGlownaModal: null});
-  await _doStartSesja(operacjaId, nowaJestGlowna ? 1 : 0);
+  await _doStartSesja(operacjaId, nowaJestGlowna ? 1 : 0, rzeczywisteSt);
 }
 
 async function startZbrojenie(operacjaId) {
@@ -1024,9 +1045,68 @@ function statusBadge_txt(s) {
   return m[s]||s;
 }
 
+const FREZARKI = ['frezarka','vmc','mazak','wytaczarka','centrum obróbcze','frezarki'];
+const TOKARKI  = ['tokarka','tokarki'];
+
+function _kategoriaMaszyny(stanowisko) {
+  if (!stanowisko) return null;
+  const s = stanowisko.toLowerCase();
+  if (FREZARKI.some(k => s.includes(k))) return 'frezarka';
+  if (TOKARKI.some(k => s.includes(k))) return 'tokarka';
+  return null;
+}
+
 async function pickOperacjaFromQR(opId) {
+  const op = state.qrZleceniePickerModal?.operacje?.find(o => o.id === opId);
+  const kat = op ? _kategoriaMaszyny(op.stanowisko) : null;
+
+  if (kat) {
+    // Zapytaj czy operacja wykonywana na docelowej maszynie
+    // Pobierz listę stanowisk tej kategorii
+    try {
+      const stawki = await get('/api/stawki');
+      const lista = stawki
+        .map(s => s.stanowisko)
+        .filter(s => _kategoriaMaszyny(s) === kat && s !== op.stanowisko);
+      setState({
+        qrZleceniePickerModal: null,
+        zmianaMaszynyModal: {
+          operacjaId: opId,
+          stanowiskoOryginalne: op.stanowisko,
+          kategoria: kat,
+          stanowiskoLista: lista
+        }
+      });
+      return;
+    } catch(e) { /* fallback do normalnego startu */ }
+  }
+
   setState({qrZleceniePickerModal:null});
   await startSesja(opId);
+}
+
+async function zmianaMaszynyPotwierdzenie(operacjaId, innaM) {
+  // innaM = null → docelowa maszyna; string → inna maszyna
+  setState({zmianaMaszynyModal: null});
+  await startSesja(operacjaId, { rzeczywisteSt: innaM });
+}
+
+async function potwierdzRownolegle(operacjaId, rzeczywisteSt) {
+  setState({parallelModal: null});
+  // Sprawdź własne aktywne sesje → wybór głównej
+  const mojeAktywne = (state.aktywnesje || []).filter(s =>
+    s.typ === 'operacja' || s.typ === 'inne_zlecenie'
+  );
+  if (mojeAktywne.length > 0) {
+    setState({sesjaGlownaModal: {
+      operacjaId,
+      aktywne: mojeAktywne,
+      nowaJestGlowna: null,
+      rzeczywisteSt: rzeczywisteSt || null
+    }});
+  } else {
+    await _doStartSesja(operacjaId, 1, rzeczywisteSt || null);
+  }
 }
 
 function loadTabData(tab) {
@@ -1679,6 +1759,71 @@ function renderPracaGlowna() {
             ➕ Nowa jest DODATKOWA (dotychczasowe główne bez zmian)
           </button>
           <button class="btn" onclick="setState({sesjaGlownaModal:null})">
+            ✖ Anuluj
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── Modal: obróbka równoległa na dwa stanowiska ──────────────
+  if (state.parallelModal) {
+    const m = state.parallelModal;
+    const inni = (m.aktywne || []).map(s =>
+      `<b>${s.full_name}</b> (od ${(s.start_time||'').slice(0,16).replace('T',' ')})`
+    ).join('<br>');
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({parallelModal:null})">×</button>
+        <h3>🔀 Operacja w toku</h3>
+        <div style="background:rgba(232,160,32,0.1);border:1px solid var(--accent);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
+          <div style="font-weight:700;margin-bottom:4px">Stanowisko: ${m.stanowisko}</div>
+          <div style="color:var(--dim)">Aktualnie pracuje:<br>${inni}</div>
+        </div>
+        <p style="font-size:13px;margin-bottom:16px">
+          Czy chcesz uruchomić <b>obróbkę równoległą na dwa stanowiska</b>?<br>
+          <span style="font-size:12px;color:var(--dim)">Twój czas będzie liczony niezależnie i dołączony do kosztów tego zlecenia.</span>
+        </p>
+        <div style="display:flex;gap:8px;flex-direction:column">
+          <button class="btn btn-green" onclick="potwierdzRownolegle(${m.operacjaId}, ${JSON.stringify(m.rzeczywisteSt)})">
+            ✅ Tak – obróbka równoległa
+          </button>
+          <button class="btn" onclick="setState({parallelModal:null})">
+            ✖ Anuluj
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── Modal: zmiana maszyny ──────────────────────────────────────
+  if (state.zmianaMaszynyModal) {
+    const m = state.zmianaMaszynyModal;
+    const lista = m.stanowiskoLista || [];
+    html += `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({zmianaMaszynyModal:null})">×</button>
+        <h3>🔧 Wybór maszyny</h3>
+        <div style="background:var(--entry);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
+          <div style="color:var(--dim);margin-bottom:2px">Operacja przypisana do:</div>
+          <div style="font-weight:700;font-size:15px">${m.stanowiskoOryginalne}</div>
+        </div>
+        <p style="font-size:13px;margin-bottom:14px">Operacja zostanie wykonana na docelowej maszynie?</p>
+        <div style="display:flex;gap:8px;flex-direction:column">
+          <button class="btn btn-green" onclick="zmianaMaszynyPotwierdzenie(${m.operacjaId}, null)">
+            ✅ Tak – na <b>${m.stanowiskoOryginalne}</b>
+          </button>
+          ${lista.length ? `
+          <div style="font-size:12px;color:var(--dim);margin:4px 0 2px">Lub wybierz inną maszynę (${m.kategoria}):</div>
+          ${lista.map(st => `
+          <button class="btn btn-accent" style="text-align:left"
+                  onclick="zmianaMaszynyPotwierdzenie(${m.operacjaId}, '${st.replace(/'/g,"\\'")}')">
+            🔄 ${st}
+          </button>`).join('')}
+          ` : ''}
+          <button class="btn" onclick="setState({zmianaMaszynyModal:null})">
             ✖ Anuluj
           </button>
         </div>

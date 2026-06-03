@@ -1103,14 +1103,12 @@ async function pickOperacjaFromQR(opId) {
   const kat = op ? _kategoriaMaszyny(op.stanowisko) : null;
 
   if (kat) {
-    // Zapytaj czy operacja wykonywana na docelowej maszynie
-    // Pobierz listę stanowisk tej kategorii
+    // Pobierz pełną listę stanowisk tej kategorii (wszystkie, z docelową włącznie)
     try {
       const stawki = await get('/api/stawki');
       const lista = stawki
         .map(s => s.stanowisko)
         .filter(s => {
-          if (s === op.stanowisko) return false;
           if (s.toLowerCase().includes('zbrojenie')) return false;
           return _kategoriaMaszyny(s) === kat;
         });
@@ -1899,29 +1897,35 @@ function renderPracaGlowna() {
     const lista = m.stanowiskoLista || [];
     html += `
     <div class="modal-overlay">
-      <div class="modal">
-        <button class="modal-close" onclick="setState({zmianaMaszynyModal:null})">×</button>
-        <h3>🔧 Wybór maszyny</h3>
-        <div style="background:var(--entry);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px">
-          <div style="color:var(--dim);margin-bottom:2px">Operacja przypisana do:</div>
-          <div style="font-weight:700;font-size:15px">${m.stanowiskoOryginalne}</div>
+      <div class="modal" style="padding:0;display:flex;flex-direction:column;max-height:90vh;">
+        <!-- Sticky header -->
+        <div style="position:sticky;top:0;background:var(--panel);border-radius:20px 20px 0 0;padding:20px 20px 10px;z-index:1;">
+          <button class="modal-close" onclick="setState({zmianaMaszynyModal:null})">×</button>
+          <h3 style="margin-bottom:8px">🔧 Wybór maszyny</h3>
+          <div style="background:var(--entry);border-radius:8px;padding:10px 14px;font-size:13px;">
+            <div style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Operacja przypisana do:</div>
+            <div style="font-weight:700;font-size:15px;color:var(--accent)">${m.stanowiskoOryginalne}</div>
+          </div>
         </div>
-        <p style="font-size:13px;margin-bottom:14px">Operacja zostanie wykonana na docelowej maszynie?</p>
-        <div style="display:flex;gap:8px;flex-direction:column">
-          <button class="btn btn-green" onclick="zmianaMaszynyPotwierdzenie(${m.operacjaId}, null)">
-            ✅ Tak – na <b>${m.stanowiskoOryginalne}</b>
-          </button>
-          ${lista.length ? `
-          <div style="font-size:12px;color:var(--dim);margin:4px 0 2px">Lub wybierz inną maszynę (${m.kategoria}):</div>
-          ${lista.map(st => `
-          <button class="btn btn-accent" style="text-align:left"
-                  onclick="zmianaMaszynyPotwierdzenie(${m.operacjaId}, '${st.replace(/'/g,"\\'")}')">
-            🔄 ${st}
-          </button>`).join('')}
-          ` : ''}
-          <button class="btn" onclick="setState({zmianaMaszynyModal:null})">
-            ✖ Anuluj
-          </button>
+        <!-- Scrollable lista maszyn -->
+        <div style="flex:1;overflow-y:auto;padding:8px 20px 24px;">
+          <div style="font-size:12px;color:var(--dim);margin:4px 0 10px">
+            Wybierz maszynę (${m.kategoria}) – ${lista.length} dostępnych:
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            ${lista.map(st => {
+              const isOryg = st === m.stanowiskoOryginalne;
+              return `<button class="btn ${isOryg ? 'btn-green' : 'btn-accent'}"
+                style="text-align:left;display:flex;align-items:center;gap:8px;${isOryg?'':'background:var(--panel);color:var(--text);border:1px solid var(--border);'}"
+                onclick="zmianaMaszynyPotwierdzenie(${m.operacjaId}, '${st.replace(/'/g,"\\'")}')">
+                <span style="font-size:16px">${isOryg ? '✅' : '🔄'}</span>
+                <span style="flex:1"><b>${st}</b>${isOryg ? ' <span style=\"font-size:11px;opacity:.75\">(docelowa)</span>' : ''}</span>
+              </button>`;
+            }).join('')}
+            <button class="btn btn-outline" onclick="setState({zmianaMaszynyModal:null})">
+              ✖ Anuluj
+            </button>
+          </div>
         </div>
       </div>
     </div>`;
@@ -4607,48 +4611,61 @@ function renderAdmin() {
     if (state.stawkaModal !== null) {
       const s = state.stawkaModal;
       const zbrAkt = s.zbrojenie_aktywne ? true : false;
+      const typyMaszyn = [
+        {val:'frezarka_cnc',   label:'🔵 Frezarka CNC'},
+        {val:'tokarka_cnc',    label:'🟢 Tokarka CNC'},
+        {val:'frezarka_konw',  label:'🔷 Frezarka konw.'},
+        {val:'tokarka_konw',   label:'🟩 Tokarka konw.'},
+        {val:'szlifierka',     label:'🟡 Szlifierka'},
+        {val:'operacja',       label:'🔧 Operacja'},
+      ];
+      const aktywnyTyp = typyMaszyn.find(t => t.val === (s.typ_maszyny||''));
       html += `
       <div class="modal-overlay">
-        <div class="modal">
-          <button class="modal-close" onclick="setState({stawkaModal:null})">×</button>
-          <h3>${s.id?'✏ Edytuj stawkę':'+ Nowa stawka'}</h3>
-          <div class="field"><label>Stanowisko</label><input id="st-stan" type="text" value="${s.stanowisko||''}"></div>
-          <div class="field"><label>Stawka (zł/h)</label><input id="st-stawka" type="number" step="0.5" value="${s.stawka_godz||0}"></div>
-          <div class="field"><label>Opis</label><input id="st-opis" type="text" value="${s.opis||''}"></div>
-          <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
-            <div style="font-size:12px;font-weight:700;color:var(--dim);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">🏭 Typ maszyny / operacji</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px" id="st-typ-wrap">
-              ${[
-                {val:'frezarka_cnc',   label:'🔵 Frezarka CNC'},
-                {val:'tokarka_cnc',    label:'🟢 Tokarka CNC'},
-                {val:'frezarka_konw',  label:'🔷 Frezarka konw.'},
-                {val:'tokarka_konw',   label:'🟩 Tokarka konw.'},
-                {val:'szlifierka',     label:'🟡 Szlifierka'},
-                {val:'operacja',       label:'🔧 Operacja'},
-              ].map(t => `
-                <button type="button"
-                  id="st-typ-btn-${t.val}"
-                  onclick="selectTypMaszyny('${t.val}')"
-                  style="padding:6px 12px;border-radius:20px;border:2px solid ${(s.typ_maszyny||''===t.val)?'var(--accent)':'var(--border)'};
-                         background:${(s.typ_maszyny||''===t.val)?'rgba(232,160,32,0.15)':'var(--panel)'};
-                         color:${(s.typ_maszyny||''===t.val)?'var(--accent)':'var(--dim)'};
-                         cursor:pointer;font-size:12px;font-weight:600;transition:all .15s">
-                  ${t.label}
-                </button>`).join('')}
-            </div>
-            <input type="hidden" id="st-typ" value="${s.typ_maszyny||''}">
-            <div style="font-size:11px;color:var(--dim);margin-top:8px">Typ maszyny określa grupę alternatyw przy uruchamianiu sesji (zakładka Praca).</div>
-          </div>
-          <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-              <input type="checkbox" id="st-zbr-akt" ${zbrAkt?'checked':''} onchange="document.getElementById('zbr-stawka-wrap').style.display=this.checked?'block':'none'" style="width:18px;height:18px;cursor:pointer">
-              <label for="st-zbr-akt" style="font-size:14px;cursor:pointer">⚙ Aktywuj zbrojenie</label>
-            </div>
-            <div id="zbr-stawka-wrap" style="display:${zbrAkt?'block':'none'}">
-              <div class="field" style="margin-bottom:0"><label>Stawka zbrojenia (zł/h)</label><input id="st-zbr-stawka" type="number" step="0.5" min="0" value="${s.zbrojenie_stawka_godz||0}"></div>
+        <div class="modal" style="padding:0;display:flex;flex-direction:column;max-height:90vh;">
+          <!-- Sticky header z typem maszyny -->
+          <div style="position:sticky;top:0;z-index:10;background:var(--panel);border-radius:20px 20px 0 0;padding:20px 20px 0;">
+            <button class="modal-close" onclick="setState({stawkaModal:null})">×</button>
+            <h3 style="margin-bottom:10px">${s.id?'✏ Edytuj stawkę':'+ Nowa stawka'}</h3>
+            <!-- Wybrany typ maszyny – zawsze widoczny -->
+            <div id="st-typ-sticky-wrap" style="background:var(--entry);border:1px solid ${aktywnyTyp?'var(--accent)':'var(--border)'};border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;align-items:center;gap:10px;">
+              <div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Typ maszyny:</div>
+              <div id="st-typ-sticky-label" style="font-size:${aktywnyTyp?'14':'13'}px;font-weight:${aktywnyTyp?'700':'400'};color:${aktywnyTyp?'var(--accent)':'var(--dim)'};font-style:${aktywnyTyp?'normal':'italic'};">${aktywnyTyp?aktywnyTyp.label:'— nie wybrano —'}</div>
             </div>
           </div>
-          <button class="btn btn-accent" onclick="saveStawkaForm(${s.id||0})">💾 Zapisz</button>
+          <!-- Scrollable body -->
+          <div style="flex:1;overflow-y:auto;padding:0 20px 24px;">
+            <div class="field"><label>Stanowisko</label><input id="st-stan" type="text" value="${s.stanowisko||''}"></div>
+            <div class="field"><label>Stawka (zł/h)</label><input id="st-stawka" type="number" step="0.5" value="${s.stawka_godz||0}"></div>
+            <div class="field"><label>Opis</label><input id="st-opis" type="text" value="${s.opis||''}"></div>
+            <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+              <div style="font-size:12px;font-weight:700;color:var(--dim);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">🏭 Typ maszyny / operacji</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px" id="st-typ-wrap">
+                ${typyMaszyn.map(t => `
+                  <button type="button"
+                    id="st-typ-btn-${t.val}"
+                    onclick="selectTypMaszyny('${t.val}')"
+                    style="padding:6px 12px;border-radius:20px;border:2px solid ${(s.typ_maszyny===t.val)?'var(--accent)':'var(--border)'};
+                           background:${(s.typ_maszyny===t.val)?'rgba(232,160,32,0.15)':'var(--panel)'};
+                           color:${(s.typ_maszyny===t.val)?'var(--accent)':'var(--dim)'};
+                           cursor:pointer;font-size:12px;font-weight:600;transition:all .15s">
+                    ${t.label}
+                  </button>`).join('')}
+              </div>
+              <input type="hidden" id="st-typ" value="${s.typ_maszyny||''}">
+              <div style="font-size:11px;color:var(--dim);margin-top:8px">Typ maszyny określa grupę alternatyw przy uruchamianiu sesji (zakładka Praca).</div>
+            </div>
+            <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <input type="checkbox" id="st-zbr-akt" ${zbrAkt?'checked':''} onchange="document.getElementById('zbr-stawka-wrap').style.display=this.checked?'block':'none'" style="width:18px;height:18px;cursor:pointer">
+                <label for="st-zbr-akt" style="font-size:14px;cursor:pointer">⚙ Aktywuj zbrojenie</label>
+              </div>
+              <div id="zbr-stawka-wrap" style="display:${zbrAkt?'block':'none'}">
+                <div class="field" style="margin-bottom:0"><label>Stawka zbrojenia (zł/h)</label><input id="st-zbr-stawka" type="number" step="0.5" min="0" value="${s.zbrojenie_stawka_godz||0}"></div>
+              </div>
+            </div>
+            <button class="btn btn-accent" onclick="saveStawkaForm(${s.id||0})">💾 Zapisz</button>
+          </div>
         </div>
       </div>`;
     }
@@ -4706,18 +4723,41 @@ function selectTypMaszyny(val) {
   const hidden = document.getElementById('st-typ');
   if (!hidden) return;
   const prev = hidden.value;
-  // Toggle: kliknięcie na zaznaczony odznacza
   const next = (prev === val) ? '' : val;
   hidden.value = next;
-  const typy = ['frezarka_cnc','tokarka_cnc','frezarka_konw','tokarka_konw','szlifierka','operacja'];
-  typy.forEach(t => {
-    const btn = document.getElementById('st-typ-btn-' + t);
+  const typyDef = [
+    {val:'frezarka_cnc',   label:'🔵 Frezarka CNC'},
+    {val:'tokarka_cnc',    label:'🟢 Tokarka CNC'},
+    {val:'frezarka_konw',  label:'🔷 Frezarka konw.'},
+    {val:'tokarka_konw',   label:'🟩 Tokarka konw.'},
+    {val:'szlifierka',     label:'🟡 Szlifierka'},
+    {val:'operacja',       label:'🔧 Operacja'},
+  ];
+  typyDef.forEach(t => {
+    const btn = document.getElementById('st-typ-btn-' + t.val);
     if (!btn) return;
-    const active = (next === t);
+    const active = (next === t.val);
     btn.style.borderColor = active ? 'var(--accent)' : 'var(--border)';
     btn.style.background = active ? 'rgba(232,160,32,0.15)' : 'var(--panel)';
     btn.style.color = active ? 'var(--accent)' : 'var(--dim)';
   });
+  // Aktualizuj sticky header
+  const headerEl = document.getElementById('st-typ-sticky-label');
+  const headerWrap = document.getElementById('st-typ-sticky-wrap');
+  if (headerEl && headerWrap) {
+    const aktywny = typyDef.find(t => t.val === next);
+    if (aktywny) {
+      headerEl.textContent = aktywny.label;
+      headerEl.style.color = 'var(--accent)';
+      headerEl.style.fontStyle = 'normal';
+      headerWrap.style.borderColor = 'var(--accent)';
+    } else {
+      headerEl.textContent = '— nie wybrano —';
+      headerEl.style.color = 'var(--dim)';
+      headerEl.style.fontStyle = 'italic';
+      headerWrap.style.borderColor = 'var(--border)';
+    }
+  }
 }
 
 function saveStawkaForm(id) {

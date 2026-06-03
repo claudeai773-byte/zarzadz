@@ -700,6 +700,7 @@ class StartSesjaRequest(BaseModel):
     opis_nieprodukcyjnej: Optional[str] = ""
     zlecenie_id_inne: Optional[int] = None
     sesja_glowna: int = 1
+    rzeczywiste_stanowisko: Optional[str] = None  # gdy operacja wykonana na innej maszynie
 
 class StopSesjaRequest(BaseModel):
     sesja_id: int
@@ -757,12 +758,13 @@ def start_sesja(req: StartSesjaRequest):
 
         cur = conn.execute(
             """INSERT INTO sesje_pracy
-               (operacja_id, user_id, typ, start_time, status, uwagi, zlecenie_id_inne, sesja_glowna)
-               VALUES (?,?,?,?,?,?,?,?)""",
+               (operacja_id, user_id, typ, start_time, status, uwagi, zlecenie_id_inne, sesja_glowna, rzeczywiste_stanowisko)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (req.operacja_id, req.user_id, req.typ, now, "aktywna",
              req.opis_nieprodukcyjnej or "",
              req.zlecenie_id_inne if req.typ == "inne_zlecenie" else None,
-             req.sesja_glowna)
+             req.sesja_glowna,
+             req.rzeczywiste_stanowisko or None)
         )
         sesja_id = cur.lastrowid
         if req.operacja_id and req.typ in ("operacja", "inne_zlecenie"):
@@ -1834,14 +1836,17 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko, o.zlecenie_id,
                        z.numer as zl_numer,
                        zi.numer as zl_inne_numer,
-                       COALESCE(st_zl.stawka_godz, st.stawka_godz, 0) as stawka_godz,
-                       COALESCE(st_zl.zbrojenie_stawka_godz, st.zbrojenie_stawka_godz, 0) as zbrojenie_stawka_godz
+                       COALESCE(st_zl_rz.stawka_godz, st_rz.stawka_godz, st_zl.stawka_godz, st.stawka_godz, 0) as stawka_godz,
+                       COALESCE(st_zl_rz.zbrojenie_stawka_godz, st_rz.zbrojenie_stawka_godz, st_zl.zbrojenie_stawka_godz, st.zbrojenie_stawka_godz, 0) as zbrojenie_stawka_godz,
+                       COALESCE(s.rzeczywiste_stanowisko, o.stanowisko) as efektywne_stanowisko
                 FROM sesje_pracy s
                 LEFT JOIN operacje o ON s.operacja_id = o.id
                 LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
                 LEFT JOIN zlecenia zi ON s.zlecenie_id_inne = zi.id
                 LEFT JOIN stawki_zlecen st_zl ON st_zl.zlecenie_id=o.zlecenie_id AND st_zl.stanowisko=o.stanowisko
                 LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
+                LEFT JOIN stawki_zlecen st_zl_rz ON s.rzeczywiste_stanowisko IS NOT NULL AND st_zl_rz.zlecenie_id=o.zlecenie_id AND st_zl_rz.stanowisko=s.rzeczywiste_stanowisko
+                LEFT JOIN stawki st_rz ON s.rzeczywiste_stanowisko IS NOT NULL AND st_rz.stanowisko=s.rzeczywiste_stanowisko
                 WHERE s.user_id=? AND s.status='zakonczona' AND {filter_sql}
                 ORDER BY s.end_time DESC
             """, (r["id"],)).fetchall()
@@ -2160,6 +2165,8 @@ def init_db_on_start():
         c.executemany("INSERT INTO stawki (stanowisko,stawka_godz,czas_norma_min) VALUES (?,?,?)", stawki)
 
     try: c.execute("ALTER TABLE sesje_pracy ADD COLUMN sesja_glowna INTEGER DEFAULT 1")
+    except: pass
+    try: c.execute("ALTER TABLE sesje_pracy ADD COLUMN rzeczywiste_stanowisko TEXT DEFAULT NULL")
     except: pass
 
     c.execute("""CREATE TABLE IF NOT EXISTS user_permissions (

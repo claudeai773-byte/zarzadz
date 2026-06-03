@@ -3741,12 +3741,6 @@ function renderZlecenia() {
     });
   }
 
-  // Modal QR gen
-  html += renderQRGenModal();
-
-  // Modal drukuj kartę
-  html += renderPrintModal();
-
   // Modal zlecenie
   if (state.zlecenieModal !== null) {
     const z = state.zlecenieModal;
@@ -5190,6 +5184,8 @@ function renderContent() {
     </div>
     ${renderBottomNav()}
     ${renderFeedbackModal()}
+    ${renderQRGenModal()}
+    ${renderPrintModal()}
     ${renderQRZleceniePickerModal()}
     ${renderEditSesjaModalHtml()}`;
 }

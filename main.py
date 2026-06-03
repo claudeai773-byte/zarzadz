@@ -949,14 +949,15 @@ class StawkaRequest(BaseModel):
     opis: Optional[str] = ""
     zbrojenie_aktywne: Optional[int] = 0
     zbrojenie_stawka_godz: Optional[float] = 0.0
+    typ_maszyny: Optional[str] = ""
 
 @app.post("/api/stawki", dependencies=[Depends(verify_key)])
 def create_stawka(req: StawkaRequest):
     with get_db() as conn:
         try:
             cur = conn.execute(
-                "INSERT INTO stawki (stanowisko,stawka_godz,opis,zbrojenie_aktywne,zbrojenie_stawka_godz) VALUES (?,?,?,?,?)",
-                (req.stanowisko, req.stawka_godz, req.opis, req.zbrojenie_aktywne or 0, req.zbrojenie_stawka_godz or 0.0)
+                "INSERT INTO stawki (stanowisko,stawka_godz,opis,zbrojenie_aktywne,zbrojenie_stawka_godz,typ_maszyny) VALUES (?,?,?,?,?,?)",
+                (req.stanowisko, req.stawka_godz, req.opis, req.zbrojenie_aktywne or 0, req.zbrojenie_stawka_godz or 0.0, req.typ_maszyny or '')
             )
             return {"id": cur.lastrowid}
         except sqlite3.IntegrityError:
@@ -966,8 +967,8 @@ def create_stawka(req: StawkaRequest):
 def update_stawka(sid: int, req: StawkaRequest):
     with get_db() as conn:
         conn.execute(
-            "UPDATE stawki SET stanowisko=?,stawka_godz=?,opis=?,zbrojenie_aktywne=?,zbrojenie_stawka_godz=? WHERE id=?",
-            (req.stanowisko, req.stawka_godz, req.opis, req.zbrojenie_aktywne or 0, req.zbrojenie_stawka_godz or 0.0, sid)
+            "UPDATE stawki SET stanowisko=?,stawka_godz=?,opis=?,zbrojenie_aktywne=?,zbrojenie_stawka_godz=?,typ_maszyny=? WHERE id=?",
+            (req.stanowisko, req.stawka_godz, req.opis, req.zbrojenie_aktywne or 0, req.zbrojenie_stawka_godz or 0.0, req.typ_maszyny or '', sid)
         )
         # Celowo NIE aktualizujemy stawki_zlecen – istniejące zlecenia mają zachować indywidualne stawki
         return {"ok": True}
@@ -2135,7 +2136,7 @@ def init_db_on_start():
         czas_norma_min REAL DEFAULT 0, opis TEXT DEFAULT '',
         zbrojenie_aktywne INTEGER DEFAULT 0,
         zbrojenie_stawka_godz REAL DEFAULT 0.0)""")
-    for col, typ in [("zbrojenie_aktywne", "INTEGER DEFAULT 0"), ("zbrojenie_stawka_godz", "REAL DEFAULT 0.0")]:
+    for col, typ in [("zbrojenie_aktywne", "INTEGER DEFAULT 0"), ("zbrojenie_stawka_godz", "REAL DEFAULT 0.0"), ("typ_maszyny", "TEXT DEFAULT ''")]:
         try: c.execute(f"ALTER TABLE stawki ADD COLUMN {col} {typ}")
         except: pass
 

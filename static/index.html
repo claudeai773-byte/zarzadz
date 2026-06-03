@@ -1100,42 +1100,48 @@ function _kategoriaMaszyny(stanowisko) {
 
 async function pickOperacjaFromQR(opId) {
   const op = state.qrZleceniePickerModal?.operacje?.find(o => o.id === opId);
-  const kat = op ? _kategoriaMaszyny(op.stanowisko) : null;
+  if (!op) { setState({qrZleceniePickerModal:null}); await startSesja(opId); return; }
 
-  if (kat) {
-    // Pobierz pełną listę stanowisk o tym samym typ_maszyny
-    try {
-      const stawki = await get('/api/stawki');
-      // Znajdź dokładny typ_maszyny maszyny docelowej
-      const stawkaOryginal = stawki.find(s2 => s2.stanowisko === op.stanowisko);
-      const typMaszynyOryginal = stawkaOryginal ? stawkaOryginal.typ_maszyny : null;
-      let lista;
-      if (typMaszynyOryginal) {
-        // Filtruj po dokładnym typie maszyny (tak jak zapisano w edycji stawek)
-        lista = stawki
-          .filter(s2 => s2.typ_maszyny === typMaszynyOryginal && !s2.stanowisko.toLowerCase().includes('zbrojenie'))
-          .map(s2 => s2.stanowisko);
-      } else {
-        // Fallback: filtruj po kategorii nazwy
-        lista = stawki
-          .filter(s2 => !s2.stanowisko.toLowerCase().includes('zbrojenie') && _kategoriaMaszyny(s2.stanowisko) === kat)
-          .map(s2 => s2.stanowisko);
-      }
-      setState({
-        qrZleceniePickerModal: null,
-        zmianaMaszynyModal: {
-          operacjaId: opId,
-          stanowiskoOryginalne: op.stanowisko,
-          typMaszyny: typMaszynyOryginal || kat,
-          stanowiskoLista: lista
-        }
-      });
+  try {
+    // Zawsze pobierz świeże stawki z API (state.stawki może być puste w zakładce Praca)
+    const stawki = await get('/api/stawki');
+
+    // Znajdź stawkę dla maszyny docelowej
+    const stawkaOryginal = stawki.find(s => s.stanowisko === op.stanowisko);
+    const typMaszyny = stawkaOryginal ? stawkaOryginal.typ_maszyny : null;
+
+    if (!typMaszyny) {
+      // Brak typu maszyny → start bez wyboru
+      setState({qrZleceniePickerModal:null});
+      await startSesja(opId);
       return;
-    } catch(e) { /* fallback do normalnego startu */ }
-  }
+    }
 
-  setState({qrZleceniePickerModal:null});
-  await startSesja(opId);
+    // Wszystkie stawki z tym samym typem maszyny (włącznie z docelową)
+    const lista = stawki
+      .filter(s => s.typ_maszyny === typMaszyny)
+      .map(s => s.stanowisko);
+
+    // Jeśli tylko jedna maszyna tego typu → start bez wyboru
+    if (lista.length <= 1) {
+      setState({qrZleceniePickerModal:null});
+      await startSesja(opId);
+      return;
+    }
+
+    setState({
+      qrZleceniePickerModal: null,
+      zmianaMaszynyModal: {
+        operacjaId: opId,
+        stanowiskoOryginalne: op.stanowisko,
+        typMaszyny: typMaszyny,
+        stanowiskoLista: lista
+      }
+    });
+  } catch(e) {
+    setState({qrZleceniePickerModal:null});
+    await startSesja(opId);
+  }
 }
 
 async function zmianaMaszynyPotwierdzenie(operacjaId, innaM) {

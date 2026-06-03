@@ -2219,6 +2219,15 @@ def init_db_on_start():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""")
 
+    c.execute("""CREATE TABLE IF NOT EXISTS app_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        user_name TEXT,
+        ocena INTEGER NOT NULL,
+        wiadomosc TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL)""")
+
     # ➤ Migracja: uzupełnij stawki_zlecen dla istniejących zleceń
     existing_zl = c.execute("SELECT id FROM zlecenia").fetchall()
     for zl_row in existing_zl:
@@ -2555,11 +2564,25 @@ def get_oblozenie():
             ORDER BY z.termin ASC, z.id ASC, o.kolejnosc ASC
         """).fetchall()
 
+        # Pobierz aktywne sesje dla operacji w_toku
+        active_sess = {}
+        sess_rows = conn.execute("""
+            SELECT sp.operacja_id, sp.start_time, sp.pauzy
+            FROM sesje_pracy sp
+            WHERE sp.status='aktywna'
+            ORDER BY sp.id ASC
+        """).fetchall()
+        for sr in sess_rows:
+            oid = sr["operacja_id"]
+            if oid and oid not in active_sess:
+                active_sess[oid] = {"start_time": sr["start_time"], "pauzy": sr["pauzy"] or "[]"}
+
         stanowiska_ops = {}
         for o in ops:
             st = o["stanowisko"]
             if st not in stanowiska_ops:
                 stanowiska_ops[st] = []
+            sess = active_sess.get(o["id"], {})
             stanowiska_ops[st].append({
                 "op_id": o["id"], "op_nazwa": o["nazwa"], "op_status": o["status"],
                 "op_kolejnosc": o["kolejnosc"], "ilosc_wykonana": o["ilosc_wykonana"],
@@ -2568,6 +2591,7 @@ def get_oblozenie():
                 "zlecenie_numer": o["numer"], "zlecenie_nazwa": o["zlecenie_nazwa"],
                 "zlecenie_status": o["zlecenie_status"],
                 "termin": o["termin"], "ilosc_sztuk": o["ilosc_sztuk"],
+                "sesja_start": sess.get("start_time"), "sesja_pauzy": sess.get("pauzy", "[]"),
             })
 
         result = []
@@ -2580,6 +2604,32 @@ def get_oblozenie():
                 "operacje": stanowiska_ops.get(name, []),
             })
         return result
+
+# ─── Feedback / Oceny aplikacji ───────────────────────────────────────────────
+class FeedbackIn(BaseModel):
+    user_id: Optional[int] = None
+    user_name: Optional[str] = None
+    ocena: int
+    wiadomosc: Optional[str] = ""
+
+@app.post("/api/feedback", dependencies=[Depends(verify_key)])
+def post_feedback(fb: FeedbackIn):
+    if not (1 <= fb.ocena <= 5):
+        raise HTTPException(400, "Ocena musi być od 1 do 5")
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO app_feedback (user_id, user_name, ocena, wiadomosc, created_at) VALUES (?,?,?,?,?)",
+            (fb.user_id, fb.user_name, fb.ocena, fb.wiadomosc or "", _now())
+        )
+    return {"ok": True}
+
+@app.get("/api/feedback", dependencies=[Depends(verify_key)])
+def get_feedback():
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, user_id, user_name, ocena, wiadomosc, created_at FROM app_feedback ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 # ─── Upload pliku STEP do Cloudinary ──────────────────────────────────────────
 @app.post("/api/step-upload", dependencies=[Depends(verify_key)])

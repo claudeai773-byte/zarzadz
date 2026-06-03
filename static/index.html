@@ -423,6 +423,11 @@ let state = {
   autofillOperacje: [],
   editSesjaModal: null,   // {sesja_id, start_time, end_time}
 
+  // Feedback / ocena
+  feedbackRating: 0,
+  feedbackModal: false,
+  adminFeedbacks: null,
+
   // Print modal
   printModal: null,
   printOps: [],
@@ -1515,6 +1520,12 @@ function renderTopbar() {
   <div class="topbar">
     <h1>⚙ PRODUKCJA</h1>
     <div style="display:flex;align-items:center;gap:10px">
+      <div style="display:flex;align-items:center;gap:6px">
+        <div style="display:flex;gap:2px" title="Oceń aplikację">
+          ${[1,2,3,4,5].map(n => `<span onclick="setFeedbackRating(${n})" style="font-size:18px;cursor:pointer;color:${(state.feedbackRating||0)>=n?'var(--accent)':'var(--border)'}">★</span>`).join('')}
+        </div>
+        <button onclick="openFeedbackModal()" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap">💬 Czego brakuje?</button>
+      </div>
       <div class="user-info">
         <div style="color:var(--text)">${state.user.full_name}</div>
         <div>${roleName(state.user.role)}</div>
@@ -2269,7 +2280,93 @@ function renderOblozenie() {
     return html;
   }
 
-  // Grupuj po zleceniu (może być wiele operacji z jednego zlecenia)
+  // ── Pomocnicze funkcje harmonogramu (czas Europe/Warsaw = CEST) ──────────
+  const WORK_START = 6, WORK_END = 22;
+  function nowCEST() {
+    // Używamy jawnej strefy Europa/Warszawa
+    const now = new Date();
+    // getTimezoneOffset w minutach; dla CEST to -120 (UTC+2)
+    const warsawOffset = -120; // UTC+2
+    const localOffset = now.getTimezoneOffset(); // min, negative for east
+    const diff = (localOffset - warsawOffset) * 60000;
+    return new Date(now.getTime() + diff);
+  }
+  function addWorkMinutes(fromDate, minutes) {
+    let d = new Date(fromDate);
+    let rem = minutes;
+    while (rem > 0) {
+      const h = d.getHours(), m = d.getMinutes();
+      if (h < WORK_START) { d.setHours(WORK_START, 0, 0, 0); continue; }
+      if (h >= WORK_END)  { d.setDate(d.getDate()+1); d.setHours(WORK_START,0,0,0); continue; }
+      const minsToDayEnd = (WORK_END - h) * 60 - m;
+      if (rem <= minsToDayEnd) { d = new Date(d.getTime() + rem*60000); rem = 0; }
+      else { rem -= minsToDayEnd; d.setDate(d.getDate()+1); d.setHours(WORK_START,0,0,0); }
+    }
+    return d;
+  }
+  function fmtHHMM(date) {
+    const h = ('0'+date.getHours()).slice(-2), m = ('0'+date.getMinutes()).slice(-2);
+    const day = date.toLocaleDateString('pl-PL',{timeZone:'Europe/Warsaw',weekday:'short',day:'numeric',month:'numeric'});
+    return `${day} ${h}:${m}`;
+  }
+  function calcElapsedMin(startStr, pauzyStr) {
+    if (!startStr) return 0;
+    const start = parseServerDT(startStr);
+    let elapsed = (Date.now() - start.getTime()) / 60000;
+    try {
+      const pauzy = JSON.parse(pauzyStr || '[]');
+      for (const p of pauzy) {
+        const pStart = parseServerDT(p.start);
+        const pEnd = p.koniec ? parseServerDT(p.koniec) : new Date();
+        elapsed -= (pEnd - pStart) / 60000;
+      }
+    } catch(_) {}
+    return Math.max(0, elapsed);
+  }
+
+  // ── Pre-obliczanie harmonogramu dla CAŁEGO stanowiska ─────────────────────
+  // Porządek: najpierw operacje w_toku (blokują maszynę teraz), potem oczekujące sekwencyjnie
+  const allOps = stData.operacje;
+  const wTokuOps = allOps.filter(o => o.op_status === 'w_toku');
+  const oczekujeOps = allOps.filter(o => o.op_status === 'oczekuje');
+
+  const opSchedule = {}; // op_id -> {start, end, remainingMin, overTime}
+  const now = nowCEST();
+
+  // Operacje w toku – szacowany koniec na podstawie pozostałego czasu
+  let maxWTokuEnd = new Date(now);
+  for (const o of wTokuOps) {
+    const ilosc = Math.max(1, (o.ilosc_sztuk||1) - (o.ilosc_wykonana||0));
+    const totalMin = (o.czas_norma||0) * ilosc + (o.czas_zbrojenia_min||0);
+    if (totalMin > 0) {
+      const elapsed = calcElapsedMin(o.sesja_start, o.sesja_pauzy);
+      const remaining = Math.max(0, totalMin - elapsed);
+      const overTime = elapsed > totalMin;
+      const end = addWorkMinutes(new Date(now), remaining);
+      opSchedule[o.op_id] = { start: new Date(now), end, remainingMin: remaining, totalMin, overTime };
+      if (end > maxWTokuEnd) maxWTokuEnd = end;
+    }
+  }
+
+  // Operacje oczekujące – kolejka zaczyna się gdy skończy się ostatnia w_toku
+  let ptr = new Date(maxWTokuEnd);
+  const h = ptr.getHours();
+  if (h < WORK_START) ptr.setHours(WORK_START, 0, 0, 0);
+  else if (h >= WORK_END) { ptr.setDate(ptr.getDate()+1); ptr.setHours(WORK_START,0,0,0); }
+
+  // oczekujeOps są już posortowane wg kolejności z API (termin, zlecenie, kolejnosc)
+  for (const o of oczekujeOps) {
+    const ilosc = Math.max(1, (o.ilosc_sztuk||1) - (o.ilosc_wykonana||0));
+    const totalMin = (o.czas_norma||0) * ilosc + (o.czas_zbrojenia_min||0);
+    if (totalMin > 0) {
+      const start = new Date(ptr);
+      const end = addWorkMinutes(start, totalMin);
+      opSchedule[o.op_id] = { start, end, totalMin };
+      ptr = new Date(end);
+    }
+  }
+
+  // ── Grupuj po zleceniu (może być wiele operacji z jednego zlecenia) ────────
   const byZlecenie = {};
   stData.operacje.forEach(o => {
     const key = o.zlecenie_id;
@@ -2313,31 +2410,6 @@ function renderOblozenie() {
         </div>
       </div>`;
 
-    // Oblicz harmonogram: operacje oczekujące ustawiamy sekwencyjnie od teraz (godz. 6-22)
-    const WORK_START = 6, WORK_END = 22, WORK_MINS = (WORK_END - WORK_START) * 60;
-    function addWorkMinutes(fromDate, minutes) {
-      let d = new Date(fromDate);
-      let rem = minutes;
-      while (rem > 0) {
-        const h = d.getHours(), m = d.getMinutes();
-        const minsToDayEnd = Math.max(0, (WORK_END - h) * 60 - m);
-        if (h < WORK_START) { d.setHours(WORK_START, 0, 0, 0); continue; }
-        if (h >= WORK_END)  { d.setDate(d.getDate()+1); d.setHours(WORK_START,0,0,0); continue; }
-        if (rem <= minsToDayEnd) { d = new Date(d.getTime() + rem*60000); rem = 0; }
-        else { rem -= minsToDayEnd; d.setDate(d.getDate()+1); d.setHours(WORK_START,0,0,0); }
-      }
-      return d;
-    }
-    function fmtHHMM(date) {
-      const h = ('0'+date.getHours()).slice(-2), m = ('0'+date.getMinutes()).slice(-2);
-      const day = date.toLocaleDateString('pl-PL',{weekday:'short',day:'numeric',month:'numeric'});
-      return `${day} ${h}:${m}`;
-    }
-    let schedulePtr = new Date();
-    // Ustaw schedulePtr na aktualny czas roboczy
-    if (schedulePtr.getHours() < WORK_START) schedulePtr.setHours(WORK_START,0,0,0);
-    if (schedulePtr.getHours() >= WORK_END)  { schedulePtr.setDate(schedulePtr.getDate()+1); schedulePtr.setHours(WORK_START,0,0,0); }
-
     g.ops.forEach(o => {
       const prog = g.ilosc_sztuk > 0 ? Math.min(100, Math.round((o.ilosc_wykonana / g.ilosc_sztuk) * 100)) : 0;
       const opStatusColors = {oczekuje:'var(--dim)',w_toku:'var(--blue)',zakonczona:'var(--green)'};
@@ -2353,18 +2425,24 @@ function renderOblozenie() {
         ? (czNorma > 0 ? `${czNorma} min/szt` : '') + (czZbr > 0 ? (czNorma>0?' + ':'')+`zbr ${czZbr} min` : '')
         : '';
 
-      // Harmonogram dla operacji oczekujących
+      // Harmonogram z pre-obliczonego rozkładu
       let scheduleHtml = '';
-      if (o.op_status === 'oczekuje' && totalMin > 0) {
-        const start = new Date(schedulePtr);
-        const end = addWorkMinutes(start, totalMin);
-        scheduleHtml = `<div style="font-size:10px;color:var(--blue);margin-top:3px">
-          🕐 <b>${fmtHHMM(start)}</b> → <b>${fmtHHMM(end)}</b>
-          ${totalMin >= 60 ? `<span style="color:var(--dim)">(${(totalMin/60).toFixed(1)}h)</span>` : `<span style="color:var(--dim)">(${totalMin} min)</span>`}
+      const sched = opSchedule[o.op_id];
+      if (o.op_status === 'w_toku' && sched) {
+        const remH = (sched.remainingMin/60).toFixed(1);
+        const remMin = Math.round(sched.remainingMin);
+        scheduleHtml = `<div style="font-size:10px;color:var(--green);margin-top:3px">
+          ▶ W toku · koniec: <b>${fmtHHMM(sched.end)}</b>
+          ${sched.overTime ? '<span style="color:var(--orange)">⚠ przekroczona norma</span>'
+            : sched.remainingMin >= 60 ? `<span style="color:var(--dim)">(${remH}h)</span>`
+            : `<span style="color:var(--dim)">(${remMin} min)</span>`}
         </div>`;
-        schedulePtr = addWorkMinutes(end, 0); // następna operacja po tej
-      } else if (o.op_status === 'w_toku') {
-        scheduleHtml = `<div style="font-size:10px;color:var(--green);margin-top:3px">▶ W toku</div>`;
+      } else if (o.op_status === 'oczekuje' && sched) {
+        const durMin = sched.totalMin;
+        scheduleHtml = `<div style="font-size:10px;color:var(--blue);margin-top:3px">
+          🕐 <b>${fmtHHMM(sched.start)}</b> → <b>${fmtHHMM(sched.end)}</b>
+          ${durMin >= 60 ? `<span style="color:var(--dim)">(${(durMin/60).toFixed(1)}h)</span>` : `<span style="color:var(--dim)">(${durMin} min)</span>`}
+        </div>`;
       }
 
       html += `<div style="padding:8px 10px;background:var(--panel);border-radius:7px;margin-top:6px">
@@ -2394,6 +2472,66 @@ function renderOblozenie() {
 
   html += `<button class="btn-outline" style="margin-top:4px" onclick="loadOblozenie()">🔄 Odśwież</button>`;
   return html;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  FEEDBACK / OCENY
+// ══════════════════════════════════════════════════════════════
+function setFeedbackRating(n) {
+  setState({feedbackRating: n});
+}
+
+function openFeedbackModal() {
+  setState({feedbackModal: true});
+}
+
+async function sendFeedback(fromModal) {
+  const ocena = state.feedbackRating;
+  if (!ocena) { alert('Wybierz ocenę (1-5 gwiazdek)'); return; }
+  const wiadomosc = fromModal ? (document.getElementById('feedback-msg')?.value || '') : '';
+  try {
+    await post('/api/feedback', {
+      user_id: state.user?.id,
+      user_name: state.user?.full_name,
+      ocena,
+      wiadomosc
+    });
+    setState({feedbackModal: false, feedbackRating: 0});
+    alert('✅ Dziękujemy za opinię!');
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function loadAdminFeedbacks() {
+  setState({adminFeedbacks: null});
+  try {
+    const data = await get('/api/feedback');
+    setState({adminFeedbacks: data});
+  } catch(e) {
+    setState({adminFeedbacks: []});
+    console.error('Błąd ładowania ocen:', e.message);
+  }
+}
+
+function renderFeedbackModal() {
+  if (!state.feedbackModal) return '';
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)setState({feedbackModal:false})">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({feedbackModal:false})">×</button>
+      <h3>💬 Co brakuje w aplikacji?</h3>
+      <div style="margin-bottom:14px">
+        <div style="font-size:13px;color:var(--dim);margin-bottom:10px">Twoja ocena:</div>
+        <div style="display:flex;gap:8px;justify-content:center">
+          ${[1,2,3,4,5].map(n => `<span onclick="setFeedbackRating(${n})" style="font-size:34px;cursor:pointer;color:${(state.feedbackRating||0)>=n?'var(--accent)':'var(--border)'};transition:color .1s">★</span>`).join('')}
+        </div>
+      </div>
+      <div class="field">
+        <label>Wiadomość (opcjonalnie)</label>
+        <textarea id="feedback-msg" placeholder="Opisz czego brakuje lub co można poprawić..." style="min-height:100px"></textarea>
+      </div>
+      <button class="btn btn-accent" onclick="sendFeedback(true)">📤 Wyślij opinię</button>
+    </div>
+  </div>`;
 }
 
 async function toggleMajsterZlecenie(zid) {
@@ -3606,6 +3744,9 @@ function renderZlecenia() {
   // Modal drukuj kartę
   html += renderPrintModal();
 
+  // Modal feedback
+  html += renderFeedbackModal();
+
   // Modal zlecenie
   if (state.zlecenieModal !== null) {
     const z = state.zlecenieModal;
@@ -4440,11 +4581,11 @@ function renderKosztyModal() {
 // ══════════════════════════════════════════════════════════════
 function renderAdmin() {
   if (state.loading) return '<div class="spinner">⏳</div>';
-  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'uprawnienia',label:'🔐 Uprawnienia'},{id:'import_pdf',label:'📄 Import PDF'},{id:'katalog',label:'📦 Katalog'}];
+  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'uprawnienia',label:'🔐 Uprawnienia'},{id:'import_pdf',label:'📄 Import PDF'},{id:'katalog',label:'📦 Katalog'},{id:'oceny',label:'⭐ Oceny'}];
   let html = `
   <div class="tabs">
     ${subTabs.map(t => `<button class="tab ${state.adminTab===t.id?'active':''}"
-      onclick="setState({adminTab:'${t.id}'})">${t.label}</button>`).join('')}
+      onclick="setState({adminTab:'${t.id}'})${t.id==='oceny'?';loadAdminFeedbacks()':''}">${t.label}</button>`).join('')}
   </div>`;
 
   if (state.adminTab === 'uzytkownicy') {
@@ -4625,6 +4766,58 @@ function renderAdmin() {
         </div>
       </div>`;
     }
+  }
+
+  if (state.adminTab === 'oceny') {
+    const feedbacks = state.adminFeedbacks;
+    if (!feedbacks) {
+      html += '<div class="spinner">⏳ Ładowanie ocen...</div>';
+    } else if (!feedbacks.length) {
+      html += '<div class="empty">Brak ocen i opinii.</div>';
+    } else {
+      // Statystyki
+      const avgRating = (feedbacks.reduce((s,f) => s + f.ocena, 0) / feedbacks.length).toFixed(1);
+      const dist = [5,4,3,2,1].map(n => ({n, cnt: feedbacks.filter(f=>f.ocena===n).length}));
+      html += `
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+          <div style="text-align:center">
+            <div style="font-size:40px;font-weight:700;color:var(--accent);font-family:Consolas,monospace">${avgRating}</div>
+            <div style="color:var(--accent);font-size:20px">${'★'.repeat(Math.round(parseFloat(avgRating)))}${'☆'.repeat(5-Math.round(parseFloat(avgRating)))}</div>
+            <div style="font-size:11px;color:var(--dim)">${feedbacks.length} ocen</div>
+          </div>
+          <div style="flex:1;min-width:160px">
+            ${dist.map(d => `
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span style="font-size:12px;color:var(--dim);width:12px">${d.n}</span>
+              <span style="color:var(--accent);font-size:13px">★</span>
+              <div style="flex:1;background:var(--border);border-radius:4px;height:8px;overflow:hidden">
+                <div style="width:${feedbacks.length?Math.round(d.cnt/feedbacks.length*100):0}%;height:100%;background:var(--accent);border-radius:4px"></div>
+              </div>
+              <span style="font-size:11px;color:var(--dim);width:20px;text-align:right">${d.cnt}</span>
+            </div>`).join('')}
+          </div>
+        </div>
+      </div>`;
+
+      // Lista wpisów
+      feedbacks.forEach(f => {
+        const stars = '★'.repeat(f.ocena) + '☆'.repeat(5-f.ocena);
+        const dt = f.created_at ? new Date(f.created_at.replace('Z','+00:00')).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+        html += `
+        <div class="card" style="margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <span style="color:var(--accent);font-size:16px;letter-spacing:1px">${stars}</span>
+              ${f.user_name ? `<span style="font-size:12px;color:var(--dim);margin-left:8px">👤 ${f.user_name}</span>` : ''}
+            </div>
+            <span style="font-size:11px;color:var(--dim)">${dt}</span>
+          </div>
+          ${f.wiadomosc ? `<div style="margin-top:8px;font-size:13px;color:var(--text);line-height:1.5;background:var(--entry);padding:8px 12px;border-radius:6px">${f.wiadomosc.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>` : ''}
+        </div>`;
+      });
+    }
+    html += `<button class="btn-outline" style="margin-top:4px" onclick="loadAdminFeedbacks()">🔄 Odśwież</button>`;
   }
 
   return html;

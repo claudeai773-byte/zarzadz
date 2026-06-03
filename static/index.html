@@ -1073,7 +1073,24 @@ function statusBadge_txt(s) {
 const FREZARKI = ['frezarka','vmc','mazak','wytaczarka','centrum obróbcze','frezarki'];
 const TOKARKI  = ['tokarka','tokarki'];
 
+// Mapa typ_maszyny → kategoria (dla alternatyw w pickOperacjaFromQR)
+const TYP_DO_KATEGORII = {
+  'frezarka_cnc':    'frezarka',
+  'tokarka_cnc':     'tokarka',
+  'frezarka_konw':   'frezarka',
+  'tokarka_konw':    'tokarka',
+  'szlifierka':      'szlifierka',
+  'operacja':        'operacja',
+};
+
 function _kategoriaMaszyny(stanowisko) {
+  // Sprawdź najpierw czy stawka ma przypisany typ_maszyny (nowy system)
+  const stawki = state.stawki || [];
+  const stawka = stawki.find(s => s.stanowisko === stanowisko);
+  if (stawka && stawka.typ_maszyny && TYP_DO_KATEGORII[stawka.typ_maszyny]) {
+    return TYP_DO_KATEGORII[stawka.typ_maszyny];
+  }
+  // Fallback: rozpoznawanie po nazwie (stary system)
   if (!stanowisko) return null;
   const s = stanowisko.toLowerCase();
   if (FREZARKI.some(k => s.includes(k))) return 'frezarka';
@@ -1092,8 +1109,11 @@ async function pickOperacjaFromQR(opId) {
       const stawki = await get('/api/stawki');
       const lista = stawki
         .map(s => s.stanowisko)
-        .filter(s => _kategoriaMaszyny(s) === kat && s !== op.stanowisko
-                  && !s.toLowerCase().includes('zbrojenie'));
+        .filter(s => {
+          if (s === op.stanowisko) return false;
+          if (s.toLowerCase().includes('zbrojenie')) return false;
+          return _kategoriaMaszyny(s) === kat;
+        });
       setState({
         qrZleceniePickerModal: null,
         zmianaMaszynyModal: {
@@ -3312,7 +3332,18 @@ function renderMajsterWydajnosc() {
 
   html += `<div class="section-hdr">🏆 Ranking pracowników – ${okresLabels[okres]}</div>`;
 
-  w.pracownicy.forEach((p, idx) => {
+  // Sortuj malejąco wg % norm (najwyższy % = 1. miejsce)
+  const pracownicy_sorted = [...w.pracownicy].sort((a, b) => {
+    const pctA = (a.norma_wydajnosc_pct !== null && a.norma_wydajnosc_pct !== undefined)
+      ? a.norma_wydajnosc_pct
+      : (a.normy_total > 0 ? Math.round(a.normy_ok / a.normy_total * 100) : -1);
+    const pctB = (b.norma_wydajnosc_pct !== null && b.norma_wydajnosc_pct !== undefined)
+      ? b.norma_wydajnosc_pct
+      : (b.normy_total > 0 ? Math.round(b.normy_ok / b.normy_total * 100) : -1);
+    return pctB - pctA;
+  });
+
+  pracownicy_sorted.forEach((p, idx) => {
     const medal = idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':'';
     const wydPct = (p.norma_wydajnosc_pct !== null && p.norma_wydajnosc_pct !== undefined)
       ? p.norma_wydajnosc_pct
@@ -3434,7 +3465,7 @@ function renderStawkiPanel() {
       <div class="card-header">
         <div>
           <div class="card-title">${s.stanowisko}</div>
-          <div class="card-sub">${fmtPLN(s.stawka_godz)}/h${s.opis ? ' · '+s.opis : ''}</div>
+          <div class="card-sub">${fmtPLN(s.stawka_godz)}/h${s.opis ? ' · '+s.opis : ''}${s.typ_maszyny ? ' · <span style="background:rgba(232,160,32,0.15);color:var(--accent);padding:1px 6px;border-radius:10px;font-size:10px;font-weight:700">' + {frezarka_cnc:'🔵 Frez.CNC',tokarka_cnc:'🟢 Tok.CNC',frezarka_konw:'🔷 Frez.konw',tokarka_konw:'🟩 Tok.konw',szlifierka:'🟡 Szlif.',operacja:'🔧 Oper.'}[s.typ_maszyny] + '</span>' : ''}</div>
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn-sm btn-blue" onclick="setState({stawkaModal:${JSON.stringify(s).replace(/"/g,'&quot;')}})">✏</button>
@@ -3456,8 +3487,32 @@ function renderStawkiPanel() {
         <div class="field"><label>Stawka (zł/h)</label><input id="st-stawka" type="number" step="0.5" value="${s.stawka_godz||0}"></div>
         <div class="field"><label>Opis</label><input id="st-opis" type="text" value="${s.opis||''}"></div>
         <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+          <div style="font-size:12px;font-weight:700;color:var(--dim);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">🏭 Typ maszyny / operacji</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px" id="st-typ-wrap">
+            ${[
+              {val:'frezarka_cnc',   label:'🔵 Frezarka CNC'},
+              {val:'tokarka_cnc',    label:'🟢 Tokarka CNC'},
+              {val:'frezarka_konw',  label:'🔷 Frezarka konw.'},
+              {val:'tokarka_konw',   label:'🟩 Tokarka konw.'},
+              {val:'szlifierka',     label:'🟡 Szlifierka'},
+              {val:'operacja',       label:'🔧 Operacja'},
+            ].map(t => `
+              <button type="button"
+                id="st-typ-btn-${t.val}"
+                onclick="selectTypMaszyny('${t.val}')"
+                style="padding:6px 12px;border-radius:20px;border:2px solid ${(s.typ_maszyny||''===t.val)?'var(--accent)':'var(--border)'};
+                       background:${(s.typ_maszyny||''===t.val)?'rgba(232,160,32,0.15)':'var(--panel)'};
+                       color:${(s.typ_maszyny||''===t.val)?'var(--accent)':'var(--dim)'};
+                       cursor:pointer;font-size:12px;font-weight:600;transition:all .15s">
+                ${t.label}
+              </button>`).join('')}
+          </div>
+          <input type="hidden" id="st-typ" value="${s.typ_maszyny||''}">
+          <div style="font-size:11px;color:var(--dim);margin-top:8px">Typ maszyny określa grupę alternatyw przy uruchamianiu sesji (zakładka Praca).</div>
+        </div>
+        <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-            <input type="checkbox" id="st-zbr-akt" ${zbrAkt?'checked':''} onchange="document.getElementById(\'zbr-stawka-wrap\').style.display=this.checked?\'block\':\'none\'" style="width:18px;height:18px;cursor:pointer">
+            <input type="checkbox" id="st-zbr-akt" ${zbrAkt?'checked':''} onchange="document.getElementById('zbr-stawka-wrap').style.display=this.checked?'block':'none'" style="width:18px;height:18px;cursor:pointer">
             <label for="st-zbr-akt" style="font-size:14px;cursor:pointer">⚙ Aktywuj zbrojenie</label>
           </div>
           <div id="zbr-stawka-wrap" style="display:${zbrAkt?'block':'none'}">
@@ -3506,6 +3561,7 @@ function renderZlecenia() {
       <button class="btn btn-blue" onclick="document.getElementById('pdf-import-zlecenia').click()">📄 Import PDF</button>
       <input type="file" id="pdf-import-zlecenia" accept=".pdf" style="display:none"
         onchange="handlePdfImport(this);loadZlecenia()">
+      <span style="font-size:11px;color:var(--dim);align-self:center;padding:4px 8px;background:rgba(232,160,32,0.08);border:1px dashed var(--border);border-radius:6px;line-height:1.4">📝 <em>PDF z technologią zrobioną w Grafiti</em></span>
     </div>`;
     if (state.importPdfResult) {
       const res = state.importPdfResult;
@@ -4560,6 +4616,30 @@ function renderAdmin() {
           <div class="field"><label>Stawka (zł/h)</label><input id="st-stawka" type="number" step="0.5" value="${s.stawka_godz||0}"></div>
           <div class="field"><label>Opis</label><input id="st-opis" type="text" value="${s.opis||''}"></div>
           <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:700;color:var(--dim);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">🏭 Typ maszyny / operacji</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px" id="st-typ-wrap">
+              ${[
+                {val:'frezarka_cnc',   label:'🔵 Frezarka CNC'},
+                {val:'tokarka_cnc',    label:'🟢 Tokarka CNC'},
+                {val:'frezarka_konw',  label:'🔷 Frezarka konw.'},
+                {val:'tokarka_konw',   label:'🟩 Tokarka konw.'},
+                {val:'szlifierka',     label:'🟡 Szlifierka'},
+                {val:'operacja',       label:'🔧 Operacja'},
+              ].map(t => `
+                <button type="button"
+                  id="st-typ-btn-${t.val}"
+                  onclick="selectTypMaszyny('${t.val}')"
+                  style="padding:6px 12px;border-radius:20px;border:2px solid ${(s.typ_maszyny||''===t.val)?'var(--accent)':'var(--border)'};
+                         background:${(s.typ_maszyny||''===t.val)?'rgba(232,160,32,0.15)':'var(--panel)'};
+                         color:${(s.typ_maszyny||''===t.val)?'var(--accent)':'var(--dim)'};
+                         cursor:pointer;font-size:12px;font-weight:600;transition:all .15s">
+                  ${t.label}
+                </button>`).join('')}
+            </div>
+            <input type="hidden" id="st-typ" value="${s.typ_maszyny||''}">
+            <div style="font-size:11px;color:var(--dim);margin-top:8px">Typ maszyny określa grupę alternatyw przy uruchamianiu sesji (zakładka Praca).</div>
+          </div>
+          <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
               <input type="checkbox" id="st-zbr-akt" ${zbrAkt?'checked':''} onchange="document.getElementById('zbr-stawka-wrap').style.display=this.checked?'block':'none'" style="width:18px;height:18px;cursor:pointer">
               <label for="st-zbr-akt" style="font-size:14px;cursor:pointer">⚙ Aktywuj zbrojenie</label>
@@ -4622,6 +4702,24 @@ function saveUserForm(id) {
   else { data.username = document.getElementById('u-login')?.value?.trim(); data.password = document.getElementById('u-pass')?.value; }
   saveUser(data);
 }
+function selectTypMaszyny(val) {
+  const hidden = document.getElementById('st-typ');
+  if (!hidden) return;
+  const prev = hidden.value;
+  // Toggle: kliknięcie na zaznaczony odznacza
+  const next = (prev === val) ? '' : val;
+  hidden.value = next;
+  const typy = ['frezarka_cnc','tokarka_cnc','frezarka_konw','tokarka_konw','szlifierka','operacja'];
+  typy.forEach(t => {
+    const btn = document.getElementById('st-typ-btn-' + t);
+    if (!btn) return;
+    const active = (next === t);
+    btn.style.borderColor = active ? 'var(--accent)' : 'var(--border)';
+    btn.style.background = active ? 'rgba(232,160,32,0.15)' : 'var(--panel)';
+    btn.style.color = active ? 'var(--accent)' : 'var(--dim)';
+  });
+}
+
 function saveStawkaForm(id) {
   const zbrAkt = document.getElementById('st-zbr-akt')?.checked ? 1 : 0;
   const data = {
@@ -4630,6 +4728,7 @@ function saveStawkaForm(id) {
     opis: document.getElementById('st-opis')?.value||'',
     zbrojenie_aktywne: zbrAkt,
     zbrojenie_stawka_godz: zbrAkt ? (parseFloat(document.getElementById('st-zbr-stawka')?.value)||0) : 0,
+    typ_maszyny: document.getElementById('st-typ')?.value || '',
   };
   if (!data.stanowisko) { alert('Podaj nazwę stanowiska'); return; }
   if (id) data.id = id;

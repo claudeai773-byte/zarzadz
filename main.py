@@ -573,11 +573,14 @@ async def import_technologia(file: UploadFile = File(...), force: bool = False):
     nowe_stanowiska = []
 
     with get_db() as conn:
-        existing = conn.execute(
-            "SELECT id FROM zlecenia WHERE numer=?", (parsed["numer"],)
-        ).fetchone()
-        if existing and not force:
-            raise HTTPException(409, f"Zlecenie {parsed['numer']} już istnieje w systemie. Wyślij z parametrem force=true aby utworzyć kolejne.")
+        base_numer = parsed["numer"]
+        numer_do_uzycia = base_numer
+        # Jeśli numer już istnieje, dodaj sufiks :2, :3 itd.
+        suffix = 2
+        while conn.execute("SELECT id FROM zlecenia WHERE numer=?", (numer_do_uzycia,)).fetchone():
+            numer_do_uzycia = f"{base_numer}:{suffix}"
+            suffix += 1
+        parsed["numer"] = numer_do_uzycia
 
         import uuid as _uuid
         qr_zl = "ZL-" + str(_uuid.uuid4())[:8].upper()
@@ -1938,22 +1941,33 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
 
 # ─── Raport zleceń PDF-data ──────────────────────────────────────────────────
 @app.get("/api/raporty/zlecenia", dependencies=[Depends(verify_key)])
-def raport_zlecenia(data_od: str = "", data_do: str = ""):
+def raport_zlecenia(data_od: str = "", data_do: str = "", zlecenie_id: Optional[int] = None):
     if not data_od:
         data_od = (_dt.datetime.utcnow() - _dt.timedelta(days=30)).strftime("%Y-%m-%d")
     if not data_do:
         data_do = _dt.datetime.utcnow().strftime("%Y-%m-%d")
 
     with get_db() as conn:
-        zlecenia = conn.execute("""
-            SELECT z.*,
-                   COUNT(DISTINCT o.id) as op_total,
-                   COALESCE(SUM(o.ilosc_wykonana),0) as sztuki_done
-            FROM zlecenia z
-            LEFT JOIN operacje o ON o.zlecenie_id=z.id
-            WHERE date(z.created_at) BETWEEN ? AND ?
-            GROUP BY z.id ORDER BY z.id DESC
-        """, (data_od, data_do)).fetchall()
+        if zlecenie_id:
+            zlecenia = conn.execute("""
+                SELECT z.*,
+                       COUNT(DISTINCT o.id) as op_total,
+                       COALESCE(SUM(o.ilosc_wykonana),0) as sztuki_done
+                FROM zlecenia z
+                LEFT JOIN operacje o ON o.zlecenie_id=z.id
+                WHERE z.id=?
+                GROUP BY z.id
+            """, (zlecenie_id,)).fetchall()
+        else:
+            zlecenia = conn.execute("""
+                SELECT z.*,
+                       COUNT(DISTINCT o.id) as op_total,
+                       COALESCE(SUM(o.ilosc_wykonana),0) as sztuki_done
+                FROM zlecenia z
+                LEFT JOIN operacje o ON o.zlecenie_id=z.id
+                WHERE date(z.created_at) BETWEEN ? AND ?
+                GROUP BY z.id ORDER BY z.id DESC
+            """, (data_od, data_do)).fetchall()
 
         result = []
         for z in zlecenia:

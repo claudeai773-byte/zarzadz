@@ -1525,7 +1525,7 @@ function renderTopbar() {
         <div style="display:flex;gap:2px" title="Oceń aplikację">
           ${[1,2,3,4,5].map(n => `<span onclick="setFeedbackRating(${n})" style="font-size:18px;cursor:pointer;color:${(state.feedbackRating||0)>=n?'var(--accent)':'var(--border)'}">★</span>`).join('')}
         </div>
-        <button onclick="openFeedbackModal()" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap">💬 Co brakuje?</button>
+        <button onclick="openFeedbackModal()" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap">💬 Czego brakuje?</button>
       </div>
       <div class="user-info">
         <div style="color:var(--text)">${state.user.full_name}</div>
@@ -2519,7 +2519,7 @@ function renderFeedbackModal() {
   <div class="modal-overlay" onclick="if(event.target===this)setState({feedbackModal:false,feedbackMsg:''})">
     <div class="modal">
       <button class="modal-close" onclick="setState({feedbackModal:false,feedbackMsg:''})">×</button>
-      <h3>💬 Co brakuje w aplikacji?</h3>
+      <h3>💬 Czego brakuje w aplikacji?</h3>
       <div style="margin-bottom:14px">
         <div style="font-size:13px;color:var(--dim);margin-bottom:10px">Twoja ocena:</div>
         <div style="display:flex;gap:8px;justify-content:center">

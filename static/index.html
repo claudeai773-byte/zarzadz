@@ -426,6 +426,7 @@ let state = {
   // Feedback / ocena
   feedbackRating: 0,
   feedbackModal: false,
+  feedbackMsg: '',
   adminFeedbacks: null,
 
   // Print modal
@@ -1524,7 +1525,7 @@ function renderTopbar() {
         <div style="display:flex;gap:2px" title="Oceń aplikację">
           ${[1,2,3,4,5].map(n => `<span onclick="setFeedbackRating(${n})" style="font-size:18px;cursor:pointer;color:${(state.feedbackRating||0)>=n?'var(--accent)':'var(--border)'}">★</span>`).join('')}
         </div>
-        <button onclick="openFeedbackModal()" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap">💬 Czego brakuje?</button>
+        <button onclick="openFeedbackModal()" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap">💬 Co brakuje?</button>
       </div>
       <div class="user-info">
         <div style="color:var(--text)">${state.user.full_name}</div>
@@ -2488,7 +2489,7 @@ function openFeedbackModal() {
 async function sendFeedback(fromModal) {
   const ocena = state.feedbackRating;
   if (!ocena) { alert('Wybierz ocenę (1-5 gwiazdek)'); return; }
-  const wiadomosc = fromModal ? (document.getElementById('feedback-msg')?.value || '') : '';
+  const wiadomosc = state.feedbackMsg || '';
   try {
     await post('/api/feedback', {
       user_id: state.user?.id,
@@ -2496,7 +2497,7 @@ async function sendFeedback(fromModal) {
       ocena,
       wiadomosc
     });
-    setState({feedbackModal: false, feedbackRating: 0});
+    setState({feedbackModal: false, feedbackRating: 0, feedbackMsg: ''});
     alert('✅ Dziękujemy za opinię!');
   } catch(e) { alert('Błąd: ' + e.message); }
 }
@@ -2515,19 +2516,21 @@ async function loadAdminFeedbacks() {
 function renderFeedbackModal() {
   if (!state.feedbackModal) return '';
   return `
-  <div class="modal-overlay" onclick="if(event.target===this)setState({feedbackModal:false})">
+  <div class="modal-overlay" onclick="if(event.target===this)setState({feedbackModal:false,feedbackMsg:''})">
     <div class="modal">
-      <button class="modal-close" onclick="setState({feedbackModal:false})">×</button>
+      <button class="modal-close" onclick="setState({feedbackModal:false,feedbackMsg:''})">×</button>
       <h3>💬 Co brakuje w aplikacji?</h3>
       <div style="margin-bottom:14px">
         <div style="font-size:13px;color:var(--dim);margin-bottom:10px">Twoja ocena:</div>
         <div style="display:flex;gap:8px;justify-content:center">
-          ${[1,2,3,4,5].map(n => `<span onclick="setFeedbackRating(${n})" style="font-size:34px;cursor:pointer;color:${(state.feedbackRating||0)>=n?'var(--accent)':'var(--border)'};transition:color .1s">★</span>`).join('')}
+          ${[1,2,3,4,5].map(n => `<span onclick="setState({feedbackRating:${n}})" style="font-size:34px;cursor:pointer;color:${(state.feedbackRating||0)>=n?'var(--accent)':'var(--border)'};transition:color .1s">★</span>`).join('')}
         </div>
       </div>
       <div class="field">
         <label>Wiadomość (opcjonalnie)</label>
-        <textarea id="feedback-msg" placeholder="Opisz czego brakuje lub co można poprawić..." style="min-height:100px"></textarea>
+        <textarea id="feedback-msg" placeholder="Opisz czego brakuje lub co można poprawić..."
+          style="min-height:100px"
+          oninput="setState({feedbackMsg:this.value},true)">${state.feedbackMsg||''}</textarea>
       </div>
       <button class="btn btn-accent" onclick="sendFeedback(true)">📤 Wyślij opinię</button>
     </div>
@@ -3743,9 +3746,6 @@ function renderZlecenia() {
 
   // Modal drukuj kartę
   html += renderPrintModal();
-
-  // Modal feedback
-  html += renderFeedbackModal();
 
   // Modal zlecenie
   if (state.zlecenieModal !== null) {
@@ -5189,6 +5189,7 @@ function renderContent() {
       ${tabContent()}
     </div>
     ${renderBottomNav()}
+    ${renderFeedbackModal()}
     ${renderQRZleceniePickerModal()}
     ${renderEditSesjaModalHtml()}`;
 }

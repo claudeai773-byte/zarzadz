@@ -841,7 +841,22 @@ function renderQRZleceniePickerModal() {
   if (!m) return '';
   const z = m.zlecenie;
   const ops = m.operacje || [];
-  const dostepne = ops.filter(o => o.status !== 'zakonczone' && o.status !== 'anulowane');
+  // Operacje typ='zbrojenie' są obsługiwane jako przycisk przy operacji produkcji
+  const dostepne = ops.filter(o =>
+    o.status !== 'zakonczone' && o.status !== 'anulowane' && o.typ_operacji !== 'zbrojenie'
+  );
+  // Zbuduj mapę: dla każdej op produkcji znajdź odpowiadające zbrojenie (po kolejnosc-1 lub stanowisku)
+  const zbrojeniaMap = {};
+  ops.filter(o => o.typ_operacji === 'zbrojenie').forEach(zbr => {
+    // Przypisz do najbliższej kolejnej operacji produkcji
+    const nastepna = ops
+      .filter(o => o.typ_operacji !== 'zbrojenie' && o.kolejnosc > zbr.kolejnosc)
+      .sort((a,b) => a.kolejnosc - b.kolejnosc)[0];
+    if (nastepna) {
+      if (!zbrojeniaMap[nastepna.id]) zbrojeniaMap[nastepna.id] = [];
+      zbrojeniaMap[nastepna.id].push(zbr);
+    }
+  });
   // Oblicz ile sztuk pozostało do zrobienia
   const iloscTotal = z.ilosc_sztuk || 0;
   const iloscWykonana = ops.reduce((sum, op) => sum + (op.ilosc_wykonana||0), 0);
@@ -877,10 +892,16 @@ function renderQRZleceniePickerModal() {
       const opPozostalo = Math.max(0, iloscTotal - opWykonana);
       const opProg = iloscTotal > 0 ? Math.min(100, Math.round(opWykonana / iloscTotal * 100)) : 0;
       const opZbrMin = op.czas_zbrojenia_min || 0;
+      // Zbrojenia z nowego systemu (osobne operacje typ='zbrojenie') dla tej operacji produkcji
+      const linkedZbrojenia = zbrojeniaMap[op.id] || [];
+      // Sesja zbrojenia może być na op.id lub na zbrojeniu linked
+      const linkedZbrIds = linkedZbrojenia.map(z => z.id);
 
       // Stan sesji dla tej operacji
       const sesjaOp = (state.aktywnesje||[]).find(s => s.operacja_id === op.id && s.typ === 'operacja');
-      const sesjaZbr = (state.aktywnesje||[]).find(s => s.operacja_id === op.id && s.typ === 'zbrojenie');
+      const sesjaZbr = (state.aktywnesje||[]).find(s =>
+        (s.operacja_id === op.id || linkedZbrIds.includes(s.operacja_id)) && s.typ === 'zbrojenie'
+      );
       const czyOpAktywna = !!sesjaOp;
       const czyZbrAktywne = !!sesjaZbr;
 
@@ -905,7 +926,8 @@ function renderQRZleceniePickerModal() {
         </div>`;
 
       // Przyciski akcji - zbrojenie pierwsze jeśli jest i nie zostało wykonane
-      if (opZbrMin > 0) {
+      const hasZbrojenie = opZbrMin > 0 || linkedZbrojenia.length > 0;
+      if (hasZbrojenie) {
         // ── Zbrojenie skonfigurowane: pokaż oba przyciski niezależnie ──────
         // Reguła: albo aktywne zbrojenie ALBO aktywna operacja – nigdy oba naraz
         if (czyZbrAktywne) {
@@ -931,13 +953,15 @@ function renderQRZleceniePickerModal() {
           </div>`;
         } else {
           // Nic nie aktywne → oba przyciski dostępne swobodnie
+          const zbrMin = opZbrMin || (linkedZbrojenia[0]?.czas_zbrojenia_min || 0);
+          const zbrOpId = linkedZbrojenia.length > 0 ? linkedZbrojenia[0].id : op.id;
           const zbrLabel = zbrWykonane
-            ? `⚙ Zbrojenie ponownie (${opZbrMin} min)`
-            : `⚙ Uruchom zbrojenie (${opZbrMin} min)`;
+            ? `⚙ Zbrojenie ponownie (${zbrMin} min)`
+            : `⚙ Uruchom zbrojenie (${zbrMin} min)`;
           html += `
           <div style="display:flex;gap:8px;flex-direction:column">
             <button class="btn btn-green" onclick="pickOperacjaFromQR(${op.id})">▶ Uruchom operację</button>
-            <button class="btn btn-accent" style="background:var(--orange);color:#1a1f2e" onclick="startZbrojenie(${op.id})">${zbrLabel}</button>
+            <button class="btn btn-accent" style="background:var(--orange);color:#1a1f2e" onclick="startZbrojenie(${zbrOpId})">${zbrLabel}</button>
           </div>`;
         }
       } else {
@@ -3924,7 +3948,23 @@ function renderPrintModal() {
               const rows = [];
               let lp = 0;
               ops.forEach((op) => {
+                // Dla starych operacji (typ != 'zbrojenie') z czas_zbrojenia_min > 0
+                // wstaw sztuczny wiersz zbrojenia przed operacją (stare zlecenia)
                 const isZbrojenie = op.typ_operacji === 'zbrojenie';
+                const hasLegacyZbr = !isZbrojenie && (op.czas_zbrojenia_min > 0);
+                if (hasLegacyZbr) {
+                  lp++;
+                  rows.push(`<tr style="background:#fff8e8;border-left:3px solid #e8a020">
+                    <td style="padding:7px 8px;border:1px solid #ddd;font-weight:700;color:#e8a020">${op.kolejnosc}z</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd">
+                      <div style="font-weight:700;color:#c07000">⚙ ZBROJENIE – ${op.nazwa}</div>
+                    </td>
+                    <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;text-align:center;font-weight:700;color:#c07000">${op.czas_zbrojenia_min} min</td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;width:60px"></td>
+                    <td style="padding:7px 8px;border:1px solid #ddd;width:30px"></td>
+                  </tr>`);
+                }
                 if (isZbrojenie) {
                   lp++;
                   rows.push(`<tr style="background:#fff8e8;border-left:3px solid #e8a020">
@@ -3946,7 +3986,6 @@ function renderPrintModal() {
                     <td style="padding:7px 8px;border:1px solid #ddd">
                       <div style="font-weight:600">${op.nazwa}</div>
                       ${op.opis_czynnosci ? `<div style="font-size:11px;color:#555;margin-top:4px;line-height:1.7">${op.opis_czynnosci.split(/\n|(?<=;)\s*(?=[A-ZŚŹŻĆŃÓĄĘ])/g).map(l=>l.trim()).filter(Boolean).map(l=>`<div style="display:flex;gap:5px"><span style="color:#999;flex-shrink:0">•</span><span>${l}</span></div>`).join('')}</div>` : ''}
-                      ${op.czas_zbrojenia_min > 0 ? `<div style="font-size:11px;color:#c07000;margin-top:3px">⚙ zbrojenie: ${op.czas_zbrojenia_min} min</div>` : ''}
                     </td>
                     <td style="padding:7px 8px;border:1px solid #ddd">${op.stanowisko||'—'}</td>
                     <td style="padding:7px 8px;border:1px solid #ddd;text-align:center">${op.czas_norma||'—'} min</td>

@@ -1091,7 +1091,8 @@ async function pickOperacjaFromQR(opId) {
       const stawki = await get('/api/stawki');
       const lista = stawki
         .map(s => s.stanowisko)
-        .filter(s => _kategoriaMaszyny(s) === kat && s !== op.stanowisko);
+        .filter(s => _kategoriaMaszyny(s) === kat && s !== op.stanowisko
+                  && !s.toLowerCase().includes('zbrojenie'));
       setState({
         qrZleceniePickerModal: null,
         zmianaMaszynyModal: {
@@ -2318,6 +2319,16 @@ function getTodayMinus(days) {
 }
 
 // ─── Raport PDF – Zlecenia ────────────────────────────────────────────────────
+async function generateRaportSingleZlecenie(zid, numer) {
+  try {
+    const data = await get('/api/raporty/zlecenia?zlecenie_id=' + zid);
+    const od = '', doDt = '';
+    printRaportZlecenia(data, od, doDt, numer);
+  } catch(e) {
+    alert('Błąd generowania raportu: ' + e.message);
+  }
+}
+
 async function generateRaportZleceniaPDF() {
   const od = document.getElementById('raport-od')?.value || getTodayMinus(30);
   const do_ = document.getElementById('raport-do')?.value || getToday();
@@ -2343,9 +2354,10 @@ function fmtHMS(totalMin) {
   return mm + ':' + ss;
 }
 
-function printRaportZlecenia(data, od, doDt) {
+function printRaportZlecenia(data, od, doDt, pojedynczeNumer) {
   const zl = data.zlecenia || [];
   const totalWartosc = zl.reduce((a,z)=>a+(z.wartosc||0),0);
+  const isSingle = !!pojedynczeNumer;
   const totalKoszt   = zl.reduce((a,z)=>a+(z.koszt_total||0),0);
   const totalZysk    = zl.reduce((a,z)=>a+(z.zysk||0),0);
 
@@ -3333,6 +3345,7 @@ function renderZlecenia() {
           <button class="btn-sm btn-blue" onclick="openEditZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">✏ Edytuj</button>
           <button class="btn-sm btn-accent" onclick="openOperacje(${JSON.stringify(z).replace(/"/g,'&quot;')})">🔧 Operacje</button>
           <button class="btn-sm btn-green" onclick="loadKoszty(${z.id})">💰 Koszty</button>
+          <button class="btn-sm" style="background:#1a6b3a;color:#fff" onclick="generateRaportSingleZlecenie(${z.id}, '${(z.numer||"").replace(/'/g,"\'")}')">📊 Raport</button>
 	  <button class="btn-sm btn-accent" style="background:var(--orange,#e67e00);color:#1a1f2e" onclick="openStawkiZleceniaModal(${z.id}, '${(z.numer||'').replace(/'/g,"\\'")}', '${(z.nazwa||'').replace(/'/g,"\\'")}')">⚙ Stawki</button>
           <select style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px"
                   onchange="changeZlecenieStatus(${z.id},this.value);this.value='${z.status}'">

@@ -458,43 +458,72 @@ def zapisz_wynik_kj(oid: int, req: KJRequest):
         return {"ok": True, "wynik": req.wynik}
 
 def _parse_bom_from_pdf_text(text: str) -> list:
-    """Wydobywa wykaz materiałów z karty technologicznej PDF."""
+    """Wydobywa wykaz materialow z karty technologicznej PDF.
+
+    pdfminer wyciaga kazde pole tabeli w osobnej linii, np.:
+        78111 P19518
+        Ceownik UPE400x4390 wg rys. 34327631 Poz. 1
+         1,00
+        szt
+
+    Parser obsluguje oba formaty: jedna linie i wiele linii.
+    """
     import re
-    # Szukaj nagłówka tabeli materiałów
+
+    # Szukaj naglowka tabeli materialow
     bom_start = re.search(r'Oznaczenie\s+Kod\s+Indeks.*?JM', text, re.IGNORECASE | re.DOTALL)
     if not bom_start:
         return []
 
     bom_text = text[bom_start.end():]
-    # Koniec tabeli = pierwsza następna operacja (np. "020 \nOT-" lub "010 \nOT-")
-    bom_end = re.search(r'\n\d{3}\s*\n\s*OT-', bom_text)
+
+    # Koniec tabeli BOM = nastepna operacja technologiczna
+    bom_end = re.search(r'\n\s*\d{3}\s*\n\s*OT-', bom_text)
     if bom_end:
         bom_text = bom_text[:bom_end.start()]
 
     materialy = []
-    # Wiersz: oznaczenie(cyfry) kod(P+cyfry) opis(tekst) ilosc(cyfry,cyfry) jm(litery)
+
+    # Proba 1: format wieloliniowy (pdfminer) - kazde pole w osobnej linii
+    blok_pat = re.compile(
+        r'^\s*(\d{4,7})\s+(P\d+)\s*$'
+        r'\s*\n\s*(.+?)\s*$'
+        r'\s*\n\s*(\d+[,\.]\d+)\s*$'
+        r'\s*\n\s*([a-zA-Zkg/sztn]{1,6})\s*$',
+        re.MULTILINE
+    )
+    for m in blok_pat.finditer(bom_text):
+        oznaczenie = m.group(1).strip()
+        kod        = m.group(2).strip()
+        opis       = m.group(3).strip()
+        opis = re.sub(r'\s+Poz\.\s*\d+\s*$', '', opis, flags=re.IGNORECASE).strip()
+        try:
+            ilosc = float(m.group(4).replace(',', '.'))
+        except Exception:
+            ilosc = 1.0
+        jm = m.group(5).strip()
+        materialy.append({"oznaczenie": oznaczenie, "kod": kod, "opis": opis, "ilosc": ilosc, "jm": jm})
+
+    if materialy:
+        return materialy
+
+    # Proba 2: format jednoliniowy (pdfplumber / inne)
     row_pat = re.compile(
-        r'(\d{4,7})\s+(P\d+)\s+(.+?)\s+(\d+[,\.]\d+)\s+([a-zA-Zkg/szłnm]{1,6})\s*$',
+        r'(\d{4,7})\s+(P\d+)\s+(.+?)\s+(\d+[,\.]\d+)\s+([a-zA-Zkg/sztn]{1,6})\s*$',
         re.MULTILINE
     )
     for m in row_pat.finditer(bom_text):
         oznaczenie = m.group(1).strip()
         kod        = m.group(2).strip()
         opis       = m.group(3).strip()
-        # Usuń końcowe "Poz. N" z opisu jeśli jest
         opis = re.sub(r'\s+Poz\.\s*\d+\s*$', '', opis, flags=re.IGNORECASE).strip()
         try:
             ilosc = float(m.group(4).replace(',', '.'))
-        except:
+        except Exception:
             ilosc = 1.0
         jm = m.group(5).strip()
-        materialy.append({
-            "oznaczenie": oznaczenie,
-            "kod": kod,
-            "opis": opis,
-            "ilosc": ilosc,
-            "jm": jm,
-        })
+        materialy.append({"oznaczenie": oznaczenie, "kod": kod, "opis": opis, "ilosc": ilosc, "jm": jm})
+
     return materialy
 
 

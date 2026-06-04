@@ -3919,17 +3919,91 @@ function renderZlecenia() {
       <button class="btn btn-accent" onclick="setState({zlecenieModal:{}})">+ Nowe zlecenie</button>
       <button class="btn btn-blue" onclick="document.getElementById('pdf-import-zlecenia').click()">📄 Import PDF</button>
       <input type="file" id="pdf-import-zlecenia" accept=".pdf" style="display:none"
-        onchange="handlePdfImport(this);loadZlecenia()">
+        onchange="handlePdfParse(this)">
       <span style="font-size:11px;color:var(--dim);align-self:center;padding:4px 8px;background:rgba(232,160,32,0.08);border:1px dashed var(--border);border-radius:6px;line-height:1.4">📝 <em>PDF z technologią zrobioną w Grafiti</em></span>
     </div>`;
+    // ── BOM Preview modal (po parsowaniu z zakładki Zlecenia) ──────────────
+    if (state.importPdfPreview && !state.importPdfResult) {
+      const prev = state.importPdfPreview;
+      const bom  = state.importPdfBom || [];
+      const bomIncluded = bom.filter(b => b.included !== false).length;
+      html += `<div class="modal-overlay" style="z-index:500;align-items:center">
+        <div style="background:var(--panel);border-radius:16px;width:100%;max-width:600px;max-height:88vh;overflow-y:auto;margin:20px;padding:20px 16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div style="font-size:15px;font-weight:700">📋 Podgląd importu</div>
+            <button class="modal-close" onclick="setState({importPdfPreview:null,importPdfBom:[]})">✕</button>
+          </div>
+          <div class="card" style="margin-bottom:10px;padding:12px 14px">
+            <div style="font-size:13px"><b>${prev.numer}</b> – ${prev.nazwa}</div>
+            <div style="font-size:12px;color:var(--dim);margin-top:4px">${prev.operacje.length} operacji</div>
+          </div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px">Operacje</div>
+          <div style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px">
+            ${prev.operacje.map(o => `
+              <div style="display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;background:var(--panel)">
+                <span><b>${String(o.kolejnosc).padStart(3,'0')}</b> ${o.nazwa}</span>
+                <span style="color:var(--dim);white-space:nowrap;margin-left:8px">${o.stanowisko}${o.czas_norma > 0 ? ' · ' + o.czas_norma + ' min' : ''}</span>
+              </div>`).join('')}
+          </div>
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px">
+            📦 Wykaz materiałów BOM
+            ${bom.length ? `<span style="color:var(--green);margin-left:6px">${bomIncluded} / ${bom.length} zaznaczonych</span>` : ''}
+          </div>
+          ${!bom.length
+            ? `<div style="font-size:12px;color:var(--dim);background:var(--entry);border-radius:8px;padding:12px;margin-bottom:14px;text-align:center">⚠ Nie wykryto wykazu materiałów w tym PDF.<br><span style="font-size:11px">Możesz dodać materiały ręcznie po imporcie.</span></div>`
+            : `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:10px;overflow:hidden">
+                <table style="width:100%;border-collapse:collapse;font-size:12px">
+                  <thead><tr style="background:var(--panel);border-bottom:1px solid var(--border)">
+                    <th style="padding:6px 8px;width:28px"></th>
+                    <th style="padding:6px 8px;text-align:left">Materiał</th>
+                    <th style="padding:6px 8px;text-align:right">Ilość</th>
+                    <th style="padding:6px 8px;text-align:center">Status</th>
+                  </tr></thead><tbody>
+                  ${bom.map((m, idx) => {
+                    const included = m.included !== false;
+                    const dostepne = m.do_dyspozycji || 0;
+                    const brakuje = m.ilosc - dostepne;
+                    let statusHtml = m.w_bazie
+                      ? (brakuje > 0
+                        ? `<span style="color:var(--orange);font-size:10px;font-weight:700">⚠ brak ${brakuje.toFixed(2)} ${m.jm}</span>`
+                        : `<span style="color:var(--green);font-size:10px;font-weight:700">✓ dostępny</span>`)
+                      : `<span style="color:var(--blue);font-size:10px;font-weight:700">+ nowy materiał</span>`;
+                    return `<tr style="border-bottom:1px solid var(--border);opacity:${included ? 1 : 0.4}">
+                      <td style="padding:6px 8px;text-align:center"><input type="checkbox" ${included ? 'checked' : ''} onchange="toggleBomItem(${idx},this.checked)"></td>
+                      <td style="padding:6px 8px">
+                        <div style="font-weight:600">${m.opis_bazy || m.opis}</div>
+                        <div style="font-size:10px;color:var(--dim)">${m.indeks_bazy || m.kod}${m.w_bazie ? ' · stan: ' + dostepne.toFixed(3) + ' ' + m.jm : ' · zostanie dodany do bazy'}</div>
+                      </td>
+                      <td style="padding:6px 8px;text-align:right;white-space:nowrap"><b>${m.ilosc}</b> ${m.jm}</td>
+                      <td style="padding:6px 8px;text-align:center">${statusHtml}</td>
+                    </tr>`;
+                  }).join('')}
+                  </tbody>
+                </table>
+              </div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:14px">✏ Niebieskie pozycje (<b>+ nowy materiał</b>) zostaną automatycznie dodane do bazy materiałów ze stanem 0.</div>`
+          }
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-accent" style="flex:1" onclick="confirmPdfImport()">✅ Importuj technologię${bomIncluded > 0 ? ' + BOM (' + bomIncluded + ' poz.)' : ''}</button>
+            <button class="btn-outline" onclick="setState({importPdfPreview:null,importPdfBom:[]})">✕ Anuluj</button>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    if (state.importPdfParsing) {
+      html += `<div style="background:rgba(232,160,32,0.08);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:13px;text-align:center">⏳ Analizuję PDF...</div>`;
+    }
+
     if (state.importPdfResult) {
       const res = state.importPdfResult;
       html += `<div style="background:${res.errors&&res.errors.length?'rgba(231,76,60,0.06)':'rgba(39,174,96,0.06)'};border:1px solid ${res.errors&&res.errors.length?'var(--red)':'var(--green)'};border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:13px">
         ${res.errors&&res.errors.length ? '⚠ Import z ostrzeżeniami' : '✅ Import zakończony'}:
         <b>${res.numer}</b> – ${res.nazwa}, <b>${res.operacje_created}</b> operacji
+        · BOM: <b>${res.bom_added || 0}</b> poz.${res.bom_new_materialy > 0 ? ' (' + res.bom_new_materialy + ' nowych)' : ''}
         ${res.nowe_stanowiska&&res.nowe_stanowiska.length ? `· nowe stanowiska: <b>${res.nowe_stanowiska.join(', ')}</b>` : ''}
         ${res.errors&&res.errors.length ? `· <span style="color:var(--red)">${res.errors.join('; ')}</span>` : ''}
-        <button class="btn-sm" style="margin-left:10px;background:transparent;border:none;color:var(--dim);cursor:pointer" onclick="setState({importPdfResult:null})">✕</button>
+        <button class="btn-sm" style="margin-left:10px;background:transparent;border:none;color:var(--dim);cursor:pointer" onclick="setState({importPdfResult:null});loadZlecenia()">✕</button>
       </div>`;
     }
   }
@@ -5391,6 +5465,7 @@ async function _doPdfImport(file, bomItems, force) {
     if (!response.ok) throw new Error(data.detail || 'Błąd importu');
     setState({importPdfResult: data, importPdfPreview: null});
     _lastPdfFile = null;
+    if (state.activeTab === 'zlecenia') loadZlecenia();
   } catch(e) {
     alert('Błąd importu PDF: ' + e.message);
   }

@@ -2635,27 +2635,52 @@ function renderBomSection(zlecenieId) {
 
   // Istniejące pozycje
   if (pozycje.length) {
+    // Grupowanie po gatunku stali
+    const byGrade = {};
+    for (const p of pozycje) {
+      const g = p.gatunek_stali || 'S235';
+      byGrade[g] = (byGrade[g] || 0) + (p.masa_kg || 0);
+    }
+    const totalKg = Object.values(byGrade).reduce((a,b)=>a+b,0);
+    if (totalKg > 0) {
+      html += `<div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:10px;padding:7px 10px;background:rgba(39,174,96,0.06);border:1px solid rgba(39,174,96,0.2);border-radius:8px">
+        <span style="font-size:11px;color:var(--dim);font-weight:700;margin-right:2px">⚖ Zapotrzebowanie:</span>`;
+      for (const [g, kg] of Object.entries(byGrade)) {
+        html += `<span style="background:rgba(232,160,32,0.15);border:1px solid rgba(232,160,32,0.3);border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700;color:var(--accent)">${g}: ${kg.toFixed(1)} kg</span>`;
+      }
+      html += `<span style="margin-left:auto;font-size:12px;font-weight:700;color:var(--green)">Σ ${totalKg.toFixed(1)} kg</span></div>`;
+    }
+
     html += `<div style="margin-bottom:12px">
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <thead><tr style="border-bottom:1px solid var(--border)">
           <th style="text-align:left;padding:4px 6px;color:var(--dim)">Materiał</th>
-          <th style="text-align:right;padding:4px 6px;color:var(--dim)">Potrzeba</th>
+          <th style="text-align:right;padding:4px 6px;color:var(--dim)">Masa</th>
           <th style="text-align:right;padding:4px 6px;color:var(--dim)">Dostępne</th>
           <th style="text-align:right;padding:4px 6px;color:var(--dim)">Status</th>
           <th style="padding:4px 2px"></th>
         </tr></thead><tbody>`;
     for (const p of pozycje) {
       const dostepne = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+      const masaKg = p.masa_kg || 0;
+      const masaStr = masaKg > 0 ? `<b>${masaKg.toFixed(2)}</b> kg` : `<b>${p.ilosc}</b> ${p.jm}`;
+      const dostepneStr = masaKg > 0 ? `${dostepne.toFixed(1)} ${p.jm}` : `${dostepne.toFixed(3)} ${p.jm}`;
       const brakuje = p.ilosc - dostepne;
       const statusColor = brakuje > 0 ? 'var(--red)' : 'var(--green)';
       const statusLabel = brakuje > 0 ? `⚠ brak ${brakuje.toFixed(2)} ${p.jm}` : '✓ dostępny';
+      const subParts = [
+        p.indeks,
+        p.gatunek_stali ? `<span style="color:var(--accent)">${p.gatunek_stali}</span>` : '',
+        p.wymiary_str ? `<span style="color:var(--dim)">${p.wymiary_str}</span>` : '',
+        p.uwagi ? `<span style="color:var(--dim)">${p.uwagi}</span>` : '',
+      ].filter(Boolean).join(' · ');
       html += `<tr style="border-bottom:1px solid var(--border)">
         <td style="padding:5px 6px">
           <div style="font-weight:600">${p.opis}</div>
-          <div style="color:var(--dim);font-size:10px">${p.indeks}${p.uwagi ? ' · '+p.uwagi : ''}</div>
+          <div style="color:var(--dim);font-size:10px">${subParts}</div>
         </td>
-        <td style="text-align:right;padding:5px 6px;white-space:nowrap"><b>${p.ilosc}</b> ${p.jm}</td>
-        <td style="text-align:right;padding:5px 6px;white-space:nowrap;color:var(--dim)">${dostepne.toFixed(3)} ${p.jm}</td>
+        <td style="text-align:right;padding:5px 6px;white-space:nowrap">${masaStr}</td>
+        <td style="text-align:right;padding:5px 6px;white-space:nowrap;color:var(--dim)">${dostepneStr}</td>
         <td style="text-align:right;padding:5px 6px;white-space:nowrap;color:${statusColor};font-size:10px;font-weight:700">${statusLabel}</td>
         <td style="padding:5px 2px">
           <button onclick="bomDeletePozycja(${p.id},${zlecenieId})"

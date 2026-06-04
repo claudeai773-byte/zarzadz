@@ -457,6 +457,88 @@ def zapisz_wynik_kj(oid: int, req: KJRequest):
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
         return {"ok": True, "wynik": req.wynik}
 
+def _detect_steel_grade(opis: str) -> str:
+    """Rozpoznaje gatunek stali/materiału z opisu pozycji BOM."""
+    import re
+    opis_up = opis.upper()
+    # Profile stalowe (stal konstrukcyjna S235/S355)
+    if re.search(r'\bUPE\d+|\bIPE\d+|\bHEB\d+|\bHEA\d+|\bIPN\d+|\bUPN\d+|\bCEOWNIK\b|\bDWUTE\b|\bKĄTOWNIK\b|\bPROFIL\b', opis_up):
+        if re.search(r'S355|S 355', opis_up):
+            return 'S355'
+        return 'S235'  # domyślny dla profili
+    # Gatunek wprost w opisie
+    for grade in ['S355MC','S355J2','S355JR','S355','S235JR','S235','S275','S420','S460',
+                  'ST52','ST37','1.4301','1.4307','304','316L','P265GH','P355GH']:
+        if grade.upper() in opis_up:
+            return grade
+    # Pręty kwadratowe / okrągłe / płaskowniki / blachy → domyślnie S235
+    if re.search(r'\bPRĘT\b|\bPŁASKOWNIK\b|\bBLACHA\b|\bRURA\b', opis_up):
+        return 'S235'
+    return 'S235'  # fallback
+
+def _calc_mass_kg(opis: str, ilosc: float) -> tuple:
+    """
+    Oblicza masę w kg na podstawie opisu i ilości sztuk.
+    Zwraca (masa_kg: float, wymiary_str: str, gestosc: float).
+    Obsługuje: Blacha AxBxC, Pręt kw. AxAxL, Ceownik UPExL, Płaskownik AxBxL.
+    Uwaga: używa re.IGNORECASE zamiast .upper(), bo .upper() zamienia 'x'→'X'
+    co psuje regex. Polskie znaki obsługiwane przez '.' w nazwie.
+    """
+    import re, math
+    gestosc = 7.85  # g/cm³ → 7850 kg/m³; wzór: mm³/1e6 * 7850 = kg
+
+    # Ceownik UPExxx L (np. "Ceownik UPE400x4390") – masa liniowa wg EN 10279
+    UPE_MASY = {80:8.13,100:10.6,120:13.4,140:16.0,160:18.8,180:22.4,
+                200:26.2,220:29.4,240:33.2,270:36.1,300:46.5,360:57.0,400:65.5}
+    m = re.search(r'UPE\s*(\d+)[xX](\d+)', opis, re.IGNORECASE)
+    if m:
+        h, L_mm = int(m.group(1)), float(m.group(2))
+        ml = UPE_MASY.get(h, h * 0.165)
+        return round(ml * L_mm / 1000 * ilosc, 2), f"UPE{h} L={L_mm:.0f} mm", gestosc
+
+    # IPE / HEB / HEA – masy liniowe [kg/m]
+    PROFILE_MASY = {
+        'IPE': {80:6.0,100:8.1,120:10.4,140:12.9,160:15.8,180:18.8,200:22.4,
+                220:26.2,240:30.7,270:36.1,300:42.2,330:49.1,360:57.1,400:66.3},
+        'HEB': {100:20.4,120:26.7,140:33.7,160:42.6,180:51.2,200:61.3,220:71.5,
+                240:83.2,260:93.0,280:103.0,300:117.0,320:127.0,340:134.0,360:142.0},
+        'HEA': {100:16.7,120:19.9,140:24.7,160:30.4,180:35.5,200:42.3,220:50.5,
+                240:60.3,260:68.2,280:76.4,300:88.3,320:97.6,340:105.0,360:112.0},
+    }
+    for prof, masy in PROFILE_MASY.items():
+        m = re.search(prof + r'\s*(\d+)[xX](\d+)', opis, re.IGNORECASE)
+        if m:
+            h, L_mm = int(m.group(1)), float(m.group(2))
+            ml = masy.get(h, h * 0.18)
+            return round(ml * L_mm / 1000 * ilosc, 2), f"{prof}{h} L={L_mm:.0f} mm", gestosc
+
+    # Płaskownik AxBxL (np. "Płaskownik 60x30x3500") – '.' pasuje do 'ł'
+    m = re.search(r'P.askownik\s+(\d+)[xX](\d+)[xX](\d+)', opis, re.IGNORECASE)
+    if m:
+        a, b, L = float(m.group(1)), float(m.group(2)), float(m.group(3))
+        return round(a * b * L * 7.85e-6 * ilosc, 2), f"{a:.0f}×{b:.0f}×{L:.0f} mm", gestosc
+
+    # Blacha t x B x L (np. "Blacha 40x405x4390")
+    m = re.search(r'Blacha\s+(\d+)[xX](\d+)[xX](\d+)', opis, re.IGNORECASE)
+    if m:
+        t, b, L = float(m.group(1)), float(m.group(2)), float(m.group(3))
+        return round(t * b * L * 7.85e-6 * ilosc, 2), f"{t:.0f}×{b:.0f}×{L:.0f} mm", gestosc
+
+    # Pręt kwadratowy AxAxL (np. "Pręt kw. 15x15x200") – '.' pasuje do 'ę'
+    m = re.search(r'Pr.t\s+kw[a-z.]*\s+(\d+)[xX](\d+)[xX](\d+)', opis, re.IGNORECASE)
+    if m:
+        a, b, L = float(m.group(1)), float(m.group(2)), float(m.group(3))
+        return round(a * b * L * 7.85e-6 * ilosc, 2), f"□{a:.0f}×{L:.0f} mm", gestosc
+
+    # Pręt okrągły fi D x L (np. "Pręt fi 20x1000" lub "Pręt Ø20x1000")
+    m = re.search(r'Pr.t\s+(?:fi|f|Ø|O)?\s*(\d+(?:[.,]\d+)?)[xX](\d+)', opis, re.IGNORECASE)
+    if m:
+        d, L = float(m.group(1).replace(',','.')), float(m.group(2))
+        return round(math.pi * (d/2)**2 * L * 7.85e-6 * ilosc, 2), f"⌀{d}×{L:.0f} mm", gestosc
+
+    return 0.0, "", gestosc
+
+
 def _parse_bom_from_pdf_text(text: str) -> list:
     """Wydobywa wykaz materialow z karty technologicznej PDF.
 
@@ -464,6 +546,7 @@ def _parse_bom_from_pdf_text(text: str) -> list:
     PRZED naglowkiem 'Oznaczenie', a opisy/kody PO nim.
     Format bloku ilosci: "Ilosc jedn.\n\n  1,00\n\nJM\n\nszt\n\n  9,00\n\nszt\n\n..."
     Format bloku opisow: "78111 P19518\n\nCeownik UPE400...\n\n78112 P19519\n\n..."
+    Zwraca pozycje wzbogacone o: masa_kg, gatunek_stali, wymiary_str.
     """
     import re
 
@@ -514,7 +597,13 @@ def _parse_bom_from_pdf_text(text: str) -> list:
         opis = re.sub(r'\s+Poz\.\s*\d+\s*$', '', opis, flags=re.IGNORECASE).strip()
         ilosc = ilosci[idx] if idx < len(ilosci) else 1.0
         jm    = jm_list[idx] if idx < len(jm_list) else 'szt'
-        materialy.append({"oznaczenie": oznaczenie, "kod": kod, "opis": opis, "ilosc": ilosc, "jm": jm})
+        masa_kg, wymiary_str, _ = _calc_mass_kg(opis, ilosc)
+        gatunek = _detect_steel_grade(opis)
+        materialy.append({
+            "oznaczenie": oznaczenie, "kod": kod, "opis": opis,
+            "ilosc": ilosc, "jm": jm,
+            "masa_kg": masa_kg, "wymiary_str": wymiary_str, "gatunek_stali": gatunek,
+        })
 
     # Fallback: format jednoliniowy (inne extractory)
     if not materialy:
@@ -529,12 +618,15 @@ def _parse_bom_from_pdf_text(text: str) -> list:
                 ilosc = float(m.group(4).replace(',', '.'))
             except Exception:
                 ilosc = 1.0
+            masa_kg, wymiary_str, _ = _calc_mass_kg(opis, ilosc)
+            gatunek = _detect_steel_grade(opis)
             materialy.append({
                 "oznaczenie": m.group(1).strip(),
                 "kod":        m.group(2).strip(),
                 "opis":       opis,
                 "ilosc":      ilosc,
                 "jm":         m.group(5).strip(),
+                "masa_kg":    masa_kg, "wymiary_str": wymiary_str, "gatunek_stali": gatunek,
             })
 
     return materialy

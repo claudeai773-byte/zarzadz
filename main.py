@@ -923,9 +923,14 @@ async def import_technologia(file: UploadFile = File(...), force: bool = False, 
 
                     # Dodaj do BOM (ignoruj duplikaty)
                     try:
+                        _masa_kg = float(item.get("masa_kg") or 0)
+                        _gatunek = item.get("gatunek_stali") or _detect_steel_grade(opis)
+                        _wymiary = item.get("wymiary_str") or ""
+                        if not _masa_kg:
+                            _masa_kg, _wymiary, _ = _calc_mass_kg(opis, ilosc)
                         conn.execute(
-                            "INSERT OR IGNORE INTO bom_pozycje (zlecenie_id, material_id, ilosc, uwagi, created_at) VALUES (?,?,?,?,?)",
-                            (zlecenie_id, mat_id, ilosc, item.get("uwagi",""), _now())
+                            "INSERT OR IGNORE INTO bom_pozycje (zlecenie_id, material_id, ilosc, uwagi, masa_kg, gatunek_stali, wymiary_str, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                            (zlecenie_id, mat_id, ilosc, item.get("uwagi",""), _masa_kg, _gatunek, _wymiary, _now())
                         )
                         bom_added += 1
                     except Exception as e:
@@ -2525,9 +2530,18 @@ def init_db_on_start():
         ilosc REAL NOT NULL DEFAULT 1,
         ilosc_wykonana REAL DEFAULT 0,
         uwagi TEXT DEFAULT '',
+        masa_kg REAL DEFAULT 0,
+        gatunek_stali TEXT DEFAULT '',
+        wymiary_str TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id) ON DELETE CASCADE,
         FOREIGN KEY (material_id) REFERENCES materialy(id))""")
+    # Migracja: dodaj kolumny jeśli nie istnieją (dla istniejących baz)
+    for _col, _def in [("masa_kg","REAL DEFAULT 0"),("gatunek_stali","TEXT DEFAULT ''"),("wymiary_str","TEXT DEFAULT ''")]:
+        try:
+            c.execute(f"ALTER TABLE bom_pozycje ADD COLUMN {_col} {_def}")
+        except Exception:
+            pass
 
     # ➤ Migracja: uzupełnij stawki_zlecen dla istniejących zleceń
     existing_zl = c.execute("SELECT id FROM zlecenia").fetchall()
@@ -3012,13 +3026,25 @@ def get_bom(zid: int):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT bp.id, bp.zlecenie_id, bp.material_id, bp.ilosc, bp.ilosc_wykonana, bp.uwagi, bp.created_at,
+                   bp.masa_kg, bp.gatunek_stali, bp.wymiary_str,
                    m.indeks, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.rezerwacja, m.kod
             FROM bom_pozycje bp
             JOIN materialy m ON m.id = bp.material_id
             WHERE bp.zlecenie_id = ?
             ORDER BY bp.id
         """, (zid,)).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            row = dict(r)
+            # Dla starych pozycji bez masa_kg – oblicz na bieżąco z opisu
+            if not row.get("masa_kg"):
+                masa_kg, wymiary_str, _ = _calc_mass_kg(row["opis"], row["ilosc"])
+                gatunek = _detect_steel_grade(row["opis"])
+                row["masa_kg"] = masa_kg
+                row["gatunek_stali"] = gatunek
+                row["wymiary_str"] = wymiary_str
+            result.append(row)
+        return result
 
 @app.post("/api/zlecenia/{zid}/bom", dependencies=[Depends(verify_key)])
 def add_bom(zid: int, b: BomPozycjaIn):

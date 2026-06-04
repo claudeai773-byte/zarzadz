@@ -2630,9 +2630,6 @@ def get_oblozenie():
             })
         return result
 
-            })
-        return result
-
 # ─── Materiały – import i CRUD ────────────────────────────────────────────────
 import openpyxl as _openpyxl
 

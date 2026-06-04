@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
 import sqlite3, os, json, hashlib, time, io, datetime as _dt, traceback, urllib.request, urllib.error
+import openpyxl as _openpyxl
 from contextlib import contextmanager
 
 def _now():
@@ -2631,7 +2632,6 @@ def get_oblozenie():
         return result
 
 # ─── Materiały – import i CRUD ────────────────────────────────────────────────
-import openpyxl as _openpyxl
 
 @app.post("/api/materialy/import", dependencies=[Depends(verify_key)])
 async def import_materialy(file: UploadFile = File(...)):

@@ -460,69 +460,82 @@ def zapisz_wynik_kj(oid: int, req: KJRequest):
 def _parse_bom_from_pdf_text(text: str) -> list:
     """Wydobywa wykaz materialow z karty technologicznej PDF.
 
-    pdfminer wyciaga kazde pole tabeli w osobnej linii, np.:
-        78111 P19518
-        Ceownik UPE400x4390 wg rys. 34327631 Poz. 1
-         1,00
-        szt
-
-    Parser obsluguje oba formaty: jedna linie i wiele linii.
+    pdfminer czyta kolumny PDF rozdzielnie - ilosci i JM trafiaja
+    PRZED naglowkiem 'Oznaczenie', a opisy/kody PO nim.
+    Format bloku ilosci: "Ilosc jedn.\n\n  1,00\n\nJM\n\nszt\n\n  9,00\n\nszt\n\n..."
+    Format bloku opisow: "78111 P19518\n\nCeownik UPE400...\n\n78112 P19519\n\n..."
     """
     import re
 
-    # Szukaj naglowka tabeli materialow
-    bom_start = re.search(r'Oznaczenie\s+Kod\s+Indeks.*?JM', text, re.IGNORECASE | re.DOTALL)
+    bom_start = re.search(r'Oznaczenie\s+Kod\s+Indeks', text, re.IGNORECASE | re.DOTALL)
     if not bom_start:
         return []
 
-    bom_text = text[bom_start.end():]
+    # Ilosci sa w kolumnie prawej, wyciagane przez pdfminer PRZED 'Oznaczenie'
+    pre_text = text[:bom_start.start()]
+    ilosc_blok = re.search(
+        r'Ilo[ss]c\s+jedn\.\s*\n([\s\S]+?)(?=RYSUNKI:|Nr\s+oper\.)',
+        pre_text, re.IGNORECASE
+    )
+    ilosci = []
+    jm_list = []
+    if ilosc_blok:
+        blok = ilosc_blok.group(1)
+        blok = re.sub(r'\bJM\b', '', blok)  # usun naglowek kolumny JM
+        tokens = re.findall(r'(\d+[,\.]\d+)|([a-zA-Z]{1,6})', blok)
+        i = 0
+        while i < len(tokens):
+            num, word = tokens[i]
+            if num:
+                ilosc = float(num.replace(',', '.'))
+                jm = 'szt'
+                if i + 1 < len(tokens) and tokens[i + 1][1]:
+                    jm = tokens[i + 1][1].strip()
+                    i += 1
+                ilosci.append(ilosc)
+                jm_list.append(jm)
+            i += 1
 
-    # Koniec tabeli BOM = nastepna operacja technologiczna
+    # Wiersze materialow po naglowku: "78111 P19518\n\nCeownik ... Poz. 1"
+    bom_text = text[bom_start.end():]
     bom_end = re.search(r'\n\s*\d{3}\s*\n\s*OT-', bom_text)
     if bom_end:
         bom_text = bom_text[:bom_end.start()]
 
-    materialy = []
-
-    # Proba 1: format wieloliniowy (pdfminer) - kazde pole w osobnej linii
-    blok_pat = re.compile(
-        r'^\s*(\d{4,7})\s+(P\d+)\s*$'
-        r'\s*\n\s*(.+?)\s*$'
-        r'\s*\n\s*(\d+[,\.]\d+)\s*$'
-        r'\s*\n\s*([a-zA-Zkg/sztn]{1,6})\s*$',
-        re.MULTILINE
-    )
-    for m in blok_pat.finditer(bom_text):
-        oznaczenie = m.group(1).strip()
-        kod        = m.group(2).strip()
-        opis       = m.group(3).strip()
-        opis = re.sub(r'\s+Poz\.\s*\d+\s*$', '', opis, flags=re.IGNORECASE).strip()
-        try:
-            ilosc = float(m.group(4).replace(',', '.'))
-        except Exception:
-            ilosc = 1.0
-        jm = m.group(5).strip()
-        materialy.append({"oznaczenie": oznaczenie, "kod": kod, "opis": opis, "ilosc": ilosc, "jm": jm})
-
-    if materialy:
-        return materialy
-
-    # Proba 2: format jednoliniowy (pdfplumber / inne)
     row_pat = re.compile(
-        r'(\d{4,7})\s+(P\d+)\s+(.+?)\s+(\d+[,\.]\d+)\s+([a-zA-Zkg/sztn]{1,6})\s*$',
+        r'^\s*(\d{4,7})\s+(P\d+)\s*\n+\s*(.+?)\s*$',
         re.MULTILINE
     )
-    for m in row_pat.finditer(bom_text):
+    materialy = []
+    for idx, m in enumerate(row_pat.finditer(bom_text)):
         oznaczenie = m.group(1).strip()
         kod        = m.group(2).strip()
         opis       = m.group(3).strip()
         opis = re.sub(r'\s+Poz\.\s*\d+\s*$', '', opis, flags=re.IGNORECASE).strip()
-        try:
-            ilosc = float(m.group(4).replace(',', '.'))
-        except Exception:
-            ilosc = 1.0
-        jm = m.group(5).strip()
+        ilosc = ilosci[idx] if idx < len(ilosci) else 1.0
+        jm    = jm_list[idx] if idx < len(jm_list) else 'szt'
         materialy.append({"oznaczenie": oznaczenie, "kod": kod, "opis": opis, "ilosc": ilosc, "jm": jm})
+
+    # Fallback: format jednoliniowy (inne extractory)
+    if not materialy:
+        row_pat2 = re.compile(
+            r'(\d{4,7})\s+(P\d+)\s+(.+?)\s+(\d+[,\.]\d+)\s+([a-zA-Z]{1,6})\s*$',
+            re.MULTILINE
+        )
+        for m in row_pat2.finditer(bom_text):
+            opis = m.group(3).strip()
+            opis = re.sub(r'\s+Poz\.\s*\d+\s*$', '', opis, flags=re.IGNORECASE).strip()
+            try:
+                ilosc = float(m.group(4).replace(',', '.'))
+            except Exception:
+                ilosc = 1.0
+            materialy.append({
+                "oznaczenie": m.group(1).strip(),
+                "kod":        m.group(2).strip(),
+                "opis":       opis,
+                "ilosc":      ilosc,
+                "jm":         m.group(5).strip(),
+            })
 
     return materialy
 

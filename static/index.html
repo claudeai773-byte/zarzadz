@@ -429,6 +429,16 @@ let state = {
   feedbackMsg: '',
   adminFeedbacks: null,
 
+  // BOM
+  bomData: {},        // {zlecenie_id: [...pozycje]}
+  bomSearch: '',
+  bomSearchResults: [],
+  bomSearching: false,
+  bomQty: 1,
+  bomUwagi: '',
+  bomSelectedMat: null,
+  materialyCount: null,
+
   // Print modal
   printModal: null,
   printOps: [],
@@ -1244,7 +1254,7 @@ async function saveZlecenie(data) {
       }
       // Najpierw odśwież listę zleceń, potem zamknij modal
       await loadZlecenia();
-      setState({zlecenieModal:null, autofillSourceId:null, autofillOperacje:[], autofillProdukty:[], autofillStepUrl:null});
+      setState({zlecenieModal:null, autofillSourceId:null, autofillOperacje:[], autofillProdukty:[], autofillStepUrl:null, bomSelectedMat:null, bomSearch:'', bomSearchResults:[]});
     }
   } catch(e) {
     alert('Błąd: ' + e.message);
@@ -1525,7 +1535,7 @@ function renderTopbar() {
         <div style="display:flex;gap:2px" title="Oceń aplikację">
           ${[1,2,3,4,5].map(n => `<span onclick="setFeedbackRating(${n})" style="font-size:18px;cursor:pointer;color:${(state.feedbackRating||0)>=n?'var(--accent)':'var(--border)'}">★</span>`).join('')}
         </div>
-        <button onclick="openFeedbackModal()" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap">💬 Czego brakuje?</button>
+        <button onclick="openFeedbackModal()" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:11px;cursor:pointer;white-space:nowrap">💬 Co brakuje?</button>
       </div>
       <div class="user-info">
         <div style="color:var(--text)">${state.user.full_name}</div>
@@ -2502,6 +2512,64 @@ async function sendFeedback(fromModal) {
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
+async function loadMaterialyCount() {
+  try {
+    const r = await get('/api/materialy/count');
+    setState({materialyCount: r.count});
+  } catch(e) {}
+}
+
+async function importMaterialyXlsx() {
+  const fileInput = document.getElementById('mat-xlsx-file');
+  const statusEl = document.getElementById('mat-import-status');
+  if (!fileInput?.files?.length) { alert('Wybierz plik xlsx'); return; }
+  const file = fileInput.files[0];
+  if (statusEl) statusEl.textContent = '⏳ Importuję...';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const resp = await fetch('/api/materialy/import', {
+      method: 'POST',
+      headers: {'X-Api-Key': state.apiKey || ''},
+      body: fd
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Błąd importu');
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--green)">✅ Zaimportowano ${data.imported} pozycji${data.skipped?' · pominięto '+data.skipped:''}</span>`;
+    await loadMaterialyCount();
+    render();
+  } catch(e) {
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
+  }
+}
+
+async function loadMaterialyPreview() {
+  const q = document.getElementById('mat-preview-q')?.value || '';
+  const el = document.getElementById('mat-preview-results');
+  if (el) el.textContent = '⏳ Szukam...';
+  try {
+    const data = await get(`/api/materialy?q=${encodeURIComponent(q)}&limit=30`);
+    if (!el) return;
+    if (!data.length) { el.textContent = 'Brak wyników.'; return; }
+    el.innerHTML = `<table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:1px solid var(--border)">
+        <th style="text-align:left;padding:4px 8px;color:var(--dim)">Indeks</th>
+        <th style="text-align:left;padding:4px 8px;color:var(--dim)">Opis</th>
+        <th style="text-align:right;padding:4px 8px;color:var(--dim)">Dostępne</th>
+        <th style="text-align:right;padding:4px 8px;color:var(--dim)">Stan rzecz.</th>
+        <th style="text-align:center;padding:4px 8px;color:var(--dim)">Jm</th>
+      </tr></thead><tbody>
+      ${data.map(m => `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:4px 8px;font-family:monospace;font-size:11px">${m.indeks}</td>
+        <td style="padding:4px 8px;font-size:12px">${m.opis}</td>
+        <td style="padding:4px 8px;text-align:right;color:${m.do_dyspozycji>0?'var(--green)':'var(--red)'}"><b>${(m.do_dyspozycji??0).toFixed(3)}</b></td>
+        <td style="padding:4px 8px;text-align:right;color:var(--dim)">${(m.stan_rzeczywisty??0).toFixed(3)}</td>
+        <td style="padding:4px 8px;text-align:center;color:var(--dim)">${m.jm}</td>
+      </tr>`).join('')}
+      </tbody></table>`;
+  } catch(e) { if (el) el.textContent = 'Błąd: ' + e.message; }
+}
+
 async function loadAdminFeedbacks() {
   setState({adminFeedbacks: null});
   try {
@@ -2513,13 +2581,176 @@ async function loadAdminFeedbacks() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+//  BOM – Bill of Materials
+// ══════════════════════════════════════════════════════════════
+async function loadBom(zlecenieId) {
+  try {
+    const data = await get(`/api/zlecenia/${zlecenieId}/bom`);
+    setState({bomData: {...state.bomData, [zlecenieId]: data}});
+  } catch(e) { console.error('BOM load error:', e.message); }
+}
+
+async function bomSearchMat() {
+  const q = state.bomSearch.trim();
+  if (q.length < 2) { setState({bomSearchResults:[]}); return; }
+  setState({bomSearching: true});
+  try {
+    const res = await get(`/api/materialy?q=${encodeURIComponent(q)}&limit=20`);
+    setState({bomSearchResults: res, bomSearching: false});
+  } catch(e) { setState({bomSearching:false}); }
+}
+
+async function bomAddPozycja(zlecenieId, materialId) {
+  const ilosc = parseFloat(document.getElementById('bom-qty')?.value || state.bomQty) || 1;
+  const uwagi = document.getElementById('bom-uwagi')?.value || '';
+  try {
+    await post(`/api/zlecenia/${zlecenieId}/bom`, {material_id: materialId, ilosc, uwagi});
+    setState({bomSearch:'', bomSearchResults:[], bomQty:1, bomUwagi:''});
+    await loadBom(zlecenieId);
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function bomDeletePozycja(bomId, zlecenieId) {
+  if (!confirm('Usunąć tę pozycję z BOM?')) return;
+  try {
+    await del(`/api/bom/${bomId}`);
+    await loadBom(zlecenieId);
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+function renderBomSection(zlecenieId) {
+  const pozycje = state.bomData[zlecenieId];
+  if (!pozycje) {
+    // Ładuj dane jeśli jeszcze nie załadowane
+    loadBom(zlecenieId);
+    return '<div style="text-align:center;padding:12px;color:var(--dim);font-size:12px">⏳ Ładowanie BOM...</div>';
+  }
+
+  let html = `<div style="background:var(--entry);border:1px solid var(--accent);border-radius:10px;padding:14px;margin-bottom:14px">
+    <div style="font-weight:700;font-size:13px;color:var(--accent);margin-bottom:10px">📦 BOM – Lista materiałów</div>`;
+
+  // Istniejące pozycje
+  if (pozycje.length) {
+    html += `<div style="margin-bottom:12px">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:4px 6px;color:var(--dim)">Materiał</th>
+          <th style="text-align:right;padding:4px 6px;color:var(--dim)">Potrzeba</th>
+          <th style="text-align:right;padding:4px 6px;color:var(--dim)">Dostępne</th>
+          <th style="text-align:right;padding:4px 6px;color:var(--dim)">Status</th>
+          <th style="padding:4px 2px"></th>
+        </tr></thead><tbody>`;
+    for (const p of pozycje) {
+      const dostepne = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+      const brakuje = p.ilosc - dostepne;
+      const statusColor = brakuje > 0 ? 'var(--red)' : 'var(--green)';
+      const statusLabel = brakuje > 0 ? `⚠ brak ${brakuje.toFixed(2)} ${p.jm}` : '✓ dostępny';
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:5px 6px">
+          <div style="font-weight:600">${p.opis}</div>
+          <div style="color:var(--dim);font-size:10px">${p.indeks}${p.uwagi ? ' · '+p.uwagi : ''}</div>
+        </td>
+        <td style="text-align:right;padding:5px 6px;white-space:nowrap"><b>${p.ilosc}</b> ${p.jm}</td>
+        <td style="text-align:right;padding:5px 6px;white-space:nowrap;color:var(--dim)">${dostepne.toFixed(3)} ${p.jm}</td>
+        <td style="text-align:right;padding:5px 6px;white-space:nowrap;color:${statusColor};font-size:10px;font-weight:700">${statusLabel}</td>
+        <td style="padding:5px 2px">
+          <button onclick="bomDeletePozycja(${p.id},${zlecenieId})"
+            style="background:none;border:none;color:var(--red);cursor:pointer;font-size:14px;padding:2px 4px">×</button>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table></div>';
+
+    // Podsumowanie niedoborów
+    const braki = pozycje.filter(p => p.ilosc > (p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0));
+    if (braki.length) {
+      html += `<div style="background:rgba(220,50,50,.1);border:1px solid var(--red);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--red)">
+        ⚠ <b>${braki.length} pozycj${braki.length===1?'a':braki.length<5?'e':'i'} z niedoborem</b> – sprawdź stan magazynu przed uruchomieniem produkcji
+      </div>`;
+    } else {
+      html += `<div style="background:rgba(30,180,100,.1);border:1px solid var(--green);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--green)">
+        ✓ Wszystkie materiały dostępne
+      </div>`;
+    }
+  } else {
+    html += `<div style="color:var(--dim);font-size:12px;text-align:center;padding:8px;margin-bottom:10px">Brak pozycji – dodaj materiały poniżej</div>`;
+  }
+
+  // Dodaj materiał – wyszukiwarka
+  html += `<div style="border-top:1px solid var(--border);padding-top:12px">
+    <div style="font-size:11px;color:var(--dim);font-weight:700;text-transform:uppercase;margin-bottom:8px">+ Dodaj materiał</div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <input id="bom-search-input" type="text" placeholder="Szukaj wg opisu lub indeksu..."
+        value="${state.bomSearch||''}"
+        oninput="setState({bomSearch:this.value},true)"
+        onkeyup="if(event.key==='Enter'||this.value.length>=3)bomSearchMat()"
+        style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px">
+      <button onclick="bomSearchMat()" style="background:var(--accent);color:#000;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px">🔍</button>
+    </div>`;
+
+  // Wyniki wyszukiwania
+  if (state.bomSearching) {
+    html += `<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">⏳ Szukam...</div>`;
+  } else if (state.bomSearchResults.length) {
+    html += `<div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:8px">`;
+    for (const m of state.bomSearchResults) {
+      const dostepne = m.do_dyspozycji ?? m.stan_rzeczywisty ?? 0;
+      const alreadyInBom = pozycje.some(p => p.material_id === m.id);
+      html += `<div style="padding:8px 10px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--panel)">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.opis}</div>
+          <div style="font-size:10px;color:var(--dim)">${m.indeks} · stan: <b style="color:${dostepne>0?'var(--green)':'var(--red)'}">${dostepne.toFixed(3)} ${m.jm}</b></div>
+        </div>
+        <button onclick="setState({bomSelectedMat:${JSON.stringify(m).replace(/"/g,'&quot;')}});render()"
+          ${alreadyInBom?'disabled title="Już w BOM"':''} 
+          style="margin-left:8px;background:${alreadyInBom?'var(--border)':'var(--accent)'};color:${alreadyInBom?'var(--dim)':'#000'};border:none;border-radius:6px;padding:4px 10px;cursor:${alreadyInBom?'default':'pointer'};font-size:12px;white-space:nowrap">
+          ${alreadyInBom?'✓ Dodany':'+ Wybierz'}
+        </button>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Formularz po wybraniu materiału
+  const sel = state.bomSelectedMat;
+  if (sel) {
+    html += `<div style="background:var(--panel);border:1px solid var(--accent);border-radius:8px;padding:10px;margin-bottom:8px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:8px">📦 ${sel.opis} <span style="font-size:10px;color:var(--dim)">${sel.indeks}</span></div>
+      <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <div style="flex:0 0 100px">
+          <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Ilość (${sel.jm})</div>
+          <input id="bom-qty" type="number" min="0.001" step="0.001" value="${state.bomQty||1}"
+            oninput="setState({bomQty:parseFloat(this.value)||1},true)"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;font-size:13px">
+        </div>
+        <div style="flex:1;min-width:120px">
+          <div style="font-size:10px;color:var(--dim);margin-bottom:3px">Uwagi (opcjonalnie)</div>
+          <input id="bom-uwagi" type="text" placeholder="np. gatunek, wymiar..."
+            value="${state.bomUwagi||''}"
+            oninput="setState({bomUwagi:this.value},true)"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px;font-size:13px;box-sizing:border-box">
+        </div>
+        <button onclick="bomAddPozycja(${zlecenieId}, ${sel.id})"
+          style="background:var(--green);color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;white-space:nowrap">✓ Dodaj do BOM</button>
+        <button onclick="setState({bomSelectedMat:null})"
+          style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:6px;padding:6px 10px;cursor:pointer;font-size:13px">✕</button>
+      </div>
+    </div>`;
+  }
+
+  html += `</div></div>`; // close dodaj + outer BOM div
+  return html;
+}
+
+// ──────────────────────────────────────────────────────────────
 function renderFeedbackModal() {
   if (!state.feedbackModal) return '';
   return `
   <div class="modal-overlay" onclick="if(event.target===this)setState({feedbackModal:false,feedbackMsg:''})">
     <div class="modal">
       <button class="modal-close" onclick="setState({feedbackModal:false,feedbackMsg:''})">×</button>
-      <h3>💬 Czego brakuje w aplikacji?</h3>
+      <h3>💬 Co brakuje w aplikacji?</h3>
       <div style="margin-bottom:14px">
         <div style="font-size:13px;color:var(--dim);margin-bottom:10px">Twoja ocena:</div>
         <div style="display:flex;gap:8px;justify-content:center">
@@ -3817,11 +4048,13 @@ function renderZlecenia() {
         </div>
         <div class="field">
           <label>Materiał od klienta</label>
-          <select id="zl-mat">
-            <option value="0" ${!z.material_od_klienta?'selected':''}>Nie</option>
-            <option value="1" ${z.material_od_klienta?'selected':''}>Tak</option>
+          <select id="zl-mat" onchange="render()">
+            <option value="0" ${!z.material_od_klienta?'selected':''}>Nie – definiuję materiał (BOM)</option>
+            <option value="1" ${z.material_od_klienta?'selected':''}>Tak – klient dostarcza materiał</option>
           </select>
         </div>
+        ${z.id && !z.material_od_klienta ? renderBomSection(z.id) : ''}
+        ${!z.id && !z.material_od_klienta ? '<div style="background:var(--entry);border:1px dashed var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">📦 <b>BOM</b> – Zapisz zlecenie, aby zdefiniować materiały</div>' : ''}
         ${z.id ? renderProduktyZleceniaForm(z.id) : '<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">💡 Zapisz zlecenie, aby móc dodać produkty/zakupy</div>'}
         <button class="btn btn-accent" onclick="saveZlecenieForm(${z.id||0})">💾 Zapisz</button>
       </div>
@@ -4575,11 +4808,11 @@ function renderKosztyModal() {
 // ══════════════════════════════════════════════════════════════
 function renderAdmin() {
   if (state.loading) return '<div class="spinner">⏳</div>';
-  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'uprawnienia',label:'🔐 Uprawnienia'},{id:'import_pdf',label:'📄 Import PDF'},{id:'katalog',label:'📦 Katalog'},{id:'oceny',label:'⭐ Oceny'}];
+  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'uprawnienia',label:'🔐 Uprawnienia'},{id:'import_pdf',label:'📄 Import PDF'},{id:'katalog',label:'📦 Katalog'},{id:'materialy',label:'🏗 Materiały'},{id:'oceny',label:'⭐ Oceny'}];
   let html = `
   <div class="tabs">
     ${subTabs.map(t => `<button class="tab ${state.adminTab===t.id?'active':''}"
-      onclick="setState({adminTab:'${t.id}'})${t.id==='oceny'?';loadAdminFeedbacks()':''}">${t.label}</button>`).join('')}
+      onclick="setState({adminTab:'${t.id}'})${t.id==='oceny'?';loadAdminFeedbacks()':t.id==='materialy'?';loadMaterialyCount()':''}">${t.label}</button>`).join('')}
   </div>`;
 
   if (state.adminTab === 'uzytkownicy') {
@@ -4760,6 +4993,40 @@ function renderAdmin() {
         </div>
       </div>`;
     }
+  }
+
+  if (state.adminTab === 'materialy') {
+    const cnt = state.materialyCount;
+    html += `
+    <div class="card" style="margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:12px">📂 Import bazy materiałów (plik .xlsx)</div>
+      <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.5">
+        Wczytaj plik Excel z bazą materiałów. Wymagane kolumny: <b>Indeks</b>, <b>Opis artykułu</b>.<br>
+        Opcjonalne: Kod, Jm, Do dyspozycji, Stan rzeczywisty, Rezerwacja, Kod paskowy.<br>
+        Import nadpisuje istniejące rekordy po kolumnie <b>Indeks</b>.
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <input type="file" id="mat-xlsx-file" accept=".xlsx,.xls"
+          style="font-size:12px;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px">
+        <button class="btn btn-accent" onclick="importMaterialyXlsx()">📥 Importuj</button>
+      </div>
+      <div id="mat-import-status" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700">🔍 Podgląd bazy materiałów</div>
+        <span style="font-size:12px;color:var(--dim)">${cnt !== null ? cnt + ' pozycji w bazie' : '...'}</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input id="mat-preview-q" type="text" placeholder="Szukaj materiału..."
+          style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px"
+          onkeyup="if(event.key==='Enter')loadMaterialyPreview()">
+        <button class="btn-outline" onclick="loadMaterialyPreview()">🔍</button>
+      </div>
+      <div id="mat-preview-results" style="font-size:12px;color:var(--dim)">
+        ${cnt === null ? 'Kliknij zakładkę aby załadować.' : cnt === 0 ? 'Brak materiałów – zaimportuj plik xlsx.' : 'Wpisz frazę i naciśnij Enter aby wyszukać.'}
+      </div>
+    </div>`;
   }
 
   if (state.adminTab === 'oceny') {

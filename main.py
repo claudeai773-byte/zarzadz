@@ -2,7 +2,7 @@
 Serwer FastAPI dla Systemu Zarządzania Produkcją v4.1
 Deploy na Railway.app
 """
-from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile, File, Body
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile, File, Body, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -700,7 +700,7 @@ async def parse_technologia_pdf(file: UploadFile = File(...)):
 
 
 @app.post("/api/import-technologia", dependencies=[Depends(verify_key)])
-async def import_technologia(file: UploadFile = File(...), force: bool = False, bom_json: str = ""):
+async def import_technologia(file: UploadFile = File(...), force: bool = False, bom_json: str = Form(default="")):
 
     pdf_bytes = await file.read()
     if not pdf_bytes:

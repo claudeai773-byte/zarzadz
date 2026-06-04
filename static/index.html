@@ -378,6 +378,9 @@ let state = {
   sesjaGlownaModal: null,    // {operacjaId, aktywne:[]} – wybór sesji głównej
   importPdfModal: false,     // modal importu technologii z PDF
   importPdfResult: null,     // wynik importu
+  importPdfPreview: null,    // podgląd przed importem (parse-only)
+  importPdfBom: [],          // lista materiałów BOM do potwierdzenia
+  importPdfParsing: false,
   kjModal: null,             // {op} – modal KJ dla pracownika
   kontynuacjaModal: null,    // {operacjaId, pracownik, sesjaGlownaId} – dialog kontynuacji operacji innego
   userPermissions: {},  // {userId: [tabs]}
@@ -4896,46 +4899,150 @@ function renderAdmin() {
   }
 
   if (state.adminTab === 'import_pdf') {
-    const res = state.importPdfResult;
-    html += `
-    <div style="max-width:520px">
+    const res    = state.importPdfResult;
+    const prev   = state.importPdfPreview;
+    const bom    = state.importPdfBom || [];
+    const parsing = state.importPdfParsing;
+
+    html += `<div style="max-width:600px">`;
+
+    // ── KROK 1: Wybór pliku ─────────────────────────────────────────────────
+    if (!prev && !res) {
+      html += `
       <div style="font-size:13px;color:var(--dim);margin-bottom:16px;line-height:1.6">
-        Wgraj kartę technologiczną w formacie PDF. System automatycznie rozpozna operacje,
-        stanowiska i czasy normatywne. Zlecenie zostanie utworzone ze statusem
-        <b>Oczekuje potwierdzenia</b>.
+        Wgraj kartę technologiczną w formacie PDF. System rozpozna operacje, stanowiska,
+        czasy normatywne oraz <b>wykaz materiałów (BOM)</b>.
       </div>
       <div class="card" style="padding:20px;text-align:center;border:2px dashed var(--border)">
         <div style="font-size:40px;margin-bottom:10px">📄</div>
         <div style="font-size:15px;font-weight:600;margin-bottom:6px">Karta technologiczna (.pdf)</div>
-        <div style="font-size:12px;color:var(--dim);margin-bottom:16px">Format: KARTA TECHNOLOGICZNA z polami Nr oper. / Opis / Stanowisko pracy</div>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:16px">
+          Format: KARTA TECHNOLOGICZNA z polem Wykaz materiałów, operacjami i stanowiskami
+        </div>
         <input type="file" id="pdf-import-input" accept=".pdf" style="display:none"
-          onchange="handlePdfImport(this)">
-        <button class="btn btn-accent" onclick="document.getElementById('pdf-import-input').click()">
-          📂 Wybierz plik PDF
+          onchange="handlePdfParse(this)">
+        <button class="btn btn-accent" onclick="document.getElementById('pdf-import-input').click()"
+          ${parsing?'disabled':''}>
+          ${parsing ? '⏳ Analizuję...' : '📂 Wybierz plik PDF'}
         </button>
+      </div>`;
+    }
+
+    // ── KROK 2: Podgląd i potwierdzenie ────────────────────────────────────
+    if (prev && !res) {
+      html += `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-size:15px;font-weight:700">📋 Podgląd importu</div>
+        <button class="btn-outline" onclick="setState({importPdfPreview:null,importPdfBom:[]})">← Wróć</button>
+      </div>
+      <div class="card" style="margin-bottom:10px">
+        <div style="font-size:13px"><b>${prev.numer}</b> – ${prev.nazwa}</div>
+        <div style="font-size:12px;color:var(--dim);margin-top:4px">${prev.operacje.length} operacji</div>
       </div>
 
-      ${res ? `
-      <div class="card" style="margin-top:16px;padding:16px;background:${res.errors&&res.errors.length?'rgba(231,76,60,0.06)':'rgba(39,174,96,0.06)'};border:1px solid ${res.errors&&res.errors.length?'var(--red)':'var(--green)'}">
+      <!-- Operacje -->
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px">Operacje</div>
+      <div style="max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-bottom:14px">
+        ${prev.operacje.map(o => `
+        <div style="display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;background:var(--panel)">
+          <span><b>${String(o.kolejnosc).padStart(3,'0')}</b> ${o.nazwa}</span>
+          <span style="color:var(--dim);white-space:nowrap;margin-left:8px">${o.stanowisko}${o.czas_norma>0?' · '+o.czas_norma+' min':''}</span>
+        </div>`).join('')}
+      </div>
+
+      <!-- BOM -->
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);margin-bottom:6px">
+        📦 Wykaz materiałów BOM
+        ${bom.length ? `<span style="color:var(--green);margin-left:6px">${bom.filter(b=>b.included!==false).length} / ${bom.length} zaznaczonych</span>` : ''}
+      </div>`;
+
+      if (!bom.length) {
+        html += `<div style="font-size:12px;color:var(--dim);background:var(--entry);border-radius:8px;padding:12px;margin-bottom:14px;text-align:center">
+          ⚠ Nie wykryto wykazu materiałów w tym PDF.<br>
+          <span style="font-size:11px">Możesz dodać materiały ręcznie po imporcie w zakładce Zlecenia.</span>
+        </div>`;
+      } else {
+        html += `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:14px;overflow:hidden">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="background:var(--panel);border-bottom:1px solid var(--border)">
+              <th style="padding:6px 8px;text-align:left;width:28px"></th>
+              <th style="padding:6px 8px;text-align:left">Materiał</th>
+              <th style="padding:6px 8px;text-align:right">Ilość</th>
+              <th style="padding:6px 8px;text-align:center">Status</th>
+            </tr></thead><tbody>`;
+        bom.forEach((m, idx) => {
+          const included = m.included !== false;
+          const dostepne = m.do_dyspozycji || 0;
+          const brakuje  = m.ilosc - dostepne;
+          let statusHtml, statusColor;
+          if (m.w_bazie) {
+            statusColor = brakuje > 0 ? 'var(--orange)' : 'var(--green)';
+            statusHtml  = brakuje > 0
+              ? `<span style="color:var(--orange);font-size:10px;font-weight:700">⚠ brak ${brakuje.toFixed(2)} ${m.jm}</span>`
+              : `<span style="color:var(--green);font-size:10px;font-weight:700">✓ dostępny</span>`;
+          } else {
+            statusColor = 'var(--blue)';
+            statusHtml  = `<span style="color:var(--blue);font-size:10px;font-weight:700">+ nowy materiał</span>`;
+          }
+          html += `<tr style="border-bottom:1px solid var(--border);opacity:${included?1:0.4}">
+            <td style="padding:6px 8px;text-align:center">
+              <input type="checkbox" ${included?'checked':''} onchange="toggleBomItem(${idx},this.checked)">
+            </td>
+            <td style="padding:6px 8px">
+              <div style="font-weight:600">${m.opis_bazy||m.opis}</div>
+              <div style="font-size:10px;color:var(--dim)">${m.indeks_bazy||m.kod}${m.w_bazie?' · stan: '+dostepne.toFixed(3)+' '+m.jm:' · zostanie dodany do bazy'}</div>
+            </td>
+            <td style="padding:6px 8px;text-align:right;white-space:nowrap"><b>${m.ilosc}</b> ${m.jm}</td>
+            <td style="padding:6px 8px;text-align:center">${statusHtml}</td>
+          </tr>`;
+        });
+        html += `</tbody></table></div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:14px">
+          ✏ Niebieskie pozycje (<b>+ nowy materiał</b>) zostaną automatycznie dodane do bazy materiałów ze stanem 0.
+          Stan możesz uzupełnić w zakładce <b>🏗 Materiały</b> lub przez import xlsx.
+        </div>`;
+      }
+
+      html += `
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-accent" style="flex:1" onclick="confirmPdfImport()">
+          ✅ Importuj technologię${bom.filter(b=>b.included!==false).length>0?' + BOM ('+bom.filter(b=>b.included!==false).length+' poz.)':''}
+        </button>
+        <button class="btn-outline" onclick="setState({importPdfPreview:null,importPdfBom:[]})">✕ Anuluj</button>
+      </div>`;
+    }
+
+    // ── KROK 3: Wynik ─────────────────────────────────────────────────────
+    if (res) {
+      html += `
+      <div class="card" style="padding:16px;background:${res.errors&&res.errors.length?'rgba(231,76,60,0.06)':'rgba(39,174,96,0.06)'};border:1px solid ${res.errors&&res.errors.length?'var(--red)':'var(--green)'}">
         <div style="font-size:15px;font-weight:700;margin-bottom:10px">
           ${res.errors&&res.errors.length ? '⚠ Import z ostrzeżeniami' : '✅ Import zakończony pomyślnie'}
         </div>
         <div style="font-size:13px;line-height:2">
           📋 Zlecenie: <b>${res.numer}</b> – ${res.nazwa}<br>
           🔢 Operacje: <b>${res.operacje_created}</b><br>
-          ${res.nowe_stanowiska&&res.nowe_stanowiska.length ? `🏭 Nowe stanowiska (stawka 0 PLN/h): <b>${res.nowe_stanowiska.join(', ')}</b><br>` : ''}
+          📦 BOM: <b>${res.bom_added}</b> pozycji${res.bom_new_materialy>0?` (${res.bom_new_materialy} nowych w bazie)`:''}<br>
+          ${res.nowe_stanowiska&&res.nowe_stanowiska.length ? `🏭 Nowe stanowiska: <b>${res.nowe_stanowiska.join(', ')}</b><br>` : ''}
           ${res.errors&&res.errors.length ? `<span style="color:var(--red)">⛔ Błędy: ${res.errors.join('; ')}</span>` : ''}
         </div>
         ${res.nowe_stanowiska&&res.nowe_stanowiska.length ? `
         <div style="font-size:12px;background:rgba(230,126,0,0.1);border:1px solid var(--orange);border-radius:6px;padding:8px 12px;margin-top:10px">
           ⚠ Uzupełnij stawki dla nowych stanowisk w zakładce <b>Stawki</b>
         </div>` : ''}
-        <button class="btn btn-green" style="margin-top:12px" onclick="setState({activeTab:'zlecenia'});loadTabData('zlecenia')">
-          📋 Przejdź do zleceń →
-        </button>
-      </div>
-      ` : ''}
-    </div>`;
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-green" onclick="setState({activeTab:'zlecenia'});loadTabData('zlecenia')">
+            📋 Przejdź do zleceń →
+          </button>
+          <button class="btn-outline" onclick="setState({importPdfResult:null,importPdfPreview:null,importPdfBom:[]})">
+            + Importuj kolejny
+          </button>
+        </div>
+      </div>`;
+    }
+
+    html += `</div>`;
+  }
   }
 
   if (state.adminTab === 'stawki') {
@@ -5267,38 +5374,69 @@ function renderKjParamsBlock(json) {
   } catch(e) { return ''; }
 }
 
-async function handlePdfImport(input, force) {
+async function handlePdfParse(input) {
   const file = input.files[0];
   if (!file) return;
+  setState({importPdfParsing: true, importPdfPreview: null, importPdfBom: [], importPdfResult: null});
   const formData = new FormData();
   formData.append('file', file);
-  setState({importPdfResult: null});
   try {
-    const url = (SERVER_URL.replace(/\/$/,'')) + '/api/import-technologia' + (force ? '?force=true' : '');
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {'x-api-key': API_KEY},
-      body: formData,
-    });
+    const url = (SERVER_URL.replace(/\/$/,'')) + '/api/import-technologia/parse';
+    const response = await fetch(url, {method:'POST', headers:{'x-api-key':API_KEY}, body:formData});
     const data = await response.json();
-    if (response.status === 409) {
-      // Zlecenie już istnieje – zapytaj użytkownika
-      const potwierdzenie = confirm(
-        (data.detail || 'Zlecenie o tym numerze już istnieje w systemie.') +
-        '\n\nCzy chcesz mimo to utworzyć nowe zlecenie (duplikat)?'
-      );
-      if (potwierdzenie) {
-        await handlePdfImport(input, true);
-      } else {
-        input.value = '';
-      }
-      return;
-    }
-    if (!response.ok) throw new Error(data.detail || 'Błąd importu');
-    setState({importPdfResult: data});
+    if (!response.ok) throw new Error(data.detail || 'Błąd parsowania');
+    // Dodaj pole included:true do każdego materiału BOM
+    const bom = (data.bom||[]).map(m => ({...m, included: true}));
+    setState({importPdfPreview: data, importPdfBom: bom, importPdfParsing: false});
     input.value = '';
   } catch(e) {
-    alert('Błąd importu PDF: ' + e.message);
+    setState({importPdfParsing: false});
+    alert('Błąd odczytu PDF: ' + e.message);
+    input.value = '';
+  }
+}
+
+function toggleBomItem(idx, checked) {
+  const bom = [...state.importPdfBom];
+  bom[idx] = {...bom[idx], included: checked};
+  setState({importPdfBom: bom});
+}
+
+async function confirmPdfImport(force) {
+  const prev = state.importPdfPreview;
+  if (!prev) return;
+  const bom = state.importPdfBom.filter(m => m.included !== false);
+
+  // Użyj oryginalnego pliku – musimy go ponownie wgrać (plik trzymany w formData)
+  const fileInput = document.getElementById('pdf-import-input-confirm');
+  if (!fileInput?.files?.length) {
+    // Pliku nie ma – ponowne wgranie przez inny input
+    alert('Wybierz plik ponownie'); return;
+  }
+  await _doPdfImport(fileInput.files[0], bom, force);
+}
+
+// Trzymaj ostatni wybrany plik PDF w pamięci
+let _lastPdfFile = null;
+
+async function handlePdfParse(input) {
+  const file = input.files[0];
+  if (!file) return;
+  _lastPdfFile = file;
+  setState({importPdfParsing: true, importPdfPreview: null, importPdfBom: [], importPdfResult: null});
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const url = (SERVER_URL.replace(/\/$/,'')) + '/api/import-technologia/parse';
+    const response = await fetch(url, {method:'POST', headers:{'x-api-key':API_KEY}, body:formData});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Błąd parsowania');
+    const bom = (data.bom||[]).map(m => ({...m, included: true}));
+    setState({importPdfPreview: data, importPdfBom: bom, importPdfParsing: false});
+    input.value = '';
+  } catch(e) {
+    setState({importPdfParsing: false});
+    alert('Błąd odczytu PDF: ' + e.message);
     input.value = '';
   }
 }

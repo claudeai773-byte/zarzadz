@@ -2228,6 +2228,31 @@ def init_db_on_start():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL)""")
 
+    # ➤ Baza materiałów (import z xlsx)
+    c.execute("""CREATE TABLE IF NOT EXISTS materialy (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kod TEXT,
+        indeks TEXT UNIQUE NOT NULL,
+        opis TEXT NOT NULL,
+        jm TEXT DEFAULT 'kg',
+        do_dyspozycji REAL DEFAULT 0,
+        stan_rzeczywisty REAL DEFAULT 0,
+        rezerwacja REAL DEFAULT 0,
+        kod_paskowy TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+
+    # ➤ BOM – pozycje materiałowe zlecenia
+    c.execute("""CREATE TABLE IF NOT EXISTS bom_pozycje (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        zlecenie_id INTEGER NOT NULL,
+        material_id INTEGER NOT NULL,
+        ilosc REAL NOT NULL DEFAULT 1,
+        ilosc_wykonana REAL DEFAULT 0,
+        uwagi TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id) ON DELETE CASCADE,
+        FOREIGN KEY (material_id) REFERENCES materialy(id))""")
+
     # ➤ Migracja: uzupełnij stawki_zlecen dla istniejących zleceń
     existing_zl = c.execute("SELECT id FROM zlecenia").fetchall()
     for zl_row in existing_zl:
@@ -2604,6 +2629,159 @@ def get_oblozenie():
                 "operacje": stanowiska_ops.get(name, []),
             })
         return result
+
+            })
+        return result
+
+# ─── Materiały – import i CRUD ────────────────────────────────────────────────
+import openpyxl as _openpyxl
+
+@app.post("/api/materialy/import", dependencies=[Depends(verify_key)])
+async def import_materialy(file: UploadFile = File(...)):
+    """Import bazy materiałów z pliku xlsx. Nadpisuje istniejące rekordy (upsert po indeksie)."""
+    content = await file.read()
+    try:
+        wb = _openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    except Exception as e:
+        raise HTTPException(400, f"Błąd odczytu pliku xlsx: {e}")
+
+    if not rows:
+        raise HTTPException(400, "Plik jest pusty")
+
+    # Znajdź nagłówki (pierwsza niepusta linia)
+    header_row = [str(c).strip() if c else '' for c in rows[0]]
+    # Mapowanie kolumn (elastyczne)
+    col_map = {}
+    for i, h in enumerate(header_row):
+        hl = h.lower()
+        if 'kod' in hl and 'paskowy' not in hl: col_map.setdefault('kod', i)
+        elif 'indeks' in hl:  col_map['indeks'] = i
+        elif 'opis' in hl:    col_map['opis'] = i
+        elif 'jm' in hl:      col_map['jm'] = i
+        elif 'dyspozycji' in hl: col_map['do_dyspozycji'] = i
+        elif 'rzeczywisty' in hl: col_map['stan_rzeczywisty'] = i
+        elif 'rezerwacja' in hl: col_map['rezerwacja'] = i
+        elif 'paskowy' in hl: col_map['kod_paskowy'] = i
+
+    required = {'indeks', 'opis'}
+    missing = required - set(col_map.keys())
+    if missing:
+        raise HTTPException(400, f"Brak wymaganych kolumn: {missing}. Znalezione: {header_row}")
+
+    def cell(row, key):
+        i = col_map.get(key)
+        if i is None: return None
+        v = row[i] if i < len(row) else None
+        if v is None: return None
+        return str(v).strip() if isinstance(v, str) else v
+
+    now = _now()
+    imported = 0
+    skipped = 0
+    with get_db() as conn:
+        for row in rows[1:]:
+            indeks = cell(row, 'indeks')
+            opis = cell(row, 'opis')
+            if not indeks or not opis:
+                skipped += 1
+                continue
+            kod = cell(row, 'kod')
+            jm = cell(row, 'jm') or 'kg'
+            do_dysp = float(cell(row, 'do_dyspozycji') or 0)
+            stan = float(cell(row, 'stan_rzeczywisty') or 0)
+            rez = float(cell(row, 'rezerwacja') or 0)
+            kp = cell(row, 'kod_paskowy')
+            if kp: kp = str(int(float(kp))) if isinstance(kp, float) else str(kp)
+            conn.execute("""
+                INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(indeks) DO UPDATE SET
+                  kod=excluded.kod, opis=excluded.opis, jm=excluded.jm,
+                  do_dyspozycji=excluded.do_dyspozycji, stan_rzeczywisty=excluded.stan_rzeczywisty,
+                  rezerwacja=excluded.rezerwacja, kod_paskowy=excluded.kod_paskowy, updated_at=excluded.updated_at
+            """, (kod, indeks, opis, jm, do_dysp, stan, rez, kp, now))
+            imported += 1
+    return {"ok": True, "imported": imported, "skipped": skipped}
+
+@app.get("/api/materialy", dependencies=[Depends(verify_key)])
+def get_materialy(q: str = "", limit: int = 50):
+    with get_db() as conn:
+        if q:
+            pattern = f"%{q}%"
+            rows = conn.execute("""
+                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy
+                FROM materialy
+                WHERE opis LIKE ? OR indeks LIKE ? OR kod LIKE ?
+                ORDER BY opis LIMIT ?
+            """, (pattern, pattern, pattern, limit)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy
+                FROM materialy ORDER BY opis LIMIT ?
+            """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+@app.get("/api/materialy/count", dependencies=[Depends(verify_key)])
+def count_materialy():
+    with get_db() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM materialy").fetchone()[0]
+        return {"count": n}
+
+# ─── BOM – pozycje materiałowe zlecenia ───────────────────────────────────────
+class BomPozycjaIn(BaseModel):
+    material_id: int
+    ilosc: float
+    uwagi: Optional[str] = ""
+
+@app.get("/api/zlecenia/{zid}/bom", dependencies=[Depends(verify_key)])
+def get_bom(zid: int):
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT bp.id, bp.zlecenie_id, bp.material_id, bp.ilosc, bp.ilosc_wykonana, bp.uwagi, bp.created_at,
+                   m.indeks, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.rezerwacja, m.kod
+            FROM bom_pozycje bp
+            JOIN materialy m ON m.id = bp.material_id
+            WHERE bp.zlecenie_id = ?
+            ORDER BY bp.id
+        """, (zid,)).fetchall()
+        return [dict(r) for r in rows]
+
+@app.post("/api/zlecenia/{zid}/bom", dependencies=[Depends(verify_key)])
+def add_bom(zid: int, b: BomPozycjaIn):
+    with get_db() as conn:
+        # Sprawdź czy zlecenie istnieje
+        if not conn.execute("SELECT id FROM zlecenia WHERE id=?", (zid,)).fetchone():
+            raise HTTPException(404, "Zlecenie nie istnieje")
+        if not conn.execute("SELECT id FROM materialy WHERE id=?", (b.material_id,)).fetchone():
+            raise HTTPException(404, "Materiał nie istnieje")
+        # Sprawdź duplikaty
+        existing = conn.execute(
+            "SELECT id FROM bom_pozycje WHERE zlecenie_id=? AND material_id=?", (zid, b.material_id)
+        ).fetchone()
+        if existing:
+            raise HTTPException(409, "Ten materiał jest już w BOM tego zlecenia. Usuń i dodaj ponownie.")
+        conn.execute(
+            "INSERT INTO bom_pozycje (zlecenie_id, material_id, ilosc, uwagi, created_at) VALUES (?,?,?,?,?)",
+            (zid, b.material_id, b.ilosc, b.uwagi or "", _now())
+        )
+        return {"ok": True}
+
+@app.put("/api/bom/{bid}", dependencies=[Depends(verify_key)])
+def update_bom(bid: int, b: BomPozycjaIn):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE bom_pozycje SET ilosc=?, uwagi=? WHERE id=?",
+            (b.ilosc, b.uwagi or "", bid)
+        )
+        return {"ok": True}
+
+@app.delete("/api/bom/{bid}", dependencies=[Depends(verify_key)])
+def delete_bom(bid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM bom_pozycje WHERE id=?", (bid,))
+        return {"ok": True}
 
 # ─── Feedback / Oceny aplikacji ───────────────────────────────────────────────
 class FeedbackIn(BaseModel):

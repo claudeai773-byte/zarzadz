@@ -457,6 +457,47 @@ def zapisz_wynik_kj(oid: int, req: KJRequest):
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
         return {"ok": True, "wynik": req.wynik}
 
+def _parse_bom_from_pdf_text(text: str) -> list:
+    """Wydobywa wykaz materiałów z karty technologicznej PDF."""
+    import re
+    # Szukaj nagłówka tabeli materiałów
+    bom_start = re.search(r'Oznaczenie\s+Kod\s+Indeks.*?JM', text, re.IGNORECASE | re.DOTALL)
+    if not bom_start:
+        return []
+
+    bom_text = text[bom_start.end():]
+    # Koniec tabeli = pierwsza następna operacja (np. "020 \nOT-" lub "010 \nOT-")
+    bom_end = re.search(r'\n\d{3}\s*\n\s*OT-', bom_text)
+    if bom_end:
+        bom_text = bom_text[:bom_end.start()]
+
+    materialy = []
+    # Wiersz: oznaczenie(cyfry) kod(P+cyfry) opis(tekst) ilosc(cyfry,cyfry) jm(litery)
+    row_pat = re.compile(
+        r'(\d{4,7})\s+(P\d+)\s+(.+?)\s+(\d+[,\.]\d+)\s+([a-zA-Zkg/szłnm]{1,6})\s*$',
+        re.MULTILINE
+    )
+    for m in row_pat.finditer(bom_text):
+        oznaczenie = m.group(1).strip()
+        kod        = m.group(2).strip()
+        opis       = m.group(3).strip()
+        # Usuń końcowe "Poz. N" z opisu jeśli jest
+        opis = re.sub(r'\s+Poz\.\s*\d+\s*$', '', opis, flags=re.IGNORECASE).strip()
+        try:
+            ilosc = float(m.group(4).replace(',', '.'))
+        except:
+            ilosc = 1.0
+        jm = m.group(5).strip()
+        materialy.append({
+            "oznaczenie": oznaczenie,
+            "kod": kod,
+            "opis": opis,
+            "ilosc": ilosc,
+            "jm": jm,
+        })
+    return materialy
+
+
 # ─── Import technologii z PDF ─────────────────────────────────────────────────
 def _parse_technologia_pdf(pdf_bytes: bytes) -> dict:
     """Parsuje kartę technologiczną PDF → dict z numerem, nazwą i operacjami."""
@@ -558,10 +599,67 @@ class ImportTechnologiaResponse(BaseModel):
     nazwa: str
     operacje_created: int
     nowe_stanowiska: List[str]
+    bom_added: int
+    bom_new_materialy: int
     errors: List[str]
 
+
+@app.post("/api/import-technologia/parse", dependencies=[Depends(verify_key)])
+async def parse_technologia_pdf(file: UploadFile = File(...)):
+    """Parsuje PDF bez zapisu do bazy. Zwraca podgląd operacji i materiałów BOM."""
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(400, "Pusty plik")
+    try:
+        from pdfminer.high_level import extract_text as _extract
+        import io as _io
+        text = _extract(_io.BytesIO(pdf_bytes))
+        parsed = _parse_technologia_pdf(pdf_bytes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    bom_raw = _parse_bom_from_pdf_text(text)
+
+    # Sprawdź które materiały istnieją w bazie (po Kod = indeks)
+    with get_db() as conn:
+        for mat in bom_raw:
+            # Szukaj po kodzie P-xxxxx jako indeks, albo po fragmencie opisu
+            row = conn.execute(
+                "SELECT id, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty FROM materialy WHERE indeks=? LIMIT 1",
+                (mat["kod"],)
+            ).fetchone()
+            if not row:
+                # Próba dopasowania po fragmencie opisu (pierwsze 2 słowa)
+                words = mat["opis"].split()[:2]
+                like_q = "%" + " ".join(words) + "%"
+                row = conn.execute(
+                    "SELECT id, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty FROM materialy WHERE opis LIKE ? LIMIT 1",
+                    (like_q,)
+                ).fetchone()
+            if row:
+                mat["w_bazie"] = True
+                mat["material_id"] = row["id"]
+                mat["indeks_bazy"] = row["indeks"]
+                mat["opis_bazy"] = row["opis"]
+                mat["do_dyspozycji"] = row["do_dyspozycji"] or 0
+            else:
+                mat["w_bazie"] = False
+                mat["material_id"] = None
+                mat["indeks_bazy"] = mat["kod"]
+                mat["opis_bazy"] = mat["opis"]
+                mat["do_dyspozycji"] = 0
+
+    return {
+        "numer": parsed["numer"],
+        "nazwa": parsed["nazwa"],
+        "operacje": parsed["operacje"],
+        "bom": bom_raw,
+    }
+
+
 @app.post("/api/import-technologia", dependencies=[Depends(verify_key)])
-async def import_technologia(file: UploadFile = File(...), force: bool = False):
+async def import_technologia(file: UploadFile = File(...), force: bool = False, bom_json: str = ""):
+
     pdf_bytes = await file.read()
     if not pdf_bytes:
         raise HTTPException(400, "Pusty plik")
@@ -660,6 +758,47 @@ async def import_technologia(file: UploadFile = File(...), force: bool = False):
         # ➤ NOWE: Zainicjalizuj indywidualne stawki zlecenia na podstawie stanowisk z operacji
         _init_stawki_zlecenia(conn, zlecenie_id)
 
+        # ➤ BOM: Przetwórz potwierdzone materiały
+        bom_added = 0
+        bom_new_materialy = 0
+        if bom_json:
+            try:
+                bom_items = json.loads(bom_json)
+                for item in bom_items:
+                    if not item.get("included", True):
+                        continue
+                    indeks = item.get("indeks_bazy") or item.get("kod") or ""
+                    opis   = item.get("opis_bazy") or item.get("opis") or ""
+                    jm     = item.get("jm", "szt")
+                    ilosc  = float(item.get("ilosc", 1))
+                    mat_id = item.get("material_id")
+
+                    if not mat_id:
+                        # Utwórz nowy materiał w bazie z zerowymi stanami
+                        cur_m = conn.execute(
+                            """INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, updated_at)
+                               VALUES (?,?,?,?, 0, 0, ?)
+                               ON CONFLICT(indeks) DO UPDATE SET opis=excluded.opis, jm=excluded.jm, updated_at=excluded.updated_at
+                               RETURNING id""",
+                            (item.get("kod",""), indeks, opis, jm, _now())
+                        ).fetchone()
+                        mat_id = cur_m["id"] if cur_m else conn.execute(
+                            "SELECT id FROM materialy WHERE indeks=?", (indeks,)
+                        ).fetchone()["id"]
+                        bom_new_materialy += 1
+
+                    # Dodaj do BOM (ignoruj duplikaty)
+                    try:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO bom_pozycje (zlecenie_id, material_id, ilosc, uwagi, created_at) VALUES (?,?,?,?,?)",
+                            (zlecenie_id, mat_id, ilosc, item.get("uwagi",""), _now())
+                        )
+                        bom_added += 1
+                    except Exception as e:
+                        errors.append(f"BOM {opis}: {e}")
+            except Exception as e:
+                errors.append(f"Błąd przetwarzania BOM: {e}")
+
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
         return {
             "zlecenie_id": zlecenie_id,
@@ -667,6 +806,8 @@ async def import_technologia(file: UploadFile = File(...), force: bool = False):
             "nazwa": parsed["nazwa"],
             "operacje_created": op_count,
             "nowe_stanowiska": nowe_stanowiska,
+            "bom_added": bom_added,
+            "bom_new_materialy": bom_new_materialy,
             "errors": errors,
         }
 

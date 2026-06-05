@@ -557,7 +557,7 @@ def _parse_bom_from_pdf_text(text: str) -> list:
     # Ilosci sa w kolumnie prawej, wyciagane przez pdfminer PRZED 'Oznaczenie'
     pre_text = text[:bom_start.start()]
     ilosc_blok = re.search(
-        r'Ilo[ss]c\s+jedn\.\s*\n([\s\S]+?)(?=RYSUNKI:|Nr\s+oper\.)',
+        r'Ilo.{1,4}\s+jedn\.\s*\n([\s\S]+?)(?=RYSUNKI:|Nr\s+oper\.)',
         pre_text, re.IGNORECASE
     )
     ilosci = []

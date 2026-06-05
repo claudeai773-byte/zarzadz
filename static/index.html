@@ -442,6 +442,18 @@ let state = {
   bomSelectedMat: null,
   materialyCount: null,
 
+  // Magazyn – nowe
+  magazynSubTab: 'transport',   // transport | materialy | rezerwacje | zapotrzebowanie
+  magazynMatSearch: '',
+  magazynMatResults: [],
+  magazynMatSearching: false,
+  magazynMatCount: null,
+  magazynRezerwacje: [],        // lista rezerwacji z localStorage
+  magazynZapotrzebowanie: null, // dane zapotrzebowania ze wszystkich zleceń
+  magazynZapotrzebowanieLoading: false,
+  magazynBraki: false,          // czy są braki → ikona ! w navbarze
+  rezerwacjaModal: null,        // {material_id, material_opis, material_indeks, stan} | null
+
   // Print modal
   printModal: null,
   printOps: [],
@@ -578,6 +590,127 @@ async function loadAdmin() {
   } catch(e) {
     setState({loading:false, error:e.message});
   }
+}
+
+// ── Sprawdź braki magazynowe (dla ikony !) ────────────────────
+async function loadMagazynBraki() {
+  try {
+    const data = await get('/api/zlecenia');
+    const aktywne = (data||[]).filter(z => z.status !== 'zakonczone' && z.status !== 'anulowane');
+    let braki = false;
+    for (const z of aktywne.slice(0,10)) {
+      try {
+        const bom = await get(`/api/zlecenia/${z.id}/bom`);
+        for (const p of bom) {
+          const dostepne = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+          const brakuje = p.masa_kg > 0 ? p.masa_kg - dostepne : p.ilosc - dostepne;
+          if (brakuje > 0.001) { braki = true; break; }
+        }
+        if (braki) break;
+      } catch(_) {}
+    }
+    setState({magazynBraki: braki}, true);
+    render();
+  } catch(_) {}
+}
+
+// ── Zapotrzebowanie produkcyjne ─────────────────────────────────
+async function loadMagazynZapotrzebowanie() {
+  setState({magazynZapotrzebowanieLoading: true, magazynZapotrzebowanie: null});
+  try {
+    const zlecenia = await get('/api/zlecenia');
+    const aktywne = (zlecenia||[]).filter(z => z.status !== 'zakonczone' && z.status !== 'anulowane');
+    const wyniki = [];
+    for (const z of aktywne) {
+      try {
+        const bom = await get(`/api/zlecenia/${z.id}/bom`);
+        if (bom && bom.length) {
+          wyniki.push({zlecenie: z, bom});
+        }
+      } catch(_) {}
+    }
+    setState({magazynZapotrzebowanie: wyniki, magazynZapotrzebowanieLoading: false});
+  } catch(e) {
+    setState({magazynZapotrzebowanie: [], magazynZapotrzebowanieLoading: false});
+  }
+}
+
+// ── Materiały w Magazynie ───────────────────────────────────────
+async function loadMagazynMaterialyCount() {
+  try {
+    const res = await get('/api/materialy/count');
+    setState({magazynMatCount: res.count ?? res ?? 0});
+  } catch(_) {
+    try {
+      const res = await get('/api/materialy?q=&limit=1');
+      setState({magazynMatCount: '?'});
+    } catch(_2) {}
+  }
+}
+
+async function loadMagazynMaterialySearch() {
+  const q = document.getElementById('mag-mat-search')?.value?.trim() || state.magazynMatSearch;
+  if (!q) return;
+  setState({magazynMatSearching: true, magazynMatSearch: q});
+  try {
+    const res = await get(`/api/materialy?q=${encodeURIComponent(q)}&limit=30`);
+    setState({magazynMatResults: res, magazynMatSearching: false});
+  } catch(e) { setState({magazynMatSearching: false}); }
+}
+
+// ── Rezerwacje (localStorage) ───────────────────────────────────
+function loadRezerwacje() {
+  try {
+    return JSON.parse(localStorage.getItem('mag_rezerwacje') || '[]');
+  } catch(_) { return []; }
+}
+function saveRezerwacje(lista) {
+  localStorage.setItem('mag_rezerwacje', JSON.stringify(lista));
+  setState({magazynRezerwacje: lista});
+}
+function openRezerwacjaModal(mat) {
+  setState({rezerwacjaModal: {
+    material_id: mat.id,
+    material_opis: mat.opis,
+    material_indeks: mat.indeks,
+    stan: mat.do_dyspozycji ?? mat.stan_rzeczywisty ?? 0,
+    jm: mat.jm || 'szt',
+  }});
+}
+function dodajRezerwacje() {
+  const m = state.rezerwacjaModal;
+  if (!m) return;
+  const zlecenie = document.getElementById('rez-zlecenie')?.value?.trim();
+  const ilosc = parseFloat(document.getElementById('rez-ilosc')?.value) || 0;
+  const cel = document.getElementById('rez-cel')?.value || 'produkcja';
+  const uwagi = document.getElementById('rez-uwagi')?.value?.trim() || '';
+  if (!zlecenie) { alert('Wpisz numer zlecenia G... lub P... (lub cel zakładowy)'); return; }
+  if (ilosc <= 0) { alert('Podaj ilość > 0'); return; }
+  const lista = loadRezerwacje();
+  lista.push({
+    id: Date.now(),
+    material_id: m.material_id,
+    material_opis: m.material_opis,
+    material_indeks: m.material_indeks,
+    jm: m.jm,
+    zlecenie,
+    ilosc,
+    cel,
+    uwagi,
+    data: new Date().toISOString().slice(0,10),
+    status: 'aktywna',
+  });
+  saveRezerwacje(lista);
+  setState({rezerwacjaModal: null});
+}
+function usunRezerwacje(id) {
+  if (!confirm('Usunąć rezerwację?')) return;
+  const lista = loadRezerwacje().filter(r => r.id !== id);
+  saveRezerwacje(lista);
+}
+function zwolnijRezerwacje(id) {
+  const lista = loadRezerwacje().map(r => r.id === id ? {...r, status: 'zwolniona'} : r);
+  saveRezerwacje(lista);
 }
 
 async function loadPracownikWydajnosc(okres) {
@@ -1190,7 +1323,7 @@ async function potwierdzRownolegle(operacjaId, rzeczywisteSt) {
 function loadTabData(tab) {
   if (tab==='praca')    loadPracownik();
   if (tab==='majster')  loadMajster();
-  if (tab==='magazyn')  loadMagazynier();
+  if (tab==='magazyn')  { loadMagazynier(); loadMagazynBraki(); }
   if (tab==='zlecenia') { loadZlecenia(); get('/api/stawki').then(d=>setState({stawki:d},true)).catch(()=>{}); }
   if (tab==='admin')    loadAdmin();
 }
@@ -1573,10 +1706,14 @@ function renderBottomNav() {
   }
   return `
   <nav class="bottom-nav">
-    ${tabs.map(t => `
+    ${tabs.map(t => {
+      const isMag = t.id === 'magazyn';
+      const showAlert = isMag && state.magazynBraki;
+      return `
       <button class="nav-btn ${state.activeTab===t.id?'active':''}" onclick="switchTab('${t.id}')">
-        <span class="icon">${t.icon}</span>${t.label}
-      </button>`).join('')}
+        <span class="icon" style="position:relative">${t.icon}${showAlert ? '<span style="position:absolute;top:-2px;right:-4px;background:var(--red);color:#fff;font-size:9px;font-weight:700;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;line-height:1">!</span>' : ''}</span>${t.label}
+      </button>`;
+    }).join('')}
   </nav>`;
 }
 
@@ -2531,15 +2668,16 @@ async function importMaterialyXlsx() {
   try {
     const fd = new FormData();
     fd.append('file', file);
-    const resp = await fetch('/api/materialy/import', {
+    const resp = await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/materialy/import', {
       method: 'POST',
-      headers: {'X-Api-Key': API_KEY},
+      headers: {'x-api-key': API_KEY},
       body: fd
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.detail || 'Błąd importu');
     if (statusEl) statusEl.innerHTML = `<span style="color:var(--green)">✅ Zaimportowano ${data.imported} pozycji${data.skipped?' · pominięto '+data.skipped:''}</span>`;
     await loadMaterialyCount();
+    await loadMagazynMaterialyCount();
     render();
   } catch(e) {
     if (statusEl) statusEl.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
@@ -3812,6 +3950,48 @@ function renderMajsterWydajnosc() {
 // ══════════════════════════════════════════════════════════════
 function renderMagazyn() {
   if (state.loading) return '<div class="spinner">⏳</div>';
+
+  const subTab = state.magazynSubTab || 'transport';
+  const subTabs = [
+    {id:'transport',    label:'🚚 Transport'},
+    {id:'materialy',    label:'🏗 Materiały'},
+    {id:'rezerwacje',   label:'🔒 Rezerwacje'},
+    {id:'zapotrzebowanie', label:'📋 Zapotrz.'},
+  ];
+
+  let html = `<div class="sub-tabs">
+    ${subTabs.map(t => `<button class="sub-tab ${subTab===t.id?'active':''}"
+      onclick="switchMagazynTab('${t.id}')">${t.label}</button>`).join('')}
+  </div>`;
+
+  if (subTab === 'transport') {
+    html += renderMagazynTransport();
+  } else if (subTab === 'materialy') {
+    html += renderMagazynMaterialy();
+  } else if (subTab === 'rezerwacje') {
+    html += renderMagazynRezerwacje();
+  } else if (subTab === 'zapotrzebowanie') {
+    html += renderMagazynZapotrzebowanie();
+  }
+
+  // Modal rezerwacji
+  if (state.rezerwacjaModal) html += renderRezerwacjaModal();
+
+  return html;
+}
+
+function switchMagazynTab(tab) {
+  setState({magazynSubTab: tab}, true);
+  if (tab === 'materialy' && state.magazynMatCount === null) loadMagazynMaterialyCount();
+  if (tab === 'rezerwacje') setState({magazynRezerwacje: loadRezerwacje()}, true);
+  if (tab === 'zapotrzebowanie' && !state.magazynZapotrzebowanie && !state.magazynZapotrzebowanieLoading) {
+    loadMagazynZapotrzebowanie();
+  }
+  render();
+}
+
+// ─── Sub-tab: Transport ───────────────────────────────────────────────────────
+function renderMagazynTransport() {
   let html = `<div class="section-hdr">📦 Operacje zakończone – do transportu (${state.transportOps.length})</div>`;
   if (!state.transportOps.length) {
     html += `<div class="card" style="text-align:center;padding:30px">
@@ -3838,6 +4018,308 @@ function renderMagazyn() {
   }
   html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMagazynier()">🔄 Odśwież</button>`;
   return html;
+}
+
+// ─── Sub-tab: Materiały ───────────────────────────────────────────────────────
+function renderMagazynMaterialy() {
+  const cnt = state.magazynMatCount;
+  let html = `
+  <div class="card" style="margin-bottom:14px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:12px">📂 Import bazy materiałów (.xlsx)</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.5">
+      Wczytaj plik Excel z bazą materiałów. Wymagane kolumny: <b>Indeks</b>, <b>Opis artykułu</b>.<br>
+      Opcjonalne: Jm, Do dyspozycji, Stan rzeczywisty, Rezerwacja, Kod paskowy.
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <input type="file" id="mag-xlsx-file" accept=".xlsx,.xls"
+        style="font-size:12px;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px">
+      <button class="btn btn-accent" onclick="importMaterialyXlsx()">📥 Importuj</button>
+    </div>
+    <div id="mat-import-status" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
+  </div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:700">🔍 Baza materiałów</div>
+      <span style="font-size:12px;color:var(--dim)">${cnt !== null ? cnt + ' pozycji' : '...'}</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <input id="mag-mat-search" type="text" placeholder="Szukaj wg opisu lub indeksu..."
+        value="${state.magazynMatSearch||''}"
+        style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px"
+        onkeyup="if(event.key==='Enter')loadMagazynMaterialySearch()">
+      <button class="btn-outline" onclick="loadMagazynMaterialySearch()">🔍</button>
+    </div>`;
+
+  if (state.magazynMatSearching) {
+    html += `<div style="text-align:center;padding:16px;color:var(--dim)">⏳ Szukam...</div>`;
+  } else if (state.magazynMatResults.length) {
+    html += `<div style="margin-top:4px">`;
+    for (const m of state.magazynMatResults) {
+      const dostepne = m.do_dyspozycji ?? m.stan_rzeczywisty ?? 0;
+      const rez = loadRezerwacje().filter(r => r.material_id === m.id && r.status === 'aktywna');
+      const rezSum = rez.reduce((a,r)=>a+r.ilosc, 0);
+      const wolne = dostepne - rezSum;
+      html += `
+      <div class="card" style="padding:10px;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:13px">${m.opis}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">${m.indeks||''}${m.gatunek_stali?' · <span style="color:var(--accent)">'+m.gatunek_stali+'</span>':''}${m.wymiary_str?' · '+m.wymiary_str:''}</div>
+          </div>
+          <div style="text-align:right;margin-left:8px;white-space:nowrap">
+            <div style="font-size:13px;font-weight:700;color:${dostepne>0?'var(--green)':'var(--red)'}">${dostepne.toFixed(dostepne%1===0?0:3)} ${m.jm}</div>
+            ${rezSum > 0 ? `<div style="font-size:10px;color:var(--orange)">🔒 ${rezSum.toFixed(rezSum%1===0?0:2)} zarezerwowane</div>` : ''}
+            ${wolne < dostepne ? `<div style="font-size:10px;color:var(--dim)">wolne: ${wolne.toFixed(wolne%1===0?0:2)} ${m.jm}</div>` : ''}
+          </div>
+        </div>
+        <div style="margin-top:8px">
+          <button class="btn-sm btn-accent" onclick="openRezerwacjaModal(${JSON.stringify(m).replace(/"/g,'&quot;')})">🔒 Zarezerwuj</button>
+        </div>
+      </div>`;
+    }
+    html += `</div>`;
+  } else if (state.magazynMatSearch) {
+    html += `<div style="color:var(--dim);font-size:12px;text-align:center;padding:14px">Brak wyników</div>`;
+  } else {
+    html += `<div style="color:var(--dim);font-size:12px;text-align:center;padding:14px">${cnt===0?'Baza pusta – zaimportuj plik xlsx.':'Wpisz frazę i naciśnij Enter'}</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+// ─── Sub-tab: Rezerwacje ──────────────────────────────────────────────────────
+function renderMagazynRezerwacje() {
+  const lista = state.magazynRezerwacje.length ? state.magazynRezerwacje : loadRezerwacje();
+  const aktywne = lista.filter(r => r.status === 'aktywna');
+  const zwolnione = lista.filter(r => r.status === 'zwolniona');
+
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-hdr" style="margin-bottom:0">🔒 Rezerwacje materiałów (${aktywne.length} aktywnych)</div>
+    <button class="btn-sm btn-accent" onclick="switchMagazynTab('materialy')">+ Nowa</button>
+  </div>
+  <div style="font-size:12px;color:var(--dim);margin-bottom:12px;background:rgba(232,160,32,0.08);border:1px dashed var(--accent);border-radius:8px;padding:8px 12px;">
+    💡 Rezerwacje blokują materiał na konkretne zlecenie (G.../P...) lub cel zakładowy.
+    Dane przechowywane lokalnie w przeglądarce.
+  </div>`;
+
+  if (!aktywne.length) {
+    html += `<div class="card" style="text-align:center;padding:24px">
+      <div style="font-size:32px;margin-bottom:8px">📭</div>
+      <div style="color:var(--dim);font-size:14px">Brak aktywnych rezerwacji</div>
+      <div style="font-size:12px;color:var(--dim);margin-top:4px">Znajdź materiał w zakładce Materiały i kliknij Zarezerwuj</div>
+    </div>`;
+  } else {
+    aktywne.forEach(r => {
+      const celColor = r.cel === 'produkcja' ? 'var(--blue)' : r.cel === 'zakładowe' ? 'var(--purple)' : 'var(--dim)';
+      html += `
+      <div class="card" style="padding:12px;margin-bottom:8px;border-left:3px solid ${celColor}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700;font-size:14px;color:var(--accent)">${r.zlecenie}</div>
+            <div style="font-size:13px;margin-top:2px">${r.material_opis}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">${r.material_indeks||''}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center">
+              <span style="background:rgba(52,152,219,0.15);color:var(--blue);border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">${r.ilosc} ${r.jm}</span>
+              <span style="background:rgba(155,89,182,0.12);color:${celColor};border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600">${r.cel==='produkcja'?'🔧 Produkcja':r.cel==='zakładowe'?'🏭 Zakładowe':'🔒 '+r.cel}</span>
+              <span style="font-size:11px;color:var(--dim)">📅 ${r.data}</span>
+            </div>
+            ${r.uwagi ? `<div style="font-size:11px;color:var(--dim);margin-top:4px;font-style:italic">${r.uwagi}</div>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:10px">
+          <button class="btn-sm" style="background:rgba(39,174,96,0.15);color:var(--green);border-color:var(--green)" onclick="zwolnijRezerwacje(${r.id})">✓ Zwolnij</button>
+          <button class="btn-sm btn-red" onclick="usunRezerwacje(${r.id})">🗑 Usuń</button>
+        </div>
+      </div>`;
+    });
+  }
+
+  if (zwolnione.length) {
+    html += `<div class="section-hdr" style="margin-top:16px">Historia zwolnionych (${zwolnione.length})</div>`;
+    zwolnione.slice(-5).reverse().forEach(r => {
+      html += `
+      <div class="card" style="padding:10px;margin-bottom:6px;opacity:0.6">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--dim)">${r.zlecenie} – ${r.material_opis}</div>
+            <div style="font-size:11px;color:var(--dim)">${r.ilosc} ${r.jm} | ${r.data}</div>
+          </div>
+          <button class="btn-sm btn-red" onclick="usunRezerwacje(${r.id})">🗑</button>
+        </div>
+      </div>`;
+    });
+  }
+
+  return html;
+}
+
+// ─── Sub-tab: Zapotrzebowanie produkcyjne ─────────────────────────────────────
+function renderMagazynZapotrzebowanie() {
+  if (state.magazynZapotrzebowanieLoading) {
+    return `<div class="spinner">⏳ Ładuję zapotrzebowanie...</div>`;
+  }
+
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-hdr" style="margin-bottom:0">📋 Zapotrzebowanie materiałowe</div>
+    <button class="btn-sm btn-accent" onclick="loadMagazynZapotrzebowanie();render()">🔄</button>
+  </div>`;
+
+  if (!state.magazynZapotrzebowanie) {
+    return html + `<div class="card" style="text-align:center;padding:24px">
+      <div style="font-size:32px;margin-bottom:8px">📦</div>
+      <div style="font-size:14px;color:var(--dim)">Ładuję dane zleceń...</div>
+    </div>`;
+  }
+
+  const wyniki = state.magazynZapotrzebowanie;
+  if (!wyniki.length) {
+    return html + `<div class="card" style="text-align:center;padding:24px">
+      <div style="font-size:32px;margin-bottom:8px">✅</div>
+      <div style="font-size:14px;color:var(--green)">Brak aktywnych zleceń z BOM</div>
+    </div>`;
+  }
+
+  // Zbiorczy widok braków
+  const allBraki = [];
+  wyniki.forEach(({zlecenie, bom}) => {
+    bom.forEach(p => {
+      const dostepne = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+      const brakuje = p.masa_kg > 0 ? p.masa_kg - dostepne : p.ilosc - dostepne;
+      if (brakuje > 0.001) {
+        allBraki.push({zlecenie, material: p, brakuje});
+      }
+    });
+  });
+
+  if (allBraki.length) {
+    html += `
+    <div style="background:rgba(231,76,60,.1);border:1px solid var(--red);border-radius:10px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:700;color:var(--red);font-size:13px;margin-bottom:8px">⚠ ${allBraki.length} braków materiałowych w aktywnych zleceniach</div>
+      ${allBraki.map(b => {
+        const jednostka = b.material.masa_kg > 0 ? 'kg' : (b.material.jm || '');
+        return `<div style="padding:6px 0;border-bottom:1px solid rgba(231,76,60,.2);font-size:12px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <span style="color:var(--accent);font-weight:700">${b.zlecenie.numer}</span>
+              <span style="color:var(--dim);margin-left:6px">${b.zlecenie.nazwa}</span>
+              <div style="margin-top:2px">${b.material.opis}</div>
+              <div style="font-size:10px;color:var(--dim)">${b.material.indeks||''}</div>
+            </div>
+            <div style="text-align:right;white-space:nowrap;margin-left:8px">
+              <span style="color:var(--red);font-weight:700">brak ${b.brakuje.toFixed(2)} ${jednostka}</span>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+  } else {
+    html += `
+    <div style="background:rgba(39,174,96,.1);border:1px solid var(--green);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:var(--green);font-weight:600">
+      ✅ Wszystkie materiały do aktywnych zleceń są dostępne
+    </div>`;
+  }
+
+  // Lista zleceń z ich BOM
+  html += `<div class="section-hdr">Szczegóły wg zleceń (${wyniki.length})</div>`;
+  wyniki.forEach(({zlecenie, bom}) => {
+    const braki = bom.filter(p => {
+      const d = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+      return p.masa_kg > 0 ? p.masa_kg - d > 0.001 : p.ilosc - d > 0.001;
+    });
+    const hasBrak = braki.length > 0;
+    html += `
+    <div class="card" style="margin-bottom:10px;${hasBrak?'border-color:var(--red)':''}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <div style="font-weight:700;font-size:14px;color:var(--accent)">${zlecenie.numer}</div>
+          <div style="font-size:12px;color:var(--dim)">${zlecenie.nazwa}</div>
+        </div>
+        ${hasBrak
+          ? `<span class="badge badge-red">⚠ ${braki.length} braków</span>`
+          : `<span class="badge badge-green">✓ OK</span>`}
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:3px 6px;color:var(--dim)">Materiał</th>
+          <th style="text-align:right;padding:3px 6px;color:var(--dim)">Potrzeba</th>
+          <th style="text-align:right;padding:3px 6px;color:var(--dim)">Stan</th>
+          <th style="text-align:right;padding:3px 6px;color:var(--dim)">Status</th>
+        </tr></thead><tbody>
+        ${bom.map(p => {
+          const dostepne = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+          const masaKg = p.masa_kg || 0;
+          const useKg = masaKg > 0;
+          const potrzeba = useKg ? masaKg : p.ilosc;
+          const brakuje = potrzeba - dostepne;
+          const ok = brakuje <= 0.001;
+          const jednostka = useKg ? 'kg' : (p.jm||'');
+          return `<tr style="border-bottom:1px solid rgba(46,53,72,.3)">
+            <td style="padding:4px 6px">
+              <div style="font-weight:600">${p.opis}</div>
+              <div style="color:var(--dim);font-size:10px">${p.indeks||''}${p.gatunek_stali?' · '+p.gatunek_stali:''}</div>
+            </td>
+            <td style="padding:4px 6px;text-align:right;white-space:nowrap;font-weight:700">${potrzeba.toFixed(2)} ${jednostka}</td>
+            <td style="padding:4px 6px;text-align:right;white-space:nowrap;color:${dostepne>0?'var(--green)':'var(--red)'}">${dostepne.toFixed(2)} ${jednostka}</td>
+            <td style="padding:4px 6px;text-align:right;white-space:nowrap;font-size:10px;font-weight:700;color:${ok?'var(--green)':'var(--red)'}">
+              ${ok ? '✓' : `⚠ -${Math.abs(brakuje).toFixed(2)}`}
+            </td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  });
+
+  return html;
+}
+
+// ─── Modal rezerwacji ─────────────────────────────────────────────────────────
+function renderRezerwacjaModal() {
+  const m = state.rezerwacjaModal;
+  if (!m) return '';
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)setState({rezerwacjaModal:null})">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({rezerwacjaModal:null})">×</button>
+      <h3>🔒 Rezerwacja materiału</h3>
+      <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+        <div style="font-weight:700;font-size:13px">${m.material_opis}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px">${m.material_indeks||''}</div>
+        <div style="font-size:12px;margin-top:4px">Stan dostępny: <b style="color:var(--green)">${parseFloat(m.stan).toFixed(3)} ${m.jm}</b></div>
+      </div>
+      <div class="field">
+        <label>Nr zlecenia / cel</label>
+        <input id="rez-zlecenie" type="text" placeholder="np. G24-001, P25-032 lub Serwis własny"
+          style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;width:100%;box-sizing:border-box;font-size:14px">
+        <div style="font-size:11px;color:var(--dim);margin-top:4px">Zlecenia produkcyjne: G... lub P... | Cele zakładowe: wpisz opis</div>
+      </div>
+      <div class="field">
+        <label>Cel rezerwacji</label>
+        <select id="rez-cel" style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px">
+          <option value="produkcja">🔧 Produkcja (zlecenie G/P)</option>
+          <option value="zakładowe">🏭 Cel zakładowy</option>
+          <option value="serwis">🔩 Serwis / naprawa</option>
+          <option value="inne">📦 Inne</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Ilość (${m.jm})</label>
+        <input id="rez-ilosc" type="number" min="0.001" step="0.001" value="1"
+          style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;width:100%;box-sizing:border-box;font-size:14px">
+      </div>
+      <div class="field">
+        <label>Uwagi (opcjonalnie)</label>
+        <input id="rez-uwagi" type="text" placeholder="np. pilne, termin do 15.06"
+          style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;width:100%;box-sizing:border-box;font-size:14px">
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-accent" style="flex:1" onclick="dodajRezerwacje()">🔒 Zarezerwuj</button>
+        <button class="btn btn-outline" style="flex:0 0 auto;width:auto;padding:14px 18px" onclick="setState({rezerwacjaModal:null})">Anuluj</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════

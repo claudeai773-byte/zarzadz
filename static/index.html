@@ -2661,22 +2661,27 @@ function renderBomSection(zlecenieId) {
           <th style="padding:4px 2px"></th>
         </tr></thead><tbody>`;
     for (const p of pozycje) {
-      const dostepne = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+      const dostepneKg = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
       const masaKg = p.masa_kg || 0;
-      // Kolumna "Masa" — w kg jeśli obliczona, inaczej w jm materiału
-      const masaStr = masaKg > 0 ? `<b>${masaKg.toFixed(2)}</b> kg` : `<b>${p.ilosc}</b> ${p.jm}`;
-      // Dostępne i Status zawsze w jednostce materiału (p.jm) — bo tyle jest na stanie
-      const brakuje = p.ilosc - dostepne;
-      const dostepneStr = `${dostepne.toFixed(p.jm === 'szt' ? 0 : 3)} ${p.jm}`;
-      const statusColor = brakuje > 0 ? 'var(--red)' : 'var(--green)';
-      const statusLabel = brakuje > 0 ? `⚠ brak ${brakuje.toFixed(p.jm === 'szt' ? 0 : 2)} ${p.jm}` : '✓ dostępny';
-      // W podtytule pokaż ilość szt jeśli jest masa
-      const iloscInfo = masaKg > 0 ? `${p.ilosc} ${p.jm}` : '';
+      const useKg = masaKg > 0;
+
+      // Kolumna "Masa" — zapotrzebowanie zlecenia
+      const masaStr = useKg ? `<b>${masaKg.toFixed(2)}</b> kg` : `<b>${p.ilosc}</b> ${p.jm}`;
+      // Dostępne — ze stanu magazynu (już w kg gdy jm=kg, lub w szt gdy jm=szt)
+      const dostepneStr = useKg
+        ? `${dostepneKg.toFixed(2)} kg`
+        : `${dostepneKg.toFixed(p.jm === 'szt' ? 0 : 3)} ${p.jm}`;
+      // Brakuje = zapotrzebowanie_kg - stan_kg (lub szt jeśli brak masy)
+      const brakuje = useKg ? masaKg - dostepneKg : p.ilosc - dostepneKg;
+      const statusColor = brakuje > 0.001 ? 'var(--red)' : 'var(--green)';
+      const statusLabel = brakuje > 0.001
+        ? (useKg ? `⚠ brak ${brakuje.toFixed(2)} kg` : `⚠ brak ${brakuje.toFixed(p.jm === 'szt' ? 0 : 2)} ${p.jm}`)
+        : '✓ dostępny';
       const subParts = [
         p.indeks,
         p.gatunek_stali ? `<span style="color:var(--accent)">${p.gatunek_stali}</span>` : '',
         p.wymiary_str ? `<span style="color:var(--dim)">${p.wymiary_str}</span>` : '',
-        iloscInfo ? `<span style="color:var(--dim)">${iloscInfo}</span>` : '',
+        useKg ? `<span style="color:var(--dim)">${p.ilosc} ${p.jm}</span>` : '',
         p.uwagi ? `<span style="color:var(--dim)">${p.uwagi}</span>` : '',
       ].filter(Boolean).join(' · ');
       html += `<tr style="border-bottom:1px solid var(--border)">
@@ -2696,7 +2701,10 @@ function renderBomSection(zlecenieId) {
     html += '</tbody></table></div>';
 
     // Podsumowanie niedoborów
-    const braki = pozycje.filter(p => p.ilosc > (p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0));
+    const braki = pozycje.filter(p => {
+      const dostepne = p.do_dyspozycji ?? p.stan_rzeczywisty ?? 0;
+      return p.masa_kg > 0 ? (p.masa_kg - dostepne) > 0.001 : p.ilosc > dostepne;
+    });
     if (braki.length) {
       html += `<div style="background:rgba(220,50,50,.1);border:1px solid var(--red);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--red)">
         ⚠ <b>${braki.length} pozycj${braki.length===1?'a':braki.length<5?'e':'i'} z niedoborem</b> – sprawdź stan magazynu przed uruchomieniem produkcji

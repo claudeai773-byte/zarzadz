@@ -453,6 +453,7 @@ let state = {
   magazynZapotrzebowanieLoading: false,
   magazynBraki: false,          // czy są braki → ikona ! w navbarze
   rezerwacjaModal: null,        // {material_id, material_opis, material_indeks, stan} | null
+  magazynLastRefresh: null,     // czas ostatniego odświeżenia danych magazynu
 
   // Print modal
   printModal: null,
@@ -667,6 +668,8 @@ function loadRezerwacje() {
 function saveRezerwacje(lista) {
   localStorage.setItem('mag_rezerwacje', JSON.stringify(lista));
   setState({magazynRezerwacje: lista});
+  // Backup asynchronicznie po każdej zmianie
+  setTimeout(() => backupRezerwacjeDoSerwera(), 500);
 }
 function openRezerwacjaModal(mat) {
   setState({rezerwacjaModal: {
@@ -750,6 +753,7 @@ async function doLogin(username, password) {
     const tab = defaultTabWithPerms(user.role, userTabs);
     setState({user, screen:'main', loading:false, activeTab:tab, currentUserTabs: userTabs});
     loadTabData(tab);
+    startMagazynAutoRefresh();
   } catch(e) {
     setState({loading:false, error:'Nieprawidłowy login lub hasło'});
   }
@@ -1323,7 +1327,11 @@ async function potwierdzRownolegle(operacjaId, rzeczywisteSt) {
 function loadTabData(tab) {
   if (tab==='praca')    loadPracownik();
   if (tab==='majster')  loadMajster();
-  if (tab==='magazyn')  { loadMagazynier(); loadMagazynBraki(); }
+  if (tab==='magazyn')  {
+    loadMagazynier();
+    loadMagazynBraki();
+    setState({magazynLastRefresh: new Date().toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}, true);
+  }
   if (tab==='zlecenia') { loadZlecenia(); get('/api/stawki').then(d=>setState({stawki:d},true)).catch(()=>{}); }
   if (tab==='admin')    loadAdmin();
 }
@@ -1331,6 +1339,10 @@ function loadTabData(tab) {
 function switchTab(tab) {
   setState({activeTab:tab, error:null});
   loadTabData(tab);
+  // Przy wejściu na magazyn – natychmiast odśwież dane i ikony braki
+  if (tab === 'magazyn') {
+    setState({magazynLastRefresh: new Date().toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}, true);
+  }
 }
 
 function logout() {
@@ -2660,7 +2672,8 @@ async function loadMaterialyCount() {
 }
 
 async function importMaterialyXlsx() {
-  const fileInput = document.getElementById('mat-xlsx-file');
+  // Szukaj input w magazynie (mag-xlsx-file) lub w adminie (mat-xlsx-file)
+  const fileInput = document.getElementById('mag-xlsx-file') || document.getElementById('mat-xlsx-file');
   const statusEl = document.getElementById('mat-import-status');
   if (!fileInput?.files?.length) { alert('Wybierz plik xlsx'); return; }
   const file = fileInput.files[0];
@@ -3959,7 +3972,15 @@ function renderMagazyn() {
     {id:'zapotrzebowanie', label:'📋 Zapotrz.'},
   ];
 
-  let html = `<div class="sub-tabs">
+  const refreshTime = state.magazynLastRefresh;
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <div style="font-size:10px;color:var(--dim)">
+      ${refreshTime ? `🔄 odświeżono o ${refreshTime}` : ''}
+    </div>
+    <div style="font-size:10px;color:var(--dim)">auto co 1 min</div>
+  </div>
+  <div class="sub-tabs">
     ${subTabs.map(t => `<button class="sub-tab ${subTab===t.id?'active':''}"
       onclick="switchMagazynTab('${t.id}')">${t.label}</button>`).join('')}
   </div>`;
@@ -6325,6 +6346,66 @@ setInterval(() => {
     if (state.activeTab === 'majster') loadMajster();
   }
 }, 30000);
+
+// ── Auto-odświeżanie magazynu co 60s ──────────────────────────
+let _magazynRefreshInterval = null;
+
+function startMagazynAutoRefresh() {
+  if (_magazynRefreshInterval) clearInterval(_magazynRefreshInterval);
+  _magazynRefreshInterval = setInterval(async () => {
+    if (state.screen !== 'main' || state.activeTab !== 'magazyn') return;
+    const subTab = state.magazynSubTab || 'transport';
+    const teraz = new Date().toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'});
+    // Transport – odśwież operacje
+    if (subTab === 'transport') {
+      try {
+        const ops = await get('/api/operacje/zakonczone-do-transportu');
+        setState({transportOps: ops, magazynLastRefresh: teraz}, true);
+        render();
+      } catch(_) {}
+    }
+    // Zapotrzebowanie – odśwież dane BOM
+    if (subTab === 'zapotrzebowanie') {
+      setState({magazynLastRefresh: teraz}, true);
+      await loadMagazynZapotrzebowanie();
+    }
+    // Rezerwacje – zsynchronizuj z localStorage (na wypadek innej zakładki/okna)
+    if (subTab === 'rezerwacje') {
+      setState({magazynRezerwacje: loadRezerwacje(), magazynLastRefresh: teraz}, true);
+      render();
+    }
+    // Materiały – odśwież wyniki wyszukiwania jeśli było zapytanie
+    if (subTab === 'materialy' && state.magazynMatSearch) {
+      setState({magazynLastRefresh: teraz}, true);
+      await loadMagazynMaterialySearch();
+    }
+    // Zawsze sprawdź braki (dla ikony !)
+    await loadMagazynBraki();
+  }, 60000);
+}
+
+// ── Backup rezerwacji do serwera ───────────────────────────────
+async function backupRezerwacjeDoSerwera() {
+  if (!SERVER_URL || !API_KEY) return;
+  const lista = loadRezerwacje();
+  try {
+    await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/admin/backup/rezerwacje', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'x-api-key': API_KEY},
+      body: JSON.stringify({rezerwacje: lista, timestamp: new Date().toISOString()}),
+    });
+  } catch(_) {
+    // Jeśli endpoint nie istnieje – zapisz do localStorage jako backup lokalny
+    try {
+      localStorage.setItem('mag_rezerwacje_backup_' + new Date().toISOString().slice(0,10), JSON.stringify(lista));
+    } catch(_2) {}
+  }
+}
+
+// Auto-backup co 5 minut
+setInterval(() => {
+  if (state.screen === 'main') backupRezerwacjeDoSerwera();
+}, 5 * 60 * 1000);
 
 render();
 

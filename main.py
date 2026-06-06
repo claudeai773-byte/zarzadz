@@ -3479,6 +3479,7 @@ def zwrot_narzedzia_v2(pid: int):
 
 
 
+class FeedbackIn(BaseModel):
     user_id: Optional[int] = None
     user_name: Optional[str] = None
     ocena: int

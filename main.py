@@ -2543,6 +2543,56 @@ def init_db_on_start():
         except Exception:
             pass
 
+    # ➤ Narzędziownia – baza narzędzi
+    c.execute("""CREATE TABLE IF NOT EXISTS narzedzia (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        indeks TEXT UNIQUE NOT NULL,
+        nazwa TEXT NOT NULL,
+        typ TEXT DEFAULT '',
+        jm TEXT DEFAULT 'szt',
+        stan INTEGER DEFAULT 0,
+        stan_min INTEGER DEFAULT 1,
+        lokalizacja TEXT DEFAULT '',
+        uwagi TEXT DEFAULT '',
+        kod_paskowy TEXT DEFAULT '',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    for _col, _def in [
+        ("lokalizacja","TEXT DEFAULT ''"),
+        ("uwagi","TEXT DEFAULT ''"),
+        ("kod_paskowy","TEXT DEFAULT ''"),
+        ("stan_min","INTEGER DEFAULT 1"),
+        ("typ","TEXT DEFAULT ''"),
+    ]:
+        try: c.execute(f"ALTER TABLE narzedzia ADD COLUMN {_col} {_def}")
+        except: pass
+
+    # ➤ Narzędziownia – rezerwacje narzędzi pod zlecenia
+    c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_rezerwacje (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        narzedzie_id INTEGER NOT NULL,
+        zlecenie_nr TEXT NOT NULL,
+        cel TEXT DEFAULT 'produkcja',
+        ilosc INTEGER DEFAULT 1,
+        data_od TEXT,
+        data_do TEXT,
+        uwagi TEXT DEFAULT '',
+        status TEXT DEFAULT 'aktywna',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (narzedzie_id) REFERENCES narzedzia(id) ON DELETE CASCADE)""")
+
+
+    # ➤ Narzędziownia – historia pobrań (materiały eksploatacyjne)
+    c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_pobrania (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        narzedzie_id INTEGER NOT NULL,
+        zlecenie_nr TEXT DEFAULT '—',
+        ilosc REAL NOT NULL DEFAULT 1,
+        uwagi TEXT DEFAULT '',
+        user_name TEXT DEFAULT '',
+        status TEXT DEFAULT 'wydane',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (narzedzie_id) REFERENCES narzedzia(id) ON DELETE CASCADE)""")
+
     # ➤ Migracja: uzupełnij stawki_zlecen dla istniejących zleceń
     existing_zl = c.execute("SELECT id FROM zlecenia").fetchall()
     for zl_row in existing_zl:
@@ -2584,7 +2634,12 @@ import threading as _threading
 _TABLES_TO_BACKUP = [
     "zlecenia", "operacje", "sesje_pracy", "users", "stawki",
     "katalog_produktow", "produkty_zlecenia", "opcje_zlecen", "user_permissions",
-    "stawki_zlecen"  # ➤ NOWE
+    "stawki_zlecen",
+    "materialy",            # baza materialow (import xlsx)
+    "bom_pozycje",          # zapotrzebowanie materialowe zlecen
+    "narzedzia",            # baza narzedzi (narzedzialnia)
+    "narzedzia_rezerwacje", # rezerwacje narzedzi pod zlecenia
+    "narzedzia_pobrania",   # historia pobran materialow z narzedzilalni
 ]
 
 # ─── GitHub Gist helpers ────────────────────────────────────────────────────────
@@ -3081,8 +3136,349 @@ def delete_bom(bid: int):
         conn.execute("DELETE FROM bom_pozycje WHERE id=?", (bid,))
         return {"ok": True}
 
-# ─── Feedback / Oceny aplikacji ───────────────────────────────────────────────
-class FeedbackIn(BaseModel):
+# ─── Narzędziownia ────────────────────────────────────────────────────────────
+
+@app.post("/api/narzedzia/import", dependencies=[Depends(verify_key)])
+async def import_narzedzia_xlsx(file: UploadFile = File(...)):
+    """Import bazy narzędzi z pliku xlsx.
+    Wymagane kolumny: Indeks, Nazwa.
+    Opcjonalne: Typ, Jm, Stan, Stan_min, Lokalizacja, Uwagi, Kod_paskowy.
+    """
+    content = await file.read()
+    try:
+        wb = _openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    except Exception as e:
+        raise HTTPException(400, f"Błąd odczytu xlsx: {e}")
+    if not rows:
+        raise HTTPException(400, "Plik xlsx jest pusty")
+
+    # Mapowanie nagłówków (case-insensitive, bez polskich znaków)
+    def _norm(s):
+        import unicodedata
+        s = str(s or "").strip().lower()
+        return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+
+    header = [_norm(c) for c in rows[0]]
+    def col(names):
+        for n in names:
+            if n in header: return header.index(n)
+        return None
+
+    i_indeks   = col(["indeks","index","kod","symbol"])
+    i_nazwa    = col(["nazwa","name","opis","description","artykul"])
+    i_typ      = col(["typ","type","kategoria","category"])
+    i_jm       = col(["jm","jednostka","unit"])
+    i_stan     = col(["stan","ilosc","qty","quantity","stan rzeczywisty","stan_rzeczywisty"])
+    i_stan_min = col(["stan_min","min","minimum","prog","prog_min","ilosc_min"])
+    i_lok      = col(["lokalizacja","location","miejsce","polka","shelf"])
+    i_uwagi    = col(["uwagi","uwaga","notes","note","komentarz"])
+    i_kod      = col(["kod paskowy","kod_paskowy","barcode","ean"])
+
+    if i_indeks is None or i_nazwa is None:
+        raise HTTPException(400, "Brak wymaganych kolumn: Indeks i Nazwa")
+
+    imported = skipped = 0
+    with get_db() as conn:
+        for row in rows[1:]:
+            def g(i): return str(row[i]).strip() if i is not None and i < len(row) and row[i] is not None else ""
+            def gf(i, default=0):
+                try: return float(str(row[i]).replace(",", ".")) if i is not None and i < len(row) and row[i] is not None else default
+                except: return default
+            def gi(i, default=0):
+                try: return int(float(str(row[i]).replace(",", "."))) if i is not None and i < len(row) and row[i] is not None else default
+                except: return default
+
+            indeks = g(i_indeks)
+            nazwa  = g(i_nazwa)
+            if not indeks or not nazwa:
+                skipped += 1
+                continue
+            try:
+                conn.execute("""
+                    INSERT INTO narzedzia (indeks, nazwa, typ, jm, stan, stan_min, lokalizacja, uwagi, kod_paskowy, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(indeks) DO UPDATE SET
+                        nazwa=excluded.nazwa, typ=excluded.typ, jm=excluded.jm,
+                        stan=excluded.stan, stan_min=excluded.stan_min,
+                        lokalizacja=excluded.lokalizacja, uwagi=excluded.uwagi,
+                        kod_paskowy=excluded.kod_paskowy, updated_at=excluded.updated_at
+                """, (indeks, nazwa,
+                      g(i_typ) or "ogólne",
+                      g(i_jm) or "szt",
+                      gi(i_stan),
+                      gi(i_stan_min, 1),
+                      g(i_lok),
+                      g(i_uwagi),
+                      g(i_kod),
+                      _now()))
+                imported += 1
+            except Exception as e:
+                print(f"Narzędzie skip {indeks}: {e}")
+                skipped += 1
+    return {"ok": True, "imported": imported, "skipped": skipped}
+
+
+@app.get("/api/narzedzia", dependencies=[Depends(verify_key)])
+def get_narzedzia(q: str = "", limit: int = 50):
+    with get_db() as conn:
+        if q:
+            like = f"%{q}%"
+            rows = conn.execute("""
+                SELECT n.*, COALESCE(SUM(CASE WHEN r.status='aktywna' THEN r.ilosc ELSE 0 END),0) as zarezerwowane
+                FROM narzedzia n
+                LEFT JOIN narzedzia_rezerwacje r ON r.narzedzie_id=n.id
+                WHERE n.indeks LIKE ? OR n.nazwa LIKE ? OR n.typ LIKE ?
+                GROUP BY n.id ORDER BY n.nazwa LIMIT ?
+            """, (like, like, like, limit)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT n.*, COALESCE(SUM(CASE WHEN r.status='aktywna' THEN r.ilosc ELSE 0 END),0) as zarezerwowane
+                FROM narzedzia n
+                LEFT JOIN narzedzia_rezerwacje r ON r.narzedzie_id=n.id
+                GROUP BY n.id ORDER BY n.nazwa LIMIT ?
+            """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.get("/api/narzedzia/count", dependencies=[Depends(verify_key)])
+def count_narzedzia():
+    with get_db() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM narzedzia").fetchone()[0]
+        niskie = conn.execute("""
+            SELECT COUNT(*) FROM narzedzia n
+            WHERE n.stan - COALESCE((
+                SELECT SUM(r.ilosc) FROM narzedzia_rezerwacje r
+                WHERE r.narzedzie_id=n.id AND r.status='aktywna'
+            ),0) < n.stan_min
+        """).fetchone()[0]
+        return {"count": n, "niskie_stany": niskie}
+
+
+@app.get("/api/narzedzia/niskie-stany", dependencies=[Depends(verify_key)])
+def narzedzia_niskie_stany():
+    """Narzędzia, których wolny stan < stan_min (do ostrzeżeń)."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT n.*,
+                   COALESCE(SUM(CASE WHEN r.status='aktywna' THEN r.ilosc ELSE 0 END),0) as zarezerwowane
+            FROM narzedzia n
+            LEFT JOIN narzedzia_rezerwacje r ON r.narzedzie_id=n.id
+            GROUP BY n.id
+            HAVING (n.stan - zarezerwowane) < n.stan_min
+            ORDER BY (n.stan - zarezerwowane) ASC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.put("/api/narzedzia/{nid}", dependencies=[Depends(verify_key)])
+async def update_narzedzie(nid: int, request: Request):
+    body = await request.json()
+    fields = ["nazwa","typ","jm","stan","stan_min","lokalizacja","uwagi","kod_paskowy"]
+    sets = ", ".join(f"{f}=?" for f in fields if f in body)
+    vals = [body[f] for f in fields if f in body]
+    if not sets:
+        raise HTTPException(400, "Brak pól do aktualizacji")
+    vals.append(_now())
+    vals.append(nid)
+    with get_db() as conn:
+        conn.execute(f"UPDATE narzedzia SET {sets}, updated_at=? WHERE id=?", vals)
+        return {"ok": True}
+
+
+@app.delete("/api/narzedzia/{nid}", dependencies=[Depends(verify_key)])
+def delete_narzedzie(nid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM narzedzia WHERE id=?", (nid,))
+        return {"ok": True}
+
+
+# ─── Rezerwacje narzędzi ──────────────────────────────────────────────────────
+
+class NarzedzieRezerwacjaIn(BaseModel):
+    narzedzie_id: int
+    zlecenie_nr: str
+    cel: Optional[str] = "produkcja"
+    ilosc: int = 1
+    data_od: Optional[str] = None
+    data_do: Optional[str] = None
+    uwagi: Optional[str] = ""
+
+
+@app.get("/api/narzedzia-rezerwacje", dependencies=[Depends(verify_key)])
+def get_narzedzia_rezerwacje(status: str = "aktywna", narzedzie_id: Optional[int] = None):
+    with get_db() as conn:
+        if narzedzie_id:
+            rows = conn.execute("""
+                SELECT r.*, n.nazwa as narzedzie_nazwa, n.indeks as narzedzie_indeks, n.jm
+                FROM narzedzia_rezerwacje r JOIN narzedzia n ON r.narzedzie_id=n.id
+                WHERE r.narzedzie_id=? AND r.status=?
+                ORDER BY r.created_at DESC
+            """, (narzedzie_id, status)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT r.*, n.nazwa as narzedzie_nazwa, n.indeks as narzedzie_indeks, n.jm
+                FROM narzedzia_rezerwacje r JOIN narzedzia n ON r.narzedzie_id=n.id
+                WHERE r.status=?
+                ORDER BY r.created_at DESC
+            """, (status,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/narzedzia-rezerwacje", dependencies=[Depends(verify_key)])
+def add_narzedzie_rezerwacja(req: NarzedzieRezerwacjaIn):
+    # Sprawdź dostępność
+    with get_db() as conn:
+        tool = conn.execute("SELECT * FROM narzedzia WHERE id=?", (req.narzedzie_id,)).fetchone()
+        if not tool:
+            raise HTTPException(404, "Narzędzie nie znalezione")
+        zarezerwowane = conn.execute("""
+            SELECT COALESCE(SUM(ilosc),0) FROM narzedzia_rezerwacje
+            WHERE narzedzie_id=? AND status='aktywna'
+        """, (req.narzedzie_id,)).fetchone()[0]
+        wolne = tool["stan"] - zarezerwowane
+        if req.ilosc > wolne:
+            raise HTTPException(409, f"Niewystarczający stan. Wolne: {wolne} {tool['jm']}")
+        conn.execute("""
+            INSERT INTO narzedzia_rezerwacje
+                (narzedzie_id, zlecenie_nr, cel, ilosc, data_od, data_do, uwagi, status, created_at)
+            VALUES (?,?,?,?,?,?,?,'aktywna',?)
+        """, (req.narzedzie_id, req.zlecenie_nr, req.cel, req.ilosc,
+              req.data_od, req.data_do, req.uwagi or "", _now()))
+        return {"ok": True}
+
+
+@app.patch("/api/narzedzia-rezerwacje/{rid}/zwolnij", dependencies=[Depends(verify_key)])
+def zwolnij_narzedzie_rezerwacje(rid: int):
+    with get_db() as conn:
+        conn.execute("UPDATE narzedzia_rezerwacje SET status='zwolniona' WHERE id=?", (rid,))
+        return {"ok": True}
+
+
+@app.patch("/api/narzedzia-rezerwacje/{rid}/wydaj", dependencies=[Depends(verify_key)])
+def wydaj_narzedzie(rid: int):
+    """Oznacza narzędzie jako wydane i zmniejsza stan w bazie."""
+    with get_db() as conn:
+        rez = conn.execute("SELECT * FROM narzedzia_rezerwacje WHERE id=?", (rid,)).fetchone()
+        if not rez:
+            raise HTTPException(404, "Rezerwacja nie znaleziona")
+        conn.execute("UPDATE narzedzia_rezerwacje SET status='wydane' WHERE id=?", (rid,))
+        conn.execute("UPDATE narzedzia SET stan = MAX(0, stan - ?), updated_at=? WHERE id=?",
+                     (rez["ilosc"], _now(), rez["narzedzie_id"]))
+        return {"ok": True}
+
+
+@app.patch("/api/narzedzia-rezerwacje/{rid}/zwrot", dependencies=[Depends(verify_key)])
+def zwrot_narzedzia(rid: int):
+    """Przyjęcie zwrotu – zwiększa stan i zamyka rezerwację."""
+    with get_db() as conn:
+        rez = conn.execute("SELECT * FROM narzedzia_rezerwacje WHERE id=?", (rid,)).fetchone()
+        if not rez:
+            raise HTTPException(404, "Rezerwacja nie znaleziona")
+        conn.execute("UPDATE narzedzia_rezerwacje SET status='zwrocone' WHERE id=?", (rid,))
+        conn.execute("UPDATE narzedzia SET stan = stan + ?, updated_at=? WHERE id=?",
+                     (rez["ilosc"], _now(), rez["narzedzie_id"]))
+        return {"ok": True}
+
+
+@app.delete("/api/narzedzia-rezerwacje/{rid}", dependencies=[Depends(verify_key)])
+def delete_narzedzie_rezerwacja(rid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM narzedzia_rezerwacje WHERE id=?", (rid,))
+        return {"ok": True}
+
+
+# ─── Narzędziownia: dodawanie pojedynczego narzędzia ──────────────────────────
+
+class NarzedzieIn(BaseModel):
+    indeks: str
+    nazwa: str
+    typ: Optional[str] = "Inne"
+    jm: Optional[str] = "szt"
+    stan: Optional[float] = 0
+    stan_min: Optional[float] = 1
+    lokalizacja: Optional[str] = ""
+    uwagi: Optional[str] = ""
+
+@app.post("/api/narzedzia", dependencies=[Depends(verify_key)])
+def add_narzedzie(req: NarzedzieIn):
+    with get_db() as conn:
+        exists = conn.execute("SELECT id FROM narzedzia WHERE indeks=?", (req.indeks,)).fetchone()
+        if exists:
+            raise HTTPException(409, f"Indeks '{req.indeks}' już istnieje")
+        conn.execute("""
+            INSERT INTO narzedzia (indeks, nazwa, typ, jm, stan, stan_min, lokalizacja, uwagi, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (req.indeks, req.nazwa, req.typ or "Inne", req.jm or "szt",
+              req.stan or 0, req.stan_min or 1, req.lokalizacja or "", req.uwagi or "", _now()))
+    return {"ok": True}
+
+
+# ─── Narzędziownia: historia pobrań (zastępuje rezerwacje dla materiałów eksploatacyjnych) ──
+
+@app.get("/api/narzedzia/niskie-stany", dependencies=[Depends(verify_key)])
+def narzedzia_niskie_stany_v2():
+    """Narzędzia, których stan < stan_min."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT * FROM narzedzia
+            WHERE stan < stan_min
+            ORDER BY (stan * 1.0 / NULLIF(stan_min,0)) ASC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+class NarzedzePobranieIn(BaseModel):
+    narzedzie_id: int
+    zlecenie_nr: Optional[str] = "—"
+    ilosc: float = 1
+    uwagi: Optional[str] = ""
+
+@app.post("/api/narzedzia-pobrania", dependencies=[Depends(verify_key)])
+def pobierz_narzedzie(req: NarzedzePobranieIn):
+    with get_db() as conn:
+        tool = conn.execute("SELECT * FROM narzedzia WHERE id=?", (req.narzedzie_id,)).fetchone()
+        if not tool:
+            raise HTTPException(404, "Narzędzie nie znalezione")
+        if req.ilosc > tool["stan"]:
+            raise HTTPException(409, f"Niewystarczający stan. Dostępne: {tool['stan']} {tool['jm']}")
+        # Zmniejsz stan
+        conn.execute("UPDATE narzedzia SET stan = MAX(0, stan - ?), updated_at=? WHERE id=?",
+                     (req.ilosc, _now(), req.narzedzie_id))
+        # Zapisz historię
+        conn.execute("""
+            INSERT INTO narzedzia_pobrania (narzedzie_id, zlecenie_nr, ilosc, uwagi, status, created_at)
+            VALUES (?,?,?,?,'wydane',?)
+        """, (req.narzedzie_id, req.zlecenie_nr or "—", req.ilosc, req.uwagi or "", _now()))
+    return {"ok": True}
+
+@app.get("/api/narzedzia-pobrania", dependencies=[Depends(verify_key)])
+def get_narzedzia_pobrania(limit: int = 100):
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT p.*, n.nazwa as narzedzie_nazwa, n.indeks as narzedzie_indeks, n.jm
+            FROM narzedzia_pobrania p
+            JOIN narzedzia n ON p.narzedzie_id = n.id
+            ORDER BY p.created_at DESC LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+@app.patch("/api/narzedzia-pobrania/{pid}/zwrot", dependencies=[Depends(verify_key)])
+def zwrot_narzedzia_v2(pid: int):
+    """Przyjęcie zwrotu – zwiększa stan z powrotem."""
+    with get_db() as conn:
+        p = conn.execute("SELECT * FROM narzedzia_pobrania WHERE id=?", (pid,)).fetchone()
+        if not p:
+            raise HTTPException(404, "Pobranie nie znalezione")
+        if p["status"] == "zwrocone":
+            raise HTTPException(409, "Już zwrócone")
+        conn.execute("UPDATE narzedzia_pobrania SET status='zwrocone' WHERE id=?", (pid,))
+        conn.execute("UPDATE narzedzia SET stan = stan + ?, updated_at=? WHERE id=?",
+                     (p["ilosc"], _now(), p["narzedzie_id"]))
+    return {"ok": True}
+
+
+
     user_id: Optional[int] = None
     user_name: Optional[str] = None
     ocena: int

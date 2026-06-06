@@ -455,6 +455,21 @@ let state = {
   rezerwacjaModal: null,        // {material_id, material_opis, material_indeks, stan} | null
   magazynLastRefresh: null,     // czas ostatniego odświeżenia danych magazynu
 
+  // Narzędziownia
+  narzCount: null,
+  narzNiskie: 0,
+  narzSearch: '',
+  narzResults: [],
+  narzSearching: false,
+  narzHistoria: [],
+  narzHistoriaLoading: false,
+  narzNiskeStany: null,
+  narzSubView: 'stany',      // stany | historia | niskie | import
+  narzPobierzModal: null,    // {narzedzie} – modal pobrania
+  narzEditModal: null,       // {narzedzie} – edycja stanu
+  narzDodajModal: false,     // dodawanie nowej pozycji
+
+
   // Print modal
   printModal: null,
   printOps: [],
@@ -3777,7 +3792,7 @@ function renderMajsterPodsumowanie(stats) {
 const canEditStawki = ['admin','technolog','majster'].includes(state.user?.role);
 html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">';
 if (canEditStawki) {
-html += '<button class="btn btn-accent" style="flex:1;background:var(--orange,#e67e00);color:#1a1f2e" onclick="openStawkiZleceniaModal(' + m.id + ', \'' + (m.numer||'').replace(/'/g,"\\'") + '\', \'' + (m.nazwa||'').replace(/'/g,"\\'") + '\')">⚙ Stawki zlecenia</button>';
+html += '<button class="btn btn-accent" style="flex:1;background:var(--orange,#e67e00);color:#1a1f2e" onclick="_openStawkiModal(' + m.id + ')">⚙ Stawki zlecenia</button>';
 }
 if (canDelete) {
 html += '<button class="btn btn-red" style="flex:1" onclick="deleteZlecenieFromModal(' + m.id + ')">🗑 Usuń zlecenie</button>';
@@ -3966,10 +3981,11 @@ function renderMagazyn() {
 
   const subTab = state.magazynSubTab || 'transport';
   const subTabs = [
-    {id:'transport',    label:'🚚 Transport'},
-    {id:'materialy',    label:'🏗 Materiały'},
-    {id:'rezerwacje',   label:'🔒 Rezerwacje'},
+    {id:'transport',       label:'🚚 Transport'},
+    {id:'materialy',       label:'🏗 Materiały'},
+    {id:'rezerwacje',      label:'🔒 Rez. mat.'},
     {id:'zapotrzebowanie', label:'📋 Zapotrz.'},
+    {id:'narzedzialnia',   label:'🔧 Narzędziownia'},
   ];
 
   const refreshTime = state.magazynLastRefresh;
@@ -3993,6 +4009,8 @@ function renderMagazyn() {
     html += renderMagazynRezerwacje();
   } else if (subTab === 'zapotrzebowanie') {
     html += renderMagazynZapotrzebowanie();
+  } else if (subTab === 'narzedzialnia') {
+    html += renderNarzedzialnia();
   }
 
   // Modal rezerwacji
@@ -4008,6 +4026,7 @@ function switchMagazynTab(tab) {
   if (tab === 'zapotrzebowanie' && !state.magazynZapotrzebowanie && !state.magazynZapotrzebowanieLoading) {
     loadMagazynZapotrzebowanie();
   }
+  if (tab === 'narzedzialnia' && !state.narzResults?.length) { loadNarzCount(); loadNarzAll(); }
   render();
 }
 
@@ -4296,7 +4315,564 @@ function renderMagazynZapotrzebowanie() {
   return html;
 }
 
-// ─── Modal rezerwacji ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+//  NARZĘDZIOWNIA – zarządzanie materiałami eksploatacyjnymi
+//  (frezy, płytki, tarcze, rękawice, noże tokarskie, itp.)
+// ══════════════════════════════════════════════════════════════
+
+// ─── Ładowanie danych ─────────────────────────────────────────
+async function loadNarzCount() {
+  try {
+    const r = await get('/api/narzedzia/count');
+    setState({narzCount: r.count, narzNiskie: r.niskie_stany}, true);
+  } catch(_) {}
+}
+
+async function loadNarzAll() {
+  setState({narzSearching: true});
+  try {
+    const q = state.narzSearch || '';
+    const r = await get(`/api/narzedzia?q=${encodeURIComponent(q)}&limit=200`);
+    setState({narzResults: r, narzSearching: false});
+  } catch(e) { setState({narzSearching: false}); }
+}
+
+async function searchNarz() {
+  const q = document.getElementById('narz-search')?.value?.trim() ?? '';
+  setState({narzSearch: q});
+  await loadNarzAll();
+  render();
+}
+
+async function loadNarzHistoria() {
+  setState({narzHistoriaLoading: true});
+  try {
+    const r = await get('/api/narzedzia-pobrania?limit=100');
+    setState({narzHistoria: r, narzHistoriaLoading: false});
+  } catch(_) { setState({narzHistoriaLoading: false, narzHistoria: []}); }
+}
+
+async function loadNarzNiskeStany() {
+  try {
+    const niskie = await get('/api/narzedzia/niskie-stany');
+    setState({narzNiskeStany: niskie, narzNiskie: niskie.length}, true);
+    render();
+  } catch(_) { setState({narzNiskeStany: []}, true); render(); }
+}
+
+// ─── Akcje ────────────────────────────────────────────────────
+async function pobierzNarz() {
+  const m = state.narzPobierzModal;
+  if (!m) return;
+  const zlecenie = document.getElementById('np-zlecenie')?.value?.trim() || '';
+  const ilosc    = parseFloat(document.getElementById('np-ilosc')?.value) || 0;
+  const uwagi    = document.getElementById('np-uwagi')?.value?.trim() || '';
+  if (ilosc <= 0) { alert('Podaj ilość > 0'); return; }
+  if (ilosc > m.stan) { alert(`Brak wystarczającego stanu. Dostępne: ${m.stan} ${m.jm}`); return; }
+  try {
+    await post('/api/narzedzia-pobrania', {
+      narzedzie_id: m.id,
+      zlecenie_nr: zlecenie || '—',
+      ilosc,
+      uwagi,
+    });
+    setState({narzPobierzModal: null});
+    await loadNarzAll();
+    await loadNarzCount();
+    if (state.narzSubView === 'historia') await loadNarzHistoria();
+    if (state.narzNiskeStany !== null) await loadNarzNiskeStany();
+    render();
+  } catch(e) { alert('Błąd: ' + (e.message || e)); }
+}
+
+async function zwrocNarz(pobId, narzId, ilosc) {
+  if (!confirm(`Zwrócić ${ilosc} szt. do narzędziowni?`)) return;
+  try {
+    await fetch((SERVER_URL||'').replace(/\/$/,'') + '/api/narzedzia-pobrania/' + pobId + '/zwrot',
+      {method:'PATCH', headers:{'x-api-key': API_KEY}});
+    await loadNarzAll();
+    await loadNarzCount();
+    await loadNarzHistoria();
+    if (state.narzNiskeStany !== null) await loadNarzNiskeStany();
+    render();
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function saveNarzEdit() {
+  const m = state.narzEditModal;
+  if (!m) return;
+  const stan     = parseFloat(document.getElementById('ne-stan')?.value) || 0;
+  const stan_min = parseFloat(document.getElementById('ne-stan-min')?.value) || 1;
+  const lok      = document.getElementById('ne-lok')?.value?.trim() || '';
+  const uwagi    = document.getElementById('ne-uwagi')?.value?.trim() || '';
+  try {
+    await fetch((SERVER_URL||'').replace(/\/$/,'') + '/api/narzedzia/' + m.id,
+      {method:'PUT', headers:{'Content-Type':'application/json','x-api-key':API_KEY},
+       body: JSON.stringify({stan, stan_min, lokalizacja: lok, uwagi})});
+    setState({narzEditModal: null});
+    await loadNarzAll();
+    await loadNarzCount();
+    if (state.narzNiskeStany !== null) await loadNarzNiskeStany();
+    render();
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function saveNarzDodaj() {
+  const indeks = document.getElementById('nd-indeks')?.value?.trim();
+  const nazwa  = document.getElementById('nd-nazwa')?.value?.trim();
+  const typ    = document.getElementById('nd-typ')?.value?.trim() || '';
+  const jm     = document.getElementById('nd-jm')?.value?.trim() || 'szt';
+  const stan   = parseFloat(document.getElementById('nd-stan')?.value) || 0;
+  const stan_min = parseFloat(document.getElementById('nd-stan-min')?.value) || 1;
+  const lok    = document.getElementById('nd-lok')?.value?.trim() || '';
+  if (!indeks || !nazwa) { alert('Indeks i Nazwa są wymagane'); return; }
+  try {
+    await post('/api/narzedzia', {indeks, nazwa, typ, jm, stan, stan_min, lokalizacja: lok});
+    setState({narzDodajModal: false});
+    await loadNarzAll();
+    await loadNarzCount();
+    render();
+  } catch(e) { alert('Błąd: ' + (e.message || e)); }
+}
+
+async function usunNarz(id, nazwa) {
+  if (!confirm(`Usunąć "${nazwa}" z bazy?`)) return;
+  try {
+    await del('/api/narzedzia/' + id);
+    await loadNarzAll();
+    await loadNarzCount();
+    render();
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function importNarzedziaXlsx() {
+  const fileInput = document.getElementById('narz-xlsx-file');
+  const statusEl  = document.getElementById('narz-import-status');
+  if (!fileInput?.files?.length) { alert('Wybierz plik xlsx'); return; }
+  const file = fileInput.files[0];
+  if (statusEl) statusEl.textContent = '⏳ Importuję...';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const resp = await fetch((SERVER_URL||'').replace(/\/$/,'') + '/api/narzedzia/import', {
+      method: 'POST', headers:{'x-api-key': API_KEY}, body: fd
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Błąd importu');
+    if (statusEl) statusEl.innerHTML =
+      `<span style="color:var(--green)">✅ Zaimportowano ${data.imported} pozycji${data.skipped?' · pominięto '+data.skipped:''}</span>`;
+    await loadNarzAll();
+    await loadNarzCount();
+    render();
+  } catch(e) {
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
+  }
+}
+
+// ─── Render główny ────────────────────────────────────────────
+function renderNarzedzialnia() {
+  const view   = state.narzSubView || 'stany';
+  const niskie = state.narzNiskie  || 0;
+  const cnt    = state.narzCount;
+
+  // Auto-init
+  if (!state.narzResults?.length && !state.narzSearching && view === 'stany') {
+    loadNarzAll();
+  }
+
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <div style="font-weight:700;font-size:15px">🔧 Narzędziownia</div>
+    <div style="display:flex;gap:6px;align-items:center">
+      ${niskie > 0 ? `<span style="background:rgba(231,76,60,.15);color:var(--red);border-radius:10px;padding:3px 10px;font-size:11px;font-weight:700">⚠ ${niskie} niskich stanów</span>` : ''}
+      <span style="font-size:11px;color:var(--dim)">${cnt !== null ? cnt+' poz.' : ''}</span>
+    </div>
+  </div>
+  <div class="sub-tabs" style="margin-bottom:12px">
+    <button class="sub-tab ${view==='stany'?'active':''}" onclick="switchNarzView('stany')">📦 Stany</button>
+    <button class="sub-tab ${view==='historia'?'active':''}" onclick="switchNarzView('historia')">📋 Historia</button>
+    <button class="sub-tab ${view==='niskie'?'active':''}" style="${niskie>0?'color:var(--red);font-weight:700':''}"
+      onclick="switchNarzView('niskie')">⚠ Alerty${niskie>0?' ('+niskie+')':''}</button>
+    <button class="sub-tab ${view==='import'?'active':''}" onclick="switchNarzView('import')">📥 Import</button>
+  </div>`;
+
+  if (view === 'stany')   html += renderNarzStany();
+  if (view === 'historia') html += renderNarzHistoria();
+  if (view === 'niskie')  html += renderNarzNiskie();
+  if (view === 'import')  html += renderNarzImport();
+
+  // Modals
+  if (state.narzPobierzModal) html += renderNarzPobierzModal();
+  if (state.narzEditModal)    html += renderNarzEditModal();
+  if (state.narzDodajModal)   html += renderNarzDodajModal();
+
+  return html;
+}
+
+function switchNarzView(view) {
+  setState({narzSubView: view}, true);
+  if (view === 'stany'   && !state.narzResults?.length) loadNarzAll();
+  if (view === 'historia') loadNarzHistoria();
+  if (view === 'niskie')   { setState({narzNiskeStany: null}, true); loadNarzNiskeStany(); }
+  render();
+}
+
+// ─── Widok: Stany magazynowe ──────────────────────────────────
+function renderNarzStany() {
+  // Grupowanie wg kategorii (typ)
+  const items = state.narzResults || [];
+
+  const byTyp = {};
+  items.forEach(n => {
+    const t = n.typ || 'Inne';
+    if (!byTyp[t]) byTyp[t] = [];
+    byTyp[t].push(n);
+  });
+
+  let html = `
+  <div style="display:flex;gap:6px;margin-bottom:12px">
+    <input id="narz-search" type="text" placeholder="🔍 Szukaj nazwy, indeksu, typu..."
+      value="${state.narzSearch||''}"
+      style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px 12px;font-size:14px"
+      oninput="clearTimeout(window._nst);window._nst=setTimeout(searchNarz,350)"
+      onkeyup="if(event.key==='Enter')searchNarz()">
+    <button class="btn btn-accent" style="white-space:nowrap;padding:0 14px"
+      onclick="setState({narzDodajModal:true})">＋ Dodaj</button>
+  </div>`;
+
+  if (state.narzSearching) {
+    return html + `<div style="text-align:center;padding:30px;color:var(--dim)">⏳</div>`;
+  }
+  if (!items.length) {
+    return html + `<div class="card" style="text-align:center;padding:30px">
+      <div style="font-size:36px;margin-bottom:8px">📭</div>
+      <div style="color:var(--dim)">Baza pusta – zaimportuj xlsx lub dodaj ręcznie</div>
+    </div>`;
+  }
+
+  const typy = Object.keys(byTyp).sort();
+  typy.forEach(typ => {
+    html += `<div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;
+      letter-spacing:.06em;margin:14px 0 6px;padding-left:4px">${typ}</div>`;
+    byTyp[typ].forEach(n => {
+      const alarm = n.stan < n.stan_min;
+      const brak  = n.stan <= 0;
+      const statusColor = brak ? 'var(--red)' : alarm ? 'var(--orange)' : 'var(--green)';
+      const statusIcon  = brak ? '🔴' : alarm ? '🟡' : '🟢';
+      html += `
+      <div class="card" style="padding:10px 12px;margin-bottom:6px;${alarm?'border-left:3px solid '+(brak?'var(--red)':'var(--orange)'):''}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="min-width:0;flex:1">
+            <div style="font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${statusIcon} ${n.nazwa}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:1px">
+              ${n.indeks}${n.lokalizacja ? ' · 📍 '+n.lokalizacja : ''}
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:17px;font-weight:800;color:${statusColor};line-height:1">${n.stan}</div>
+            <div style="font-size:10px;color:var(--dim)">${n.jm} · min:${n.stan_min}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn btn-accent" style="flex:1;padding:8px;font-size:12px"
+            onclick='setState({narzPobierzModal:${JSON.stringify(n).replace(/'/g,"&#39;")}})'>
+            📤 Pobierz
+          </button>
+          <button class="btn-sm" style="background:rgba(52,152,219,.12);color:var(--blue);border-color:var(--blue)"
+            onclick='setState({narzEditModal:${JSON.stringify(n).replace(/'/g,"&#39;")}})'>✏</button>
+          <button class="btn-sm btn-red"
+            onclick="usunNarz(${n.id},'${n.nazwa.replace(/'/g,'\\'')}')">🗑</button>
+        </div>
+      </div>`;
+    });
+  });
+  return html;
+}
+
+// ─── Widok: Historia pobrań ───────────────────────────────────
+function renderNarzHistoria() {
+  if (state.narzHistoriaLoading) return `<div class="spinner">⏳</div>`;
+  const lista = state.narzHistoria || [];
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-hdr" style="margin-bottom:0">📋 Historia pobrań (${lista.length})</div>
+    <div style="display:flex;gap:6px">
+      <button class="btn-sm btn-accent" onclick="printNarzHistoria()" title="Drukuj / pobierz raport">🖨 Raport</button>
+      <button class="btn-sm btn-accent" onclick="loadNarzHistoria()">🔄</button>
+    </div>
+  </div>`;
+  if (!lista.length) return html + `<div class="card" style="text-align:center;padding:24px;color:var(--dim)">Brak historii pobrań</div>`;
+
+  lista.forEach(p => {
+    const zwrocone = p.status === 'zwrocone';
+    html += `
+    <div class="card" style="padding:10px 12px;margin-bottom:6px;opacity:${zwrocone?0.6:1}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:13px">${p.narzedzie_nazwa}</div>
+          <div style="font-size:11px;color:var(--dim)">${p.narzedzie_indeks||''}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;align-items:center">
+            <span style="background:rgba(52,152,219,.12);color:var(--blue);border-radius:8px;padding:2px 8px;font-size:12px;font-weight:700">
+              ${zwrocone?'↩ zwrócono':'📤 pobrano'} ${p.ilosc} ${p.jm}
+            </span>
+            ${p.zlecenie_nr && p.zlecenie_nr !== '—' ? `<span style="font-size:11px;color:var(--accent);font-weight:600">${p.zlecenie_nr}</span>` : ''}
+            <span style="font-size:10px;color:var(--dim)">${(p.created_at||'').slice(0,16).replace('T',' ')}</span>
+            <span style="font-size:10px;color:var(--dim)">${p.user_name||''}</span>
+          </div>
+          ${p.uwagi ? `<div style="font-size:11px;color:var(--dim);margin-top:3px;font-style:italic">${p.uwagi}</div>` : ''}
+        </div>
+        ${!zwrocone ? `<button class="btn-sm" style="flex-shrink:0;margin-left:8px;background:rgba(39,174,96,.1);color:var(--green);border-color:var(--green)"
+          onclick="zwrocNarz(${p.id},${p.narzedzie_id},${p.ilosc})">↩ Zwróć</button>` : ''}
+      </div>
+    </div>`;
+  });
+  return html;
+}
+
+// ─── Widok: Alerty niskiego stanu ─────────────────────────────
+function renderNarzNiskie() {
+  const niskie = state.narzNiskeStany;
+  if (niskie === undefined || niskie === null) {
+    loadNarzNiskeStany();
+    return `<div class="spinner">⏳</div>`;
+  }
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-hdr" style="margin-bottom:0">⚠ Niskie stany – wymaga uzupełnienia</div>
+    <button class="btn-sm btn-accent" onclick="setState({narzNiskeStany:null});loadNarzNiskeStany()">🔄</button>
+  </div>`;
+  if (!niskie.length) return html + `<div class="card" style="text-align:center;padding:28px">
+    <div style="font-size:36px;margin-bottom:8px">✅</div>
+    <div style="font-weight:600;color:var(--green)">Wszystkie stany powyżej minimum</div>
+  </div>`;
+
+  niskie.forEach(n => {
+    const brak = n.stan <= 0;
+    html += `
+    <div class="card" style="padding:12px;margin-bottom:8px;border-left:4px solid ${brak?'var(--red)':'var(--orange)'}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700">${brak?'🔴':'🟡'} ${n.nazwa}</div>
+          <div style="font-size:11px;color:var(--dim)">${n.indeks} · ${n.typ||''}${n.lokalizacja?' · 📍'+n.lokalizacja:''}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:10px">
+          <div style="font-size:20px;font-weight:800;color:${brak?'var(--red)':'var(--orange)'}">${n.stan}</div>
+          <div style="font-size:10px;color:var(--dim)">${n.jm} (min: ${n.stan_min})</div>
+        </div>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:6px">
+        <button class="btn btn-accent" style="flex:1;padding:8px;font-size:12px"
+          onclick='setState({narzEditModal:${JSON.stringify(n).replace(/'/g,"&#39;")}})'>
+          ✏ Uzupełnij stan
+        </button>
+      </div>
+    </div>`;
+  });
+  return html;
+}
+
+// ─── Widok: Import xlsx ───────────────────────────────────────
+function renderNarzImport() {
+  return `
+  <div class="card">
+    <div style="font-size:14px;font-weight:700;margin-bottom:10px">📥 Import z pliku Excel (.xlsx)</div>
+    <div style="font-size:12px;color:var(--dim);line-height:1.7;margin-bottom:14px">
+      Wczytaj bazę materiałów narzędziowni z pliku Excel.<br>
+      <b>Wymagane kolumny:</b> <code style="background:var(--panel);padding:1px 5px;border-radius:4px">Indeks</code>
+      <code style="background:var(--panel);padding:1px 5px;border-radius:4px">Nazwa</code><br>
+      <b>Opcjonalne:</b> Typ / Kategoria, Jm, Stan, Stan_min, Lokalizacja, Uwagi, Kod_paskowy<br>
+      <b>Przykładowe typy:</b> Frezy, Płytki, Noże tokarskie, Tarcze, Ściernice, Ochrona osobista, Materiały pomocnicze
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <input type="file" id="narz-xlsx-file" accept=".xlsx,.xls"
+        style="flex:1;min-width:0;font-size:12px;color:var(--text);background:var(--panel);
+          border:1px solid var(--border);border-radius:8px;padding:8px">
+      <button class="btn btn-accent" style="white-space:nowrap" onclick="importNarzedziaXlsx()">📥 Importuj</button>
+    </div>
+    <div id="narz-import-status" style="font-size:12px;min-height:18px"></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px">📄 Przykład struktury xlsx</div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="background:var(--panel)">
+          ${['Indeks','Nazwa','Typ','Jm','Stan','Stan_min','Lokalizacja'].map(h=>`<th style="padding:5px 8px;text-align:left;border:1px solid var(--border)">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${[
+            ['FRZ-001','Frez palcowy HSS fi8','Frezy','szt','10','3','Szafa A/1'],
+            ['PLY-042','Płytka CCMT 09T304','Płytki','szt','48','10','Szuflada B'],
+            ['TAR-015','Tarcza szlif. 230x2','Tarcze','szt','6','2','Regał C/2'],
+            ['OCH-001','Rękawice robocze','Ochrona osobista','par','20','5','Wejście'],
+          ].map(r=>`<tr>${r.map(c=>`<td style="padding:4px 8px;border:1px solid var(--border)">${c}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ─── Modals ────────────────────────────────────────────────────
+function renderNarzPobierzModal() {
+  const n = state.narzPobierzModal;
+  if (!n) return '';
+  const alarm = n.stan < n.stan_min;
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)setState({narzPobierzModal:null})">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({narzPobierzModal:null})">×</button>
+      <h3>📤 Pobierz z narzędziowni</h3>
+      <div style="background:var(--entry);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px">${n.nazwa}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px">${n.indeks} · ${n.typ||''}</div>
+        <div style="margin-top:8px;display:flex;gap:16px">
+          <div>
+            <div style="font-size:22px;font-weight:800;color:${alarm?'var(--orange)':'var(--green)'};line-height:1">${n.stan}</div>
+            <div style="font-size:10px;color:var(--dim)">${n.jm} w magazynie</div>
+          </div>
+          <div>
+            <div style="font-size:22px;font-weight:800;color:var(--dim);line-height:1">${n.stan_min}</div>
+            <div style="font-size:10px;color:var(--dim)">minimum</div>
+          </div>
+        </div>
+        ${alarm ? `<div style="margin-top:8px;font-size:11px;color:var(--orange);font-weight:600">⚠ Stan poniżej minimum!</div>` : ''}
+      </div>
+      <div class="field">
+        <label>Ilość do pobrania (${n.jm})</label>
+        <input id="np-ilosc" type="number" min="0.01" step="${n.jm==='szt'||n.jm==='par'?'1':'0.01'}"
+          value="1" max="${n.stan}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:12px;font-size:20px;font-weight:700;box-sizing:border-box;text-align:center">
+      </div>
+      <div class="field">
+        <label>Nr zlecenia (opcja)</label>
+        <input id="np-zlecenie" type="text" placeholder="np. G24-001, P25-032 lub cel zakładowy"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div class="field">
+        <label>Uwagi</label>
+        <input id="np-uwagi" type="text" placeholder="opcjonalnie"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" style="flex:1;padding:14px" onclick="pobierzNarz()">📤 Pobierz</button>
+        <button class="btn btn-outline" style="padding:14px 18px" onclick="setState({narzPobierzModal:null})">Anuluj</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderNarzEditModal() {
+  const n = state.narzEditModal;
+  if (!n) return '';
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)setState({narzEditModal:null})">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({narzEditModal:null})">×</button>
+      <h3>✏ Edytuj / Uzupełnij stan</h3>
+      <div style="font-weight:700;margin-bottom:4px">${n.nazwa}</div>
+      <div style="font-size:11px;color:var(--dim);margin-bottom:16px">${n.indeks}</div>
+      <div class="field">
+        <label>Stan aktualny (${n.jm})</label>
+        <input id="ne-stan" type="number" min="0" step="0.01" value="${n.stan}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:12px;font-size:20px;font-weight:700;box-sizing:border-box;text-align:center">
+        <div style="font-size:11px;color:var(--dim);margin-top:4px">Wpisz aktualną ilość po inwentaryzacji lub uzupełnieniu</div>
+      </div>
+      <div class="field">
+        <label>Stan minimalny – próg alarmu (${n.jm})</label>
+        <input id="ne-stan-min" type="number" min="0" step="0.01" value="${n.stan_min}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div class="field">
+        <label>Lokalizacja / półka</label>
+        <input id="ne-lok" type="text" value="${n.lokalizacja||''}" placeholder="np. Szafa A, Półka 3"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div class="field">
+        <label>Uwagi</label>
+        <input id="ne-uwagi" type="text" value="${n.uwagi||''}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" style="flex:1" onclick="saveNarzEdit()">💾 Zapisz</button>
+        <button class="btn btn-outline" style="padding:14px 18px" onclick="setState({narzEditModal:null})">Anuluj</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderNarzDodajModal() {
+  const TYPY = ['Frezy','Płytki wymienne','Noże tokarskie','Tarcze szlifierskie',
+    'Ściernice','Wiertła','Gwintowniki','Ochrona osobista','Materiały pomocnicze','Inne'];
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)setState({narzDodajModal:false})">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({narzDodajModal:false})">×</button>
+      <h3>＋ Dodaj pozycję</h3>
+      <div class="field">
+        <label>Indeks / kod *</label>
+        <input id="nd-indeks" type="text" placeholder="np. FRZ-001"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div class="field">
+        <label>Nazwa *</label>
+        <input id="nd-nazwa" type="text" placeholder="np. Frez palcowy HSS fi8"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <label>Kategoria</label>
+          <select id="nd-typ"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+              border-radius:8px;padding:10px 8px;font-size:13px">
+            ${TYPY.map(t=>`<option>${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Jednostka</label>
+          <select id="nd-jm"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+              border-radius:8px;padding:10px 8px;font-size:13px">
+            ${['szt','par','opak','m','mb','kg','l','kpl'].map(j=>`<option>${j}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <label>Stan magazynowy</label>
+          <input id="nd-stan" type="number" min="0" step="0.01" value="0"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+              border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+        </div>
+        <div class="field">
+          <label>Stan minimalny (alarm)</label>
+          <input id="nd-stan-min" type="number" min="0" step="0.01" value="1"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+              border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+        </div>
+      </div>
+      <div class="field">
+        <label>Lokalizacja</label>
+        <input id="nd-lok" type="text" placeholder="np. Szafa A, Półka 2"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
+            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" style="flex:1" onclick="saveNarzDodaj()">＋ Dodaj</button>
+        <button class="btn btn-outline" style="padding:14px 18px" onclick="setState({narzDodajModal:false})">Anuluj</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+
 function renderRezerwacjaModal() {
   const m = state.rezerwacjaModal;
   if (!m) return '';
@@ -4595,7 +5171,7 @@ function renderZlecenia() {
           <button class="btn-sm btn-accent" onclick="openOperacje(${JSON.stringify(z).replace(/"/g,'&quot;')})">🔧 Operacje</button>
           <button class="btn-sm btn-green" onclick="loadKoszty(${z.id})">💰 Koszty</button>
           <button class="btn-sm" style="background:#1a6b3a;color:#fff" onclick="generateRaportSingleZlecenie(${z.id}, '${(z.numer||"").replace(/'/g,"\'")}')">📊 Raport</button>
-	  <button class="btn-sm btn-accent" style="background:var(--orange,#e67e00);color:#1a1f2e" onclick="openStawkiZleceniaModal(${z.id}, '${(z.numer||'').replace(/'/g,"\\'")}', '${(z.nazwa||'').replace(/'/g,"\\'")}')">⚙ Stawki</button>
+	  <button class="btn-sm btn-accent" style="background:var(--orange,#e67e00);color:#1a1f2e" onclick="_openStawkiModal(${z.id})">⚙ Stawki</button>
           <select style="background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px"
                   onchange="changeZlecenieStatus(${z.id},this.value);this.value='${z.status}'">
             <option value="${z.status}" disabled selected>▶ Status</option>
@@ -6202,6 +6778,64 @@ function renderContent() {
     ${renderPrintModal()}
     ${renderQRZleceniePickerModal()}
     ${renderEditSesjaModalHtml()}`;
+}
+
+// ─── Helper: otwiera modal stawek – bezpieczne wywołanie bez wklejania nazwy w onclick ────
+function _openStawkiModal(id) {
+  const all = [
+    ...(state.zlecenia||[]),
+    ...(state.majsterStats?.zlecenia||[]),
+    ...(state.majsterStats?.wszystkie_zlecenia||[]),
+  ];
+  const z = all.find(x => x.id === id);
+  openStawkiZleceniaModal(id, z?.numer || ('#'+id), z?.nazwa || '');
+}
+
+// ─── Wydruk historii pobrań z narzędziowni ──────────────────────────────────
+function printNarzHistoria() {
+  const lista = state.narzHistoria || [];
+  if (!lista.length) { alert('Brak danych do wydruku. Załaduj historię najpierw.'); return; }
+  const fmtDate = s => (s||'').slice(0,16).replace('T',' ');
+  let rows = '';
+  lista.forEach((p, i) => {
+    const zwrocone = p.status === 'zwrocone';
+    rows += `<tr style="background:${i%2?'#f9f9f9':'#fff'}${zwrocone?';opacity:.55':''}">
+      <td style="padding:5px 8px;border:1px solid #ddd">${fmtDate(p.created_at)}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd">${p.user_name||'—'}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd"><b>${p.narzedzie_nazwa}</b><br><span style="font-size:10px;color:#666">${p.narzedzie_indeks||''}</span></td>
+      <td style="padding:5px 8px;border:1px solid #ddd;text-align:center">${p.zlecenie_nr && p.zlecenie_nr!=='—' ? p.zlecenie_nr : '—'}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;text-align:center;color:#1a73e8;font-weight:700">${!zwrocone ? p.ilosc+' '+p.jm : '—'}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;text-align:center;color:${zwrocone?'#1e8a4c':'#888'};font-weight:700">${zwrocone ? p.ilosc+' '+p.jm : '—'}</td>
+      <td style="padding:5px 8px;border:1px solid #ddd;font-size:11px;color:#555">${p.uwagi||''}</td>
+    </tr>`;
+  });
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>Narzędziownia – historia pobrań</title>
+  <style>body{font-family:Arial,sans-serif;padding:16px;color:#222}@media print{body{padding:0}}</style>
+  </head><body>
+  <div style="border-bottom:2px solid #222;padding-bottom:8px;margin-bottom:14px;display:flex;justify-content:space-between">
+    <div>
+      <div style="font-size:20px;font-weight:700">Narzędziownia – historia pobrań</div>
+      <div style="font-size:12px;color:#555">Wygenerowano: ${new Date().toLocaleString('pl-PL')} | Pozycji: ${lista.length}</div>
+    </div>
+  </div>
+  <table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="background:#222;color:#fff">
+      <th style="padding:6px 8px;text-align:left;border:1px solid #444">Data</th>
+      <th style="padding:6px 8px;text-align:left;border:1px solid #444">Kto</th>
+      <th style="padding:6px 8px;text-align:left;border:1px solid #444">Narzędzie</th>
+      <th style="padding:6px 8px;text-align:center;border:1px solid #444">Zlecenie</th>
+      <th style="padding:6px 8px;text-align:center;border:1px solid #444">Ilość pobrał</th>
+      <th style="padding:6px 8px;text-align:center;border:1px solid #444">Ilość zwrócił</th>
+      <th style="padding:6px 8px;text-align:left;border:1px solid #444">Uwagi</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  </body></html>`;
+  const w = window.open('','_blank','width=900,height=650');
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 400);
 }
 
 function render() {

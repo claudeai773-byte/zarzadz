@@ -24,6 +24,12 @@ def _parse(s):
 # ─── Konfiguracja ──────────────────────────────────────────────────────────────
 DB_PATH       = os.environ.get("DB_PATH",      "/data/produkcja.db")
 API_KEY       = os.environ.get("API_KEY",      "zmien-mnie-na-bezpieczny-klucz")
+if API_KEY == "zmien-mnie-na-bezpieczny-klucz":
+    import warnings
+    warnings.warn(
+        "[SECURITY] Używasz domyślnego API_KEY! Ustaw zmienną środowiskową API_KEY na unikalny, silny klucz.",
+        stacklevel=2
+    )
 PORT          = int(os.environ.get("PORT",     8000))
 BACKUP_PATH   = os.environ.get("BACKUP_PATH",  "/data/backup.json")   # persystentny backup JSON
 BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 120))        # co ile sekund auto-backup (domyślnie 2 min)
@@ -44,13 +50,52 @@ if not os.path.exists(os.path.dirname(DB_PATH)):
     DB_PATH     = os.path.join(_local, "produkcja.db")
     BACKUP_PATH = os.path.join(_local, "backup.json")
 
+from collections import defaultdict
+import threading
+
 app = FastAPI(title="Produkcja API", version="4.1")
+
+# ─── Dozwolone originy (ustaw przez env ALLOWED_ORIGINS, oddzielone przecinkiem) ─
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["x-api-key", "Content-Type", "Accept"],
+    allow_credentials=False,
+    max_age=600,
 )
+
+# ─── Rate limiting (prosta implementacja in-memory) ───────────────────────────
+_rl_lock   = threading.Lock()
+_rl_hits: dict = defaultdict(list)  # ip -> [timestamp, ...]
+RL_WINDOW  = int(os.environ.get("RL_WINDOW_SEC", 60))   # okno czasowe (s)
+RL_LIMIT   = int(os.environ.get("RL_LIMIT", 300))        # maks. żądań na okno
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
+    now = time.time()
+    with _rl_lock:
+        hits = _rl_hits[ip]
+        hits[:] = [t for t in hits if now - t < RL_WINDOW]
+        if len(hits) >= RL_LIMIT:
+            return JSONResponse(status_code=429, content={"detail": "Zbyt wiele żądań – spróbuj za chwilę"})
+        hits.append(now)
+    return await call_next(request)
+
+# ─── Security headers ─────────────────────────────────────────────────────────
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"]  = "nosniff"
+    response.headers["X-Frame-Options"]          = "DENY"
+    response.headers["X-XSS-Protection"]         = "1; mode=block"
+    response.headers["Referrer-Policy"]           = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"]        = "geolocation=(), microphone=(), camera=()"
+    return response
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -121,6 +166,16 @@ def _init_stawki_zlecenia(conn, zlecenie_id: int) -> int:
     return added
 
 # ─── SQL Proxy ────────────────────────────────────────────────────────────────
+# Dozwolone prefeksy poleceń SQL (blokujemy DROP, ATTACH, DETACH itp.)
+_SQL_READ_PREFIXES  = ("SELECT", "PRAGMA", "WITH", "EXPLAIN")
+_SQL_WRITE_PREFIXES = ("INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT", "CREATE", "ALTER", "BEGIN", "COMMIT", "ROLLBACK")
+_SQL_BLOCKED        = ("DROP", "ATTACH", "DETACH", "VACUUM")
+
+def _check_sql_allowed(sql: str):
+    first = sql.strip().upper().split()[0] if sql.strip() else ""
+    if first in _SQL_BLOCKED:
+        raise HTTPException(403, f"Polecenie SQL '{first}' jest zablokowane")
+
 class SQLRequest(BaseModel):
     sql: str
     params: List[Any] = []
@@ -133,6 +188,7 @@ class TransactionRequest(BaseModel):
 
 @app.post("/sql", dependencies=[Depends(verify_key)])
 def execute_sql(req: SQLRequest):
+    _check_sql_allowed(req.sql)
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -160,6 +216,8 @@ def execute_sql(req: SQLRequest):
 
 @app.post("/transaction", dependencies=[Depends(verify_key)])
 def execute_transaction(req: TransactionRequest):
+    for op in req.operations:
+        _check_sql_allowed(op.get("sql", ""))
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -3530,11 +3588,16 @@ def zwrot_narzedzia_v2(pid: int):
     return {"ok": True}
 
 
-
+# ─── Feedback ────────────────────────────────────────────────────────────────
+class FeedbackIn(BaseModel):
     user_id: Optional[int] = None
     user_name: Optional[str] = None
     ocena: int
     wiadomosc: Optional[str] = ""
+
+    def sanitized_message(self) -> str:
+        msg = (self.wiadomosc or "").strip()
+        return msg[:2000]  # max 2000 znaków
 
 @app.post("/api/feedback", dependencies=[Depends(verify_key)])
 def post_feedback(fb: FeedbackIn):
@@ -3543,7 +3606,7 @@ def post_feedback(fb: FeedbackIn):
     with get_db() as conn:
         conn.execute(
             "INSERT INTO app_feedback (user_id, user_name, ocena, wiadomosc, created_at) VALUES (?,?,?,?,?)",
-            (fb.user_id, fb.user_name, fb.ocena, fb.wiadomosc or "", _now())
+            (fb.user_id, fb.user_name, fb.ocena, fb.sanitized_message(), _now())
         )
     return {"ok": True}
 

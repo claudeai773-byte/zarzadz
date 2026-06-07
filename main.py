@@ -2509,6 +2509,58 @@ def init_db_on_start():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL)""")
 
+    # ─── Fakturowanie ────────────────────────────────────────────────────────
+    c.execute("""CREATE TABLE IF NOT EXISTS kontrahenci (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nazwa TEXT NOT NULL,
+        nip TEXT DEFAULT '',
+        adres TEXT DEFAULT '',
+        kod_pocztowy TEXT DEFAULT '',
+        miasto TEXT DEFAULT '',
+        kraj TEXT DEFAULT 'PL',
+        email TEXT DEFAULT '',
+        telefon TEXT DEFAULT '',
+        uwagi TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS faktury (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        numer TEXT UNIQUE NOT NULL,
+        kontrahent_id INTEGER,
+        zlecenie_id INTEGER,
+        data_wystawienia TEXT NOT NULL,
+        data_sprzedazy TEXT DEFAULT '',
+        termin_platnosci TEXT DEFAULT '',
+        forma_platnosci TEXT DEFAULT 'przelew',
+        status TEXT DEFAULT 'szkic',
+        uwagi TEXT DEFAULT '',
+        waluta TEXT DEFAULT 'PLN',
+        total_netto REAL DEFAULT 0,
+        total_vat REAL DEFAULT 0,
+        total_brutto REAL DEFAULT 0,
+        created_by INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (kontrahent_id) REFERENCES kontrahenci(id),
+        FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id))""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS pozycje_faktury (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        faktura_id INTEGER NOT NULL,
+        lp INTEGER DEFAULT 1,
+        nazwa TEXT NOT NULL,
+        jm TEXT DEFAULT 'szt',
+        ilosc REAL DEFAULT 1,
+        cena_netto REAL DEFAULT 0,
+        vat_procent REAL DEFAULT 23,
+        wartosc_netto REAL DEFAULT 0,
+        wartosc_brutto REAL DEFAULT 0,
+        FOREIGN KEY (faktura_id) REFERENCES pozycje_faktury(id))""")
+
+    try: c.execute("ALTER TABLE faktury ADD COLUMN data_sprzedazy TEXT DEFAULT ''")
+    except: pass
+    try: c.execute("ALTER TABLE faktury ADD COLUMN forma_platnosci TEXT DEFAULT 'przelew'")
+    except: pass
+
     # ➤ Baza materiałów (import z xlsx)
     c.execute("""CREATE TABLE IF NOT EXISTS materialy (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3479,7 +3531,6 @@ def zwrot_narzedzia_v2(pid: int):
 
 
 
-class FeedbackIn(BaseModel):
     user_id: Optional[int] = None
     user_name: Optional[str] = None
     ocena: int
@@ -3682,6 +3733,217 @@ except Exception as _e:
 _bk_thread = _threading.Thread(target=_auto_backup_loop, daemon=True, name="auto-backup")
 _bk_thread.start()
 print(f"✓ Auto-backup uruchomiony co {BACKUP_INTERVAL}s → {BACKUP_PATH}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FAKTUROWANIE – Kontrahenci + Faktury
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class KontrahentIn(BaseModel):
+    nazwa: str
+    nip: Optional[str] = ''
+    adres: Optional[str] = ''
+    kod_pocztowy: Optional[str] = ''
+    miasto: Optional[str] = ''
+    kraj: Optional[str] = 'PL'
+    email: Optional[str] = ''
+    telefon: Optional[str] = ''
+    uwagi: Optional[str] = ''
+
+class PozycjaFakturyIn(BaseModel):
+    lp: Optional[int] = 1
+    nazwa: str
+    jm: Optional[str] = 'szt'
+    ilosc: float = 1
+    cena_netto: float = 0
+    vat_procent: float = 23
+
+class FakturaIn(BaseModel):
+    kontrahent_id: Optional[int] = None
+    zlecenie_id: Optional[int] = None
+    data_wystawienia: str
+    data_sprzedazy: Optional[str] = ''
+    termin_platnosci: Optional[str] = ''
+    forma_platnosci: Optional[str] = 'przelew'
+    uwagi: Optional[str] = ''
+    waluta: Optional[str] = 'PLN'
+    created_by: Optional[int] = None
+    pozycje: List[PozycjaFakturyIn] = []
+
+def _next_numer_faktury(conn) -> str:
+    from datetime import datetime
+    year = datetime.now().year
+    last = conn.execute(
+        "SELECT numer FROM faktury WHERE numer LIKE ? ORDER BY id DESC LIMIT 1",
+        (f"F/{year}/%",)
+    ).fetchone()
+    if last:
+        try: seq = int(last["numer"].split("/")[-1]) + 1
+        except: seq = 1
+    else:
+        seq = 1
+    return f"F/{year}/{seq:04d}"
+
+def _calc_faktura_totals(pozycje: List[PozycjaFakturyIn]):
+    total_netto = sum(p.ilosc * p.cena_netto for p in pozycje)
+    total_vat   = sum(p.ilosc * p.cena_netto * p.vat_procent / 100 for p in pozycje)
+    return round(total_netto, 2), round(total_vat, 2), round(total_netto + total_vat, 2)
+
+# ─── Kontrahenci ──────────────────────────────────────────────────────────────
+@app.get("/api/kontrahenci", dependencies=[Depends(verify_key)])
+def get_kontrahenci():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM kontrahenci ORDER BY nazwa COLLATE NOCASE").fetchall()
+        return [dict(r) for r in rows]
+
+@app.post("/api/kontrahenci", dependencies=[Depends(verify_key)])
+def add_kontrahent(k: KontrahentIn):
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO kontrahenci (nazwa,nip,adres,kod_pocztowy,miasto,kraj,email,telefon,uwagi) VALUES (?,?,?,?,?,?,?,?,?)",
+            (k.nazwa, k.nip, k.adres, k.kod_pocztowy, k.miasto, k.kraj, k.email, k.telefon, k.uwagi)
+        )
+        return {"id": cur.lastrowid, "ok": True}
+
+@app.patch("/api/kontrahenci/{kid}", dependencies=[Depends(verify_key)])
+def update_kontrahent(kid: int, k: KontrahentIn):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE kontrahenci SET nazwa=?,nip=?,adres=?,kod_pocztowy=?,miasto=?,kraj=?,email=?,telefon=?,uwagi=? WHERE id=?",
+            (k.nazwa, k.nip, k.adres, k.kod_pocztowy, k.miasto, k.kraj, k.email, k.telefon, k.uwagi, kid)
+        )
+        return {"ok": True}
+
+@app.delete("/api/kontrahenci/{kid}", dependencies=[Depends(verify_key)])
+def delete_kontrahent(kid: int):
+    with get_db() as conn:
+        used = conn.execute("SELECT COUNT(*) as c FROM faktury WHERE kontrahent_id=?", (kid,)).fetchone()["c"]
+        if used > 0:
+            raise HTTPException(400, f"Kontrahent jest powiązany z {used} fakturami")
+        conn.execute("DELETE FROM kontrahenci WHERE id=?", (kid,))
+        return {"ok": True}
+
+# ─── Faktury ──────────────────────────────────────────────────────────────────
+@app.get("/api/faktury", dependencies=[Depends(verify_key)])
+def get_faktury(status: Optional[str] = None, rok: Optional[int] = None):
+    with get_db() as conn:
+        q = """SELECT f.*, k.nazwa as kontrahent_nazwa, k.nip as kontrahent_nip,
+                      z.numer as zlecenie_numer, z.nazwa as zlecenie_nazwa
+               FROM faktury f
+               LEFT JOIN kontrahenci k ON f.kontrahent_id = k.id
+               LEFT JOIN zlecenia z ON f.zlecenie_id = z.id
+               WHERE 1=1"""
+        params = []
+        if status and status != 'wszystkie':
+            q += " AND f.status=?"; params.append(status)
+        if rok:
+            q += " AND f.numer LIKE ?"; params.append(f"F/{rok}/%")
+        q += " ORDER BY f.id DESC"
+        return [dict(r) for r in conn.execute(q, params).fetchall()]
+
+@app.get("/api/faktury/{fid}", dependencies=[Depends(verify_key)])
+def get_faktura(fid: int):
+    with get_db() as conn:
+        f = conn.execute("""
+            SELECT f.*, k.nazwa as kontrahent_nazwa, k.nip as kontrahent_nip,
+                   k.adres as kontrahent_adres, k.kod_pocztowy as kontrahent_kp,
+                   k.miasto as kontrahent_miasto, k.kraj as kontrahent_kraj,
+                   k.email as kontrahent_email, k.telefon as kontrahent_telefon,
+                   z.numer as zlecenie_numer, z.nazwa as zlecenie_nazwa,
+                   u.full_name as wystawil
+            FROM faktury f
+            LEFT JOIN kontrahenci k ON f.kontrahent_id = k.id
+            LEFT JOIN zlecenia z ON f.zlecenie_id = z.id
+            LEFT JOIN users u ON f.created_by = u.id
+            WHERE f.id=?""", (fid,)).fetchone()
+        if not f:
+            raise HTTPException(404, "Faktura nie znaleziona")
+        poz = conn.execute(
+            "SELECT * FROM pozycje_faktury WHERE faktura_id=? ORDER BY lp, id", (fid,)
+        ).fetchall()
+        return {"faktura": dict(f), "pozycje": [dict(p) for p in poz]}
+
+@app.post("/api/faktury", dependencies=[Depends(verify_key)])
+def create_faktura(f: FakturaIn):
+    with get_db() as conn:
+        numer = _next_numer_faktury(conn)
+        tn, tv, tb = _calc_faktura_totals(f.pozycje)
+        cur = conn.execute(
+            """INSERT INTO faktury (numer,kontrahent_id,zlecenie_id,data_wystawienia,
+               data_sprzedazy,termin_platnosci,forma_platnosci,uwagi,waluta,
+               total_netto,total_vat,total_brutto,created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (numer, f.kontrahent_id, f.zlecenie_id, f.data_wystawienia,
+             f.data_sprzedazy, f.termin_platnosci, f.forma_platnosci,
+             f.uwagi, f.waluta, tn, tv, tb, f.created_by)
+        )
+        fid = cur.lastrowid
+        for i, p in enumerate(f.pozycje, 1):
+            wn = round(p.ilosc * p.cena_netto, 2)
+            wb = round(wn * (1 + p.vat_procent / 100), 2)
+            conn.execute(
+                """INSERT INTO pozycje_faktury (faktura_id,lp,nazwa,jm,ilosc,cena_netto,
+                   vat_procent,wartosc_netto,wartosc_brutto) VALUES (?,?,?,?,?,?,?,?,?)""",
+                (fid, i, p.nazwa, p.jm, p.ilosc, p.cena_netto, p.vat_procent, wn, wb)
+            )
+        return {"id": fid, "numer": numer}
+
+@app.patch("/api/faktury/{fid}/status", dependencies=[Depends(verify_key)])
+def update_faktura_status(fid: int, body: dict = Body(...)):
+    status = body.get("status")
+    if status not in ("szkic", "wystawiona", "oplacona", "anulowana"):
+        raise HTTPException(400, "Nieprawidłowy status")
+    with get_db() as conn:
+        conn.execute("UPDATE faktury SET status=? WHERE id=?", (status, fid))
+        return {"ok": True}
+
+@app.delete("/api/faktury/{fid}", dependencies=[Depends(verify_key)])
+def delete_faktura(fid: int):
+    with get_db() as conn:
+        f = conn.execute("SELECT status FROM faktury WHERE id=?", (fid,)).fetchone()
+        if not f: raise HTTPException(404)
+        if f["status"] not in ("szkic", "anulowana"):
+            raise HTTPException(400, "Można usunąć tylko szkice i anulowane faktury")
+        conn.execute("DELETE FROM pozycje_faktury WHERE faktura_id=?", (fid,))
+        conn.execute("DELETE FROM faktury WHERE id=?", (fid,))
+        return {"ok": True}
+
+@app.get("/api/zlecenia/{zid}/faktura-template", dependencies=[Depends(verify_key)])
+def faktura_template(zid: int):
+    """Generuje pozycje faktury na podstawie danych zlecenia"""
+    with get_db() as conn:
+        zl = conn.execute("SELECT * FROM zlecenia WHERE id=?", (zid,)).fetchone()
+        if not zl: raise HTTPException(404)
+        ilosc = zl["ilosc_sztuk"] or 1
+        cena_brutto = float(zl["cena_brutto_szt"] or 0)
+        cena_netto = round(cena_brutto / 1.23, 4) if cena_brutto else 0
+        pozycje = [{"nazwa": f"{zl['nazwa']} [{zl['numer']}]",
+                    "jm": "szt", "ilosc": ilosc,
+                    "cena_netto": round(cena_netto, 2), "vat_procent": 23}]
+        # Dodaj koszty dodatkowe jeśli brak ceny
+        prods = conn.execute(
+            "SELECT * FROM produkty_zlecenia WHERE zlecenie_id=?", (zid,)
+        ).fetchall()
+        return {"zlecenie": dict(zl), "pozycje": pozycje, "produkty": [dict(p) for p in prods]}
+
+@app.get("/api/faktury/export/all", dependencies=[Depends(verify_key)])
+def export_all_faktury():
+    """Export pełnych danych faktur do importu w systemie księgowym"""
+    with get_db() as conn:
+        faktury = conn.execute("""
+            SELECT f.*, k.nazwa as k_nazwa, k.nip as k_nip, k.adres as k_adres,
+                   k.kod_pocztowy as k_kp, k.miasto as k_miasto, k.kraj as k_kraj
+            FROM faktury f LEFT JOIN kontrahenci k ON f.kontrahent_id=k.id
+            ORDER BY f.data_wystawienia, f.id
+        """).fetchall()
+        result = []
+        for fak in faktury:
+            poz = conn.execute(
+                "SELECT * FROM pozycje_faktury WHERE faktura_id=? ORDER BY lp, id", (fak["id"],)
+            ).fetchall()
+            d = dict(fak); d["pozycje"] = [dict(p) for p in poz]
+            result.append(d)
+        return result
 
 if __name__ == "__main__":
     import uvicorn

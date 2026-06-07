@@ -26,10 +26,7 @@ DB_PATH       = os.environ.get("DB_PATH",      "/data/produkcja.db")
 API_KEY       = os.environ.get("API_KEY",      "zmien-mnie-na-bezpieczny-klucz")
 if API_KEY == "zmien-mnie-na-bezpieczny-klucz":
     import warnings
-    warnings.warn(
-        "[SECURITY] Używasz domyślnego API_KEY! Ustaw zmienną środowiskową API_KEY na unikalny, silny klucz.",
-        stacklevel=2
-    )
+    warnings.warn("[SECURITY] Używasz domyślnego API_KEY! Ustaw zmienną środowiskową API_KEY.", stacklevel=2)
 PORT          = int(os.environ.get("PORT",     8000))
 BACKUP_PATH   = os.environ.get("BACKUP_PATH",  "/data/backup.json")   # persystentny backup JSON
 BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 120))        # co ile sekund auto-backup (domyślnie 2 min)
@@ -70,9 +67,9 @@ app.add_middleware(
 
 # ─── Rate limiting (prosta implementacja in-memory) ───────────────────────────
 _rl_lock   = threading.Lock()
-_rl_hits: dict = defaultdict(list)  # ip -> [timestamp, ...]
-RL_WINDOW  = int(os.environ.get("RL_WINDOW_SEC", 60))   # okno czasowe (s)
-RL_LIMIT   = int(os.environ.get("RL_LIMIT", 300))        # maks. żądań na okno
+_rl_hits: dict = defaultdict(list)
+RL_WINDOW  = int(os.environ.get("RL_WINDOW_SEC", 60))
+RL_LIMIT   = int(os.environ.get("RL_LIMIT", 300))
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
@@ -166,10 +163,7 @@ def _init_stawki_zlecenia(conn, zlecenie_id: int) -> int:
     return added
 
 # ─── SQL Proxy ────────────────────────────────────────────────────────────────
-# Dozwolone prefeksy poleceń SQL (blokujemy DROP, ATTACH, DETACH itp.)
-_SQL_READ_PREFIXES  = ("SELECT", "PRAGMA", "WITH", "EXPLAIN")
-_SQL_WRITE_PREFIXES = ("INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT", "CREATE", "ALTER", "BEGIN", "COMMIT", "ROLLBACK")
-_SQL_BLOCKED        = ("DROP", "ATTACH", "DETACH", "VACUUM")
+_SQL_BLOCKED = ("DROP", "ATTACH", "DETACH", "VACUUM")
 
 def _check_sql_allowed(sql: str):
     first = sql.strip().upper().split()[0] if sql.strip() else ""
@@ -488,6 +482,100 @@ def delete_operacja(oid: int):
     with get_db() as conn:
         conn.execute("DELETE FROM operacje WHERE id=?", (oid,))
         return {"ok": True}
+
+# ─── Ręczne zakończenie operacji (majster) ────────────────────────────────────
+class ZakonczRecznieRequest(BaseModel):
+    user_id: int                            # pracownik który wykonał
+    data_zakonczenia: Optional[str] = None  # ISO datetime; domyślnie teraz
+    ilosc_sztuk: Optional[int] = None       # ile sztuk wykonano (gdy zlecenie > 1 szt.)
+    uwagi: Optional[str] = ""
+
+@app.post("/api/operacje/{oid}/zakoncz-recznie", dependencies=[Depends(verify_key)])
+def zakoncz_operacje_recznie(oid: int, req: ZakonczRecznieRequest):
+    """
+    Ręczne zakończenie operacji przez majstra.
+    Tworzy zamkniętą sesję pracy (start=data_zakonczenia-1min, end=data_zakonczenia)
+    z adnotacją o ręcznym zakończeniu, ustawia status operacji na 'zakonczona'
+    i aktualizuje ilosc_wykonana.
+    """
+    now = _now()
+    end_time = req.data_zakonczenia or now
+
+    with get_db() as conn:
+        op = conn.execute("""
+            SELECT o.*, z.ilosc_sztuk as zl_ilosc_sztuk, z.id as zl_id
+            FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id
+            WHERE o.id=?
+        """, (oid,)).fetchone()
+        if not op:
+            raise HTTPException(404, "Operacja nie znaleziona")
+        if op["status"] == "zakonczona":
+            raise HTTPException(409, "Operacja jest już zakończona")
+
+        user = conn.execute("SELECT id, full_name FROM users WHERE id=?", (req.user_id,)).fetchone()
+        if not user:
+            raise HTTPException(404, "Użytkownik nie znaleziony")
+
+        zl_ilosc = op["zl_ilosc_sztuk"] or 1
+        # Ile sztuk zostało już wykonane przez poprzednie sesje
+        juz_wykonano = op["ilosc_wykonana"] or 0
+        pozostalo = max(0, zl_ilosc - juz_wykonano)
+
+        # Ilość do zapisania w tej sesji
+        if zl_ilosc > 1:
+            # Gdy wiele sztuk – użyj podanej wartości, ale nie więcej niż pozostało
+            ilosc_sesji = min(req.ilosc_sztuk or pozostalo, pozostalo) if pozostalo > 0 else (req.ilosc_sztuk or 1)
+        else:
+            ilosc_sesji = 1  # Zlecenie 1-sztukowe – zawsze 1
+
+        # Sztuczny czas trwania sesji (1 minuta przed podanym czasem zakończenia)
+        try:
+            dt_end   = _parse(end_time)
+            dt_start = dt_end - _dt.timedelta(minutes=1)
+            start_time = dt_start.isoformat() + "Z"
+        except Exception:
+            start_time = end_time  # fallback – identyczne czasy
+
+        uwagi_sesji = f"[RĘCZNIE przez majstra] {req.uwagi or ''}".strip()
+
+        cur = conn.execute(
+            """INSERT INTO sesje_pracy
+               (operacja_id, user_id, typ, start_time, end_time, status,
+                ilosc_sztuk, uwagi, sesja_glowna)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (oid, req.user_id, "operacja", start_time, end_time, "zakonczona",
+             ilosc_sesji, uwagi_sesji, 1)
+        )
+        sesja_id = cur.lastrowid
+
+        # Zaktualizuj ilosc_wykonana i ustaw status zakonczona
+        nowe_wykonano = juz_wykonano + ilosc_sesji
+        conn.execute(
+            "UPDATE operacje SET ilosc_wykonana=?, status='zakonczona' WHERE id=?",
+            (nowe_wykonano, oid)
+        )
+
+        # Sprawdź czy wszystkie operacje zakończone → zamknij zlecenie
+        pozostale_op = conn.execute(
+            "SELECT COUNT(*) FROM operacje WHERE zlecenie_id=? AND status NOT IN ('zakonczona','anulowane')",
+            (op["zl_id"],)
+        ).fetchone()[0]
+        if pozostale_op == 0:
+            conn.execute(
+                "UPDATE zlecenia SET status='zakonczone' WHERE id=? AND status NOT IN ('zakonczone','anulowane')",
+                (op["zl_id"],)
+            )
+
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {
+        "ok": True,
+        "sesja_id": sesja_id,
+        "operacja_id": oid,
+        "ilosc_sesji": ilosc_sesji,
+        "ilosc_wykonana_total": nowe_wykonano,
+        "pracownik": user["full_name"],
+        "end_time": end_time,
+    }
 
 # Endpoint KJ
 class KJRequest(BaseModel):
@@ -1193,6 +1281,7 @@ def stop_sesja(req: StopSesjaRequest):
 class EditSesjaTimeRequest(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
+    ilosc_sztuk: Optional[int] = None  # korekta ilości – dostępna gdy zlecenie ma ilosc_sztuk > 1
 
 @app.patch("/api/sesje/{sesja_id}/czas", dependencies=[Depends(verify_key)])
 def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
@@ -1202,6 +1291,11 @@ def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
             raise HTTPException(404, "Sesja nie istnieje")
         new_start = req.start_time or sesja["start_time"]
         new_end   = req.end_time   or sesja["end_time"]
+        new_ilosc = req.ilosc_sztuk if req.ilosc_sztuk is not None else (sesja["ilosc_sztuk"] or 0)
+
+        if req.ilosc_sztuk is not None and req.ilosc_sztuk < 0:
+            raise HTTPException(400, "Ilość sztuk nie może być ujemna")
+
         if new_end:
             try:
                 dt_start = _parse(new_start)
@@ -1212,11 +1306,32 @@ def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
                 raise
             except Exception:
                 raise HTTPException(400, "Nieprawidłowy format czasu")
+
+        old_ilosc = sesja["ilosc_sztuk"] or 0
         conn.execute(
-            "UPDATE sesje_pracy SET start_time=?, end_time=? WHERE id=?",
-            (new_start, new_end, sesja_id)
+            "UPDATE sesje_pracy SET start_time=?, end_time=?, ilosc_sztuk=? WHERE id=?",
+            (new_start, new_end, new_ilosc, sesja_id)
         )
-        return {"status": "ok", "sesja_id": sesja_id, "start_time": new_start, "end_time": new_end}
+
+        # Jeśli zmieniono ilość i sesja dotyczy operacji produkcyjnej – zaktualizuj ilosc_wykonana
+        if req.ilosc_sztuk is not None and sesja["operacja_id"] and sesja["typ"] in ("operacja", "inne_zlecenie"):
+            delta = new_ilosc - old_ilosc
+            conn.execute(
+                "UPDATE operacje SET ilosc_wykonana = MAX(0, ilosc_wykonana + ?) WHERE id=?",
+                (delta, sesja["operacja_id"])
+            )
+            op = conn.execute(
+                "SELECT o.ilosc_wykonana, o.status, z.ilosc_sztuk FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?",
+                (sesja["operacja_id"],)
+            ).fetchone()
+            if op:
+                if op["ilosc_wykonana"] >= op["ilosc_sztuk"] and op["status"] != "zakonczona":
+                    conn.execute("UPDATE operacje SET status='zakonczona' WHERE id=?", (sesja["operacja_id"],))
+                elif op["ilosc_wykonana"] < op["ilosc_sztuk"] and op["status"] == "zakonczona":
+                    conn.execute("UPDATE operacje SET status='w_toku' WHERE id=?", (sesja["operacja_id"],))
+
+        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        return {"status": "ok", "sesja_id": sesja_id, "start_time": new_start, "end_time": new_end, "ilosc_sztuk": new_ilosc}
 
 @app.delete("/api/sesje/{sesja_id}", dependencies=[Depends(verify_key)])
 def delete_sesja(sesja_id: int):
@@ -3596,8 +3711,7 @@ class FeedbackIn(BaseModel):
     wiadomosc: Optional[str] = ""
 
     def sanitized_message(self) -> str:
-        msg = (self.wiadomosc or "").strip()
-        return msg[:2000]  # max 2000 znaków
+        return (self.wiadomosc or "").strip()[:2000]
 
 @app.post("/api/feedback", dependencies=[Depends(verify_key)])
 def post_feedback(fb: FeedbackIn):

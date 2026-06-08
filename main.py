@@ -1976,7 +1976,7 @@ async def import_drzewo_gp(file: UploadFile = File(...)):
                         conn.execute(
                             """INSERT OR IGNORE INTO wyroby_bom
                                (wyrob_id, skladnik_id, typ_skladnika, ilosc, jednostka, pozycja)
-                               VALUES (?,'P',?,?,?,?)""",
+                               VALUES (?,?,'P',?,?,?)""",
                             (gid, child["id"], ilosc_c, jm_c, pozycja)
                         )
                         bom_created += 1
@@ -4229,7 +4229,7 @@ def zwrot_narzedzia_v2(pid: int):
     return {"ok": True}
 
 
-class FeedbackIn(BaseModel):
+
     user_id: Optional[int] = None
     user_name: Optional[str] = None
     ocena: int

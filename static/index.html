@@ -492,6 +492,25 @@ let state = {
   fakturyFilterStatus: 'wszystkie',
   fakturyFilterRok: new Date().getFullYear(),
 
+  // Drzewo G/P
+  drzewoWyrobyG: [],
+  drzewoWyrobyP: [],
+  drzewoLoading: false,
+  drzewoSelectedG: null,
+  drzewoTree: null,
+  drzewoTreeLoading: false,
+  drzewoPanel: 'drzewo',     // drzewo | mrp | import | nowy
+  drzewoSearch: '',
+  drzewoZleceniaG: [],
+  drzewoExpanded: {},        // {nodeKey: bool}
+  drzewoMrp: null,
+  drzewoMrpLoading: false,
+  drzewoMrpView: 'zbiorczy', // zbiorczy | p-status
+  drzewoImportResult: null,
+  drzewoImportError: null,
+  drzewoImportUploading: false,
+  drzewoNowyForm: null,      // {symbol,nazwa,typ,jednostka,numer_rysunku} | null
+
   // Nowe modale: równoległa obróbka + zmiana maszyny
   parallelModal: null,       // {operacjaId, stanowisko, aktywne:[]} – drugi scan uruchomionej op
   zmianaMaszynyModal: null,  // {operacjaId, stanowiskoOryginalne, stanowiskoLista:[]}
@@ -805,6 +824,7 @@ const ALL_TABS_DEF = [
   {id:'magazyn',   label:'📦 Magazyn',   roles:['magazynier','admin']},
   {id:'majster',   label:'🔧 Majster',   roles:['majster','admin']},
   {id:'zlecenia',  label:'📋 Zlecenia',  roles:['majster','admin','technolog']},
+  {id:'drzewo',    label:'🌳 Drzewo G/P',roles:['majster','admin','technolog']},
   {id:'admin',     label:'⚙ Admin',      roles:['admin','technolog']},
   {id:'ustawienia',label:'🔩 Ustawienia',roles:['pracownik','majster','technolog','magazynier','admin']},
 ];
@@ -1360,6 +1380,7 @@ function loadTabData(tab) {
     setState({magazynLastRefresh: new Date().toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}, true);
   }
   if (tab==='zlecenia') { loadZlecenia(); get('/api/stawki').then(d=>setState({stawki:d},true)).catch(()=>{}); }
+  if (tab==='drzewo')   loadDrzewoGP();
   if (tab==='admin')    loadAdmin();
 }
 
@@ -1740,6 +1761,7 @@ function renderBottomNav() {
     if (role === 'magazynier' || role === 'admin') tabs.push({id:'magazyn',icon:'📦',label:'Magazyn'});
     if (role === 'majster' || role === 'admin')    tabs.push({id:'majster',icon:'🔧',label:'Majster'});
     if (role !== 'pracownik' && role !== 'magazynier') tabs.push({id:'zlecenia',icon:'📋',label:'Zlecenia'});
+    if (role === 'majster' || role === 'admin' || role === 'technolog') tabs.push({id:'drzewo',icon:'🌳',label:'Drzewo'});
     if (role === 'admin' || role === 'technolog')  tabs.push({id:'admin',icon:'⚙',label:'Admin'});
     tabs.push({id:'ustawienia',icon:'🔩',label:'Ustawienia'});
   }
@@ -6782,6 +6804,7 @@ function renderContent() {
     majster:    renderMajster,
     magazyn:    renderMagazyn,
     zlecenia:   renderZlecenia,
+    drzewo:     renderDrzewoGP,
     admin:      renderAdmin,
     ustawienia: renderUstawienia,
   }[state.activeTab] || (() => '');
@@ -8120,6 +8143,496 @@ async function _initStep3DScene(stepUrl) {
     _setStep3dStatus('✗ ' + e.message, '#e05555');
     console.error('[STEP viewer]', e);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODUŁ: DRZEWO G/P – Struktura technologiczna
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadDrzewoGP() {
+  if (state.drzewoLoading) return;
+  setState({drzewoLoading: true}, true);
+  try {
+    const [g, p, zl] = await Promise.all([
+      get('/api/wyroby?typ=G'),
+      get('/api/wyroby?typ=P'),
+      get('/api/zlecenia'),
+    ]);
+    const zlG = zl.filter(z => g.some(wg => wg.symbol === z.numer));
+    setState({drzewoWyrobyG: g, drzewoWyrobyP: p, drzewoZleceniaG: zlG, drzewoLoading: false});
+  } catch(e) {
+    setState({drzewoLoading: false, error: 'Błąd ładowania drzewa: ' + e.message});
+  }
+}
+
+async function drzewoSelectG(wyrob) {
+  setState({drzewoSelectedG: wyrob, drzewoPanel: 'drzewo', drzewoTree: null, drzewoTreeLoading: true, drzewoMrp: null});
+  try {
+    const tree = await get('/api/wyroby/' + wyrob.id + '/drzewo');
+    setState({drzewoTree: tree, drzewoTreeLoading: false});
+  } catch(e) {
+    setState({drzewoTreeLoading: false});
+  }
+}
+
+async function drzewoLoadMrp(gid) {
+  setState({drzewoMrpLoading: true, drzewoMrp: null}, true); render();
+  try {
+    const d = await get('/api/zlecenia/' + gid + '/mrp');
+    setState({drzewoMrp: d, drzewoMrpLoading: false});
+  } catch(e) {
+    setState({drzewoMrpLoading: false, error: 'Błąd MRP: ' + e.message});
+  }
+}
+
+function drzewoToggleNode(key) {
+  const expanded = {...state.drzewoExpanded};
+  expanded[key] = !expanded[key];
+  setState({drzewoExpanded: expanded}, true); render();
+}
+
+async function drzewoUploadPdf(file) {
+  setState({drzewoImportUploading: true, drzewoImportResult: null, drzewoImportError: null}, true); render();
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch(SERVER_URL + '/api/import-drzewo-gp', {
+      method: 'POST',
+      headers: {'x-api-key': state.apiKey || localStorage.getItem('apiKey') || ''},
+      body: fd,
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Błąd importu');
+    setState({drzewoImportResult: d, drzewoImportUploading: false});
+    loadDrzewoGP();
+  } catch(e) {
+    setState({drzewoImportError: e.message, drzewoImportUploading: false});
+  }
+}
+
+async function drzewoSaveNowy() {
+  const f = state.drzewoNowyForm;
+  if (!f || !f.symbol || !f.nazwa) { alert('Symbol i nazwa są wymagane'); return; }
+  try {
+    await post('/api/wyroby', f);
+    setState({drzewoNowyForm: null, drzewoPanel: 'drzewo'});
+    loadDrzewoGP();
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+// ─── Render węzła drzewa ───────────────────────────────────────────────────────
+function renderDrzewoNode(node, depth, ilocZlecona) {
+  if (!node) return '';
+  const key = node._bom_id || (node.symbol || node.material_indeks || '') + '-' + depth;
+  const isM = node.typ === 'M';
+  const isG = node.typ === 'G';
+  const hasChildren = node.children && node.children.length > 0;
+  const isOpen = depth < 2 ? (state.drzewoExpanded[key] !== false) : !!state.drzewoExpanded[key];
+
+  const indent = depth * 22;
+  const borderColor = isG ? '#3b82f6' : isM ? '#6b7280' : '#8b5cf6';
+  const bgAlpha = Math.max(0.02, 0.12 - depth * 0.02);
+
+  const zlecenie = node.zlecenia && node.zlecenia[0];
+  const opDone  = zlecenie?.op_done || 0;
+  const opTotal = zlecenie?.op_total || 0;
+  const progPct = opTotal > 0 ? Math.round(opDone / opTotal * 100) : 0;
+  const progColor = progPct === 100 ? '#4ade80' : '#3b82f6';
+
+  const ilocBOM = node._bom_ilosc;
+  const ilocEfekt = (ilocZlecona != null && ilocBOM != null) ? ilocBOM * ilocZlecona : ilocBOM;
+
+  const statusDef = {
+    nowe:{bg:'#1e3a5f',text:'#60a5fa',label:'Nowe'},
+    w_toku:{bg:'#1a3a1a',text:'#4ade80',label:'W toku'},
+    zakonczone:{bg:'#1a2a1a',text:'#86efac',label:'Zakończone'},
+    oczekuje:{bg:'#2d2d1a',text:'#fbbf24',label:'Oczekuje'},
+    wstrzymane:{bg:'#3a1a1a',text:'#f87171',label:'Wstrzymane'},
+    oczekuje_potwierdzenia:{bg:'#1a1a3a',text:'#a78bfa',label:'Do potw.'},
+    anulowane:{bg:'#2a2a2a',text:'#6b7280',label:'Anulowane'},
+  };
+
+  const badgeHtml = (status) => {
+    const s = statusDef[status] || statusDef.nowe;
+    return `<span style="background:${s.bg};color:${s.text};font-size:0.65rem;font-weight:700;padding:2px 7px;border-radius:4px;border:1px solid ${s.text}33;white-space:nowrap">${s.label}</span>`;
+  };
+
+  if (isM) {
+    const ilocStr = ilocEfekt != null
+      ? `<span style="color:#d1d5db;font-weight:600;margin-left:auto">${(+ilocEfekt).toLocaleString('pl-PL',{maximumFractionDigits:2})} ${node.material_jm || node.jednostka || ''}</span>`
+      : '';
+    return `<div style="margin-left:${indent}px;margin-bottom:2px;background:rgba(107,114,128,0.06);border-left:2px solid #6b728040;border-radius:4px;padding:4px 10px;display:flex;align-items:center;gap:8px;font-size:0.73rem;color:#9ca3af">
+      <span style="opacity:.5;font-size:.62rem">▣</span>
+      <span style="color:#6b7280;min-width:70px;font-family:monospace">${node.material_indeks||''}</span>
+      <span style="flex:1">${node.material_opis||'—'}</span>
+      ${ilocStr}
+    </div>`;
+  }
+
+  const ilocStr = ilocEfekt != null
+    ? `<span style="font-size:.73rem;color:#94a3b8;white-space:nowrap">${(+ilocEfekt).toLocaleString('pl-PL',{maximumFractionDigits:2})} ${node.jednostka||'szt'}</span>`
+    : '';
+  const progHtml = opTotal > 0
+    ? `<div style="display:flex;flex-direction:column;gap:2px;min-width:80px;align-items:flex-end">
+        <span style="font-size:.62rem;color:#64748b">${opDone}/${opTotal} op. · ${progPct}%</span>
+        <div style="background:#ffffff14;border-radius:2px;height:4px;width:100%;overflow:hidden">
+          <div style="width:${progPct}%;height:100%;background:${progColor};border-radius:2px"></div>
+        </div>
+       </div>`
+    : '';
+  const noZlHtml = (!zlecenie && !isG)
+    ? `<span style="font-size:.65rem;color:#f59e0b;border:1px solid #f59e0b44;border-radius:3px;padding:1px 6px;white-space:nowrap">Brak zlecenia</span>`
+    : '';
+  const chevron = hasChildren
+    ? `<span style="width:16px;text-align:center;color:#94a3b8;font-size:.62rem;display:inline-block;transition:transform .2s;transform:${isOpen?'rotate(90deg)':'none'}"
+         onclick="drzewoToggleNode('${key.replace(/'/g,"\\'")}');event.stopPropagation()">▶</span>`
+    : '<span style="width:16px"></span>';
+  const countBadge = hasChildren
+    ? `<span style="font-size:.62rem;color:#475569;background:#ffffff10;border-radius:10px;padding:1px 6px;min-width:24px;text-align:center">${node.children.length}</span>`
+    : '';
+
+  const childrenHtml = (isOpen && hasChildren)
+    ? `<div style="margin-top:2px">${node.children.map((c,i) => renderDrzewoNode(c, depth+1, ilocEfekt || ilocZlecona)).join('')}</div>`
+    : '';
+
+  return `<div style="margin-left:${indent}px;margin-bottom:4px">
+    <div style="background:rgba(255,255,255,${bgAlpha});border-left:3px solid ${borderColor};border-radius:4px;padding:7px 12px;cursor:${hasChildren?'pointer':'default'};display:flex;align-items:center;gap:10px;user-select:none"
+      onclick="if(${hasChildren})drzewoToggleNode('${key.replace(/'/g,"\\'")}')">
+      ${chevron}
+      <span style="font-family:monospace;font-weight:700;color:${isG?'#60a5fa':'#a78bfa'};font-size:.78rem;min-width:70px">${node.symbol||''}</span>
+      <span style="flex:1;font-size:.81rem;color:#e2e8f0;line-height:1.3">${node.nazwa||''}</span>
+      ${ilocStr}
+      ${zlecenie ? badgeHtml(zlecenie.status) : ''}
+      ${progHtml}
+      ${noZlHtml}
+      ${countBadge}
+    </div>
+    ${childrenHtml}
+  </div>`;
+}
+
+// ─── Render główny Drzewa G/P ─────────────────────────────────────────────────
+function renderDrzewoGP() {
+  const {
+    drzewoWyrobyG: wyrobyG, drzewoWyrobyP: wyrobyP, drzewoLoading: loading,
+    drzewoSelectedG: selG, drzewoTree: tree, drzewoTreeLoading: treeLoading,
+    drzewoPanel: panel, drzewoSearch: search, drzewoZleceniaG: zleceniaG,
+    drzewoMrp: mrp, drzewoMrpLoading: mrpLoading, drzewoMrpView: mrpView,
+    drzewoImportResult: importResult, drzewoImportError: importError, drzewoImportUploading: uploading,
+    drzewoNowyForm: nowyForm,
+  } = state;
+
+  const filteredG = wyrobyG.filter(w =>
+    !search ||
+    w.symbol.toLowerCase().includes(search.toLowerCase()) ||
+    w.nazwa.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const zlecenieG = selG ? (zleceniaG.find(z => z.numer === selG.symbol) || null) : null;
+
+  // ── Lewa kolumna ──
+  const listaHtml = loading
+    ? '<div style="display:flex;justify-content:center;padding:40px"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:24px;height:24px;animation:spin .8s linear infinite"></div></div>'
+    : filteredG.length === 0
+      ? '<div style="color:#475569;text-align:center;padding:24px;font-size:.78rem">Brak wyrobów G.<br>Zaimportuj drzewo z PDF<br>lub utwórz ręcznie.</div>'
+      : filteredG.map(wg => {
+          const isActive = selG?.id === wg.id;
+          const zl = zleceniaG.find(z => z.numer === wg.symbol);
+          const statusDot = zl
+            ? `<span style="width:7px;height:7px;border-radius:50%;background:${{nowe:'#60a5fa',w_toku:'#4ade80',zakonczone:'#86efac',wstrzymane:'#f87171',anulowane:'#6b7280'}[zl.status]||'#60a5fa'};display:inline-block;flex-shrink:0"></span>`
+            : '';
+          return `<div onclick="drzewoSelectG(${JSON.stringify(wg).replace(/"/g,'&quot;')})"
+            style="padding:9px 12px;border-radius:6px;cursor:pointer;margin-bottom:3px;
+              background:${isActive?'#1e3a5f':'transparent'};
+              border:1px solid ${isActive?'#3b82f640':'transparent'};transition:all .15s"
+            onmouseenter="if(!${isActive})this.style.background='#ffffff08'"
+            onmouseleave="if(!${isActive})this.style.background='transparent'">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+              ${statusDot}
+              <span style="color:#60a5fa;font-weight:700;font-size:.77rem;font-family:monospace">${wg.symbol}</span>
+            </div>
+            <div style="color:#94a3b8;font-size:.71rem;line-height:1.3">${(wg.nazwa||'').slice(0,52)}${(wg.nazwa||'').length>52?'…':''}</div>
+          </div>`;
+        }).join('');
+
+  // ── Panel prawy ──
+  let rightHtml = '';
+
+  if (!selG && panel !== 'import' && panel !== 'nowy') {
+    rightHtml = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:70vh;gap:12px;color:#334155">
+      <div style="font-size:3rem;opacity:.25">⬡</div>
+      <div style="font-size:.84rem">Wybierz wyrób G z listy po lewej</div>
+      <div style="font-size:.74rem;color:#1e3a5f">lub zaimportuj / utwórz nowy</div>
+    </div>`;
+  }
+
+  // Panel: Nowy wyrób ──
+  if (panel === 'nowy') {
+    const f = nowyForm || {symbol:'',nazwa:'',typ:'G',jednostka:'szt',numer_rysunku:''};
+    rightHtml = `<div style="max-width:480px">
+      <div style="font-size:.9rem;font-weight:700;color:#60a5fa;margin-bottom:16px">Nowy wyrób</div>
+      ${[
+        ['Symbol','symbol','text','np. G.100.001'],
+        ['Nazwa','nazwa','text','Pełna nazwa wyrobu'],
+        ['Jedn.','jednostka','text','szt'],
+        ['Nr rysunku','numer_rysunku','text','opcjonalnie'],
+      ].map(([lbl,fld,type,ph]) => `
+        <div style="margin-bottom:12px">
+          <label style="color:#64748b;font-size:.75rem;display:block;margin-bottom:4px">${lbl}</label>
+          <input type="${type}" value="${(f[fld]||'').replace(/"/g,'&quot;')}" placeholder="${ph}"
+            oninput="setState({drzewoNowyForm:{...state.drzewoNowyForm||{symbol:'',nazwa:'',typ:'G',jednostka:'szt',numer_rysunku:''},'${fld}':this.value}},true)"
+            style="background:#ffffff0a;border:1px solid #ffffff20;border-radius:6px;padding:7px 10px;color:#e2e8f0;font-size:.8rem;width:100%;outline:none">
+        </div>`).join('')}
+      <div style="margin-bottom:16px">
+        <label style="color:#64748b;font-size:.75rem;display:block;margin-bottom:4px">Typ</label>
+        <div style="display:flex;gap:8px">
+          ${['G','P'].map(t => `<button onclick="setState({drzewoNowyForm:{...state.drzewoNowyForm||{symbol:'',nazwa:'',typ:'G',jednostka:'szt',numer_rysunku:''},typ:'${t}'}},true);render()"
+            style="flex:1;padding:7px;border:1px solid ${(f.typ||'G')===t?'#3b82f6':'#ffffff20'};border-radius:6px;background:${(f.typ||'G')===t?'#1e3a5f':'transparent'};color:${(f.typ||'G')===t?'#60a5fa':'#64748b'};cursor:pointer;font-weight:700;font-family:monospace">${t} – ${t==='G'?'Wyrób gotowy':'Półprodukt'}</button>`).join('')}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="drzewoSaveNowy()" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-weight:600;font-size:.8rem">Zapisz</button>
+        <button onclick="setState({drzewoPanel:'drzewo',drzewoNowyForm:null})" style="background:#ffffff10;color:#94a3b8;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:.8rem">Anuluj</button>
+      </div>
+    </div>`;
+  }
+
+  // Panel: Import PDF (globalny) ──
+  if (!selG && panel === 'import') {
+    rightHtml = renderDrzewoImportPanel();
+  }
+
+  // Panel: wybrany G ──
+  if (selG) {
+    const tabsHtml = ['drzewo','mrp','import'].map(t => {
+      const labels = {drzewo:'🌲 Drzewo BOM', mrp:'📊 MRP / Materiały', import:'📄 Import PDF'};
+      return `<button onclick="setState({drzewoPanel:'${t}'});${t==='mrp'&&zlecenieG?'drzewoLoadMrp('+zlecenieG.id+')':''}"
+        style="background:${panel===t?'#3b82f6':'transparent'};color:${panel===t?'#fff':'#64748b'};border:none;border-radius:6px;padding:6px 14px;font-size:.76rem;cursor:pointer;font-weight:600;transition:all .15s">${labels[t]}</button>`;
+    }).join('');
+
+    const ilocSztuk = zlecenieG?.ilosc_sztuk || 1;
+    const headerRight = zlecenieG
+      ? `<div style="margin-left:auto;background:#ffffff08;border-radius:8px;padding:8px 16px;display:flex;gap:20px">
+          <div style="text-align:center">
+            <div style="color:#60a5fa;font-weight:700;font-size:1.1rem">${zlecenieG.ilosc_sztuk}</div>
+            <div style="color:#64748b;font-size:.67rem">sztuk</div>
+          </div>
+          ${zlecenieG.termin ? `<div style="text-align:center">
+            <div style="color:#f59e0b;font-weight:700;font-size:.84rem">${zlecenieG.termin}</div>
+            <div style="color:#64748b;font-size:.67rem">termin</div>
+          </div>` : ''}
+        </div>`
+      : '';
+
+    const statusDef = {nowe:{bg:'#1e3a5f',text:'#60a5fa',label:'Nowe'},w_toku:{bg:'#1a3a1a',text:'#4ade80',label:'W toku'},zakonczone:{bg:'#1a2a1a',text:'#86efac',label:'Zakończone'},wstrzymane:{bg:'#3a1a1a',text:'#f87171',label:'Wstrzymane'},anulowane:{bg:'#2a2a2a',text:'#6b7280',label:'Anulowane'}};
+    const s = zlecenieG && (statusDef[zlecenieG.status]||statusDef.nowe);
+    const statusBadge = s ? `<span style="background:${s.bg};color:${s.text};font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:4px;border:1px solid ${s.text}33">${s.label}</span>` : '';
+
+    let panelContent = '';
+
+    if (panel === 'drzewo') {
+      if (treeLoading) {
+        panelContent = '<div style="display:flex;align-items:center;gap:12px;color:#475569;padding:24px"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:20px;height:20px;animation:spin .8s linear infinite"></div><span style="font-size:.79rem">Ładowanie drzewa…</span></div>';
+      } else if (tree) {
+        panelContent = renderDrzewoNode(tree, 0, ilocSztuk);
+      } else {
+        panelContent = '<div style="color:#475569;padding:24px;font-size:.79rem">Brak struktury BOM. Zaimportuj drzewo z PDF lub uzupełnij ręcznie.</div>';
+      }
+    }
+
+    if (panel === 'mrp') {
+      if (!zlecenieG) {
+        panelContent = `<div style="color:#475569;padding:24px;font-size:.79rem">Brak aktywnego zlecenia G dla wyrobu <strong style="color:#60a5fa">${selG.symbol}</strong>.<br>Utwórz zlecenie o tym numerze w zakładce Zlecenia.</div>`;
+      } else if (mrpLoading) {
+        panelContent = '<div style="display:flex;justify-content:center;padding:40px"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:28px;height:28px;animation:spin .8s linear infinite"></div></div>';
+      } else if (mrp) {
+        panelContent = renderDrzewoMrp(mrp);
+      } else {
+        panelContent = `<div style="text-align:center;padding:32px">
+          <button onclick="drzewoLoadMrp(${zlecenieG.id})"
+            style="background:#1e3a5f;color:#60a5fa;border:1px solid #3b82f640;border-radius:8px;padding:10px 24px;cursor:pointer;font-weight:600;font-size:.8rem">
+            📊 Załaduj MRP
+          </button>
+        </div>`;
+      }
+    }
+
+    if (panel === 'import') {
+      panelContent = `<div style="max-width:540px">
+        <div style="color:#64748b;font-size:.77rem;margin-bottom:12px">Import zaktualizuje strukturę BOM wyrobu <strong style="color:#60a5fa">${selG.symbol}</strong></div>
+        ${renderDrzewoImportPanel()}
+      </div>`;
+    }
+
+    rightHtml = `<div>
+      <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:20px;flex-wrap:wrap">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="color:#60a5fa;font-weight:700;font-size:1.1rem;font-family:monospace">${selG.symbol}</span>
+            ${statusBadge}
+          </div>
+          <div style="color:#94a3b8;font-size:.81rem;margin-top:4px">${selG.nazwa}</div>
+          ${selG.numer_rysunku ? `<div style="color:#475569;font-size:.71rem;margin-top:2px">Rys. ${selG.numer_rysunku}</div>` : ''}
+        </div>
+        ${headerRight}
+      </div>
+      <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid #ffffff10;padding-bottom:8px">
+        ${tabsHtml}
+      </div>
+      ${panelContent}
+    </div>`;
+  }
+
+  return `
+  <style>
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .drzewo-left-item:hover{background:#ffffff08 !important}
+  </style>
+  <div style="display:flex;align-items:center;gap:16px;padding:10px 20px;border-bottom:1px solid #ffffff10;background:#ffffff04;flex-wrap:wrap">
+    <div style="font-size:1rem;font-weight:700;color:#60a5fa;letter-spacing:.05em;font-family:monospace">STRUKTURA G/P</div>
+    <div style="color:#334155;font-size:.73rem">${wyrobyG.length} wyrobów G · ${wyrobyP.length} półproduktów P</div>
+    <div style="flex:1;min-width:120px"></div>
+    <input value="${search.replace(/"/g,'&quot;')}" oninput="setState({drzewoSearch:this.value},true);render()"
+      placeholder="Szukaj G/P…"
+      style="background:#ffffff0a;border:1px solid #ffffff15;border-radius:6px;padding:5px 12px;color:#e2e8f0;font-size:.77rem;width:180px;outline:none">
+    <button onclick="setState({drzewoSelectedG:null,drzewoPanel:'nowy',drzewoNowyForm:{symbol:'',nazwa:'',typ:'G',jednostka:'szt',numer_rysunku:''}})"
+      style="background:#1a3a1a;color:#4ade80;border:1px solid #4ade8040;border-radius:6px;padding:5px 14px;font-size:.75rem;cursor:pointer;font-weight:600">
+      + Nowy wyrób
+    </button>
+    <button onclick="setState({drzewoSelectedG:null,drzewoPanel:'import'})"
+      style="background:#1e3a5f;color:#60a5fa;border:1px solid #3b82f660;border-radius:6px;padding:5px 14px;font-size:.75rem;cursor:pointer;font-weight:600">
+      + Import PDF
+    </button>
+  </div>
+
+  <div style="display:flex;height:calc(100vh - 110px)">
+    <div style="width:250px;border-right:1px solid #ffffff10;overflow-y:auto;padding:10px 8px;background:#ffffff03;flex-shrink:0">
+      ${listaHtml}
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:22px 28px;font-family:'IBM Plex Mono',monospace">
+      ${rightHtml}
+    </div>
+  </div>`;
+}
+
+// ─── MRP card ──────────────────────────────────────────────────────────────────
+function renderDrzewoMrp(data) {
+  const { summary, materialy_zbiorczy, zapotrzebowania_p } = data;
+  const MRP_COLOR = { ok: '#4ade80', czesciowo: '#fbbf24', brak: '#f87171' };
+  const mrpView = state.drzewoMrpView;
+
+  const statsHtml = [
+    {label:'Materiałów', val:summary.material_count, color:'#94a3b8'},
+    {label:'OK',          val:summary.ok_count,       color:MRP_COLOR.ok},
+    {label:'Częściowo',   val:summary.czesciowo_count, color:MRP_COLOR.czesciowo},
+    {label:'Brak',        val:summary.brak_count,      color:MRP_COLOR.brak},
+  ].map(s => `<div style="background:#ffffff08;border:1px solid ${s.color}33;border-radius:8px;padding:10px 18px;text-align:center">
+    <div style="color:${s.color};font-size:1.5rem;font-weight:700">${s.val}</div>
+    <div style="color:#64748b;font-size:.71rem;margin-top:2px">${s.label}</div>
+  </div>`).join('');
+
+  const tabsHtml = [
+    {id:'zbiorczy', label:'Materiały (zbiorczy)'},
+    {id:'p-status', label:`Półprodukty P (${(zapotrzebowania_p||[]).length})`},
+  ].map(t => `<button onclick="setState({drzewoMrpView:'${t.id}'},true);render()"
+    style="background:${mrpView===t.id?'#3b82f6':'#ffffff10'};color:${mrpView===t.id?'#fff':'#94a3b8'};border:none;border-radius:6px;padding:5px 13px;font-size:.74rem;cursor:pointer;font-weight:600">${t.label}</button>`).join('');
+
+  let listHtml = '';
+
+  if (mrpView === 'zbiorczy') {
+    if (!materialy_zbiorczy || materialy_zbiorczy.length === 0) {
+      listHtml = '<div style="color:#475569;text-align:center;padding:24px;font-size:.79rem">Brak zdefiniowanego BOM. Zaimportuj drzewo lub uzupełnij ręcznie.</div>';
+    } else {
+      const rows = materialy_zbiorczy.map((m, i) => {
+        const braki = m.braki || 0;
+        const brakHtml = braki > 0
+          ? `<span style="color:${MRP_COLOR.brak};font-weight:700">-${(+braki).toLocaleString('pl-PL',{maximumFractionDigits:2})}</span>`
+          : `<span style="color:${MRP_COLOR.ok}">OK</span>`;
+        return `<tr style="border-bottom:1px solid #ffffff08;background:${i%2===0?'transparent':'#ffffff04'}">
+          <td style="padding:5px 10px;color:#64748b;font-family:monospace;font-size:.71rem">${m.material_indeks||''}</td>
+          <td style="padding:5px 10px;color:#cbd5e1;font-size:.76rem">${m.material_opis||''}</td>
+          <td style="padding:5px 10px;color:#e2e8f0;text-align:right;font-size:.76rem">${(+m.ilosc_wymagana).toLocaleString('pl-PL',{maximumFractionDigits:2})} ${m.material_jm||''}</td>
+          <td style="padding:5px 10px;color:#94a3b8;text-align:right;font-size:.76rem">${(+(m.material_stan||0)).toLocaleString('pl-PL',{maximumFractionDigits:2})}</td>
+          <td style="padding:5px 10px;text-align:right;font-size:.76rem">${brakHtml}</td>
+          <td style="padding:5px 10px"><div style="width:8px;height:8px;border-radius:50%;background:${MRP_COLOR[m.status_dostepnosci]||'#94a3b8'};display:inline-block"></div></td>
+        </tr>`;
+      }).join('');
+      listHtml = `<div style="max-height:380px;overflow-y:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:.75rem">
+          <thead><tr style="border-bottom:1px solid #ffffff15">
+            ${['Indeks','Opis','Wymagane','Dostępne','Brak',''].map(h=>`<th style="padding:6px 10px;color:#64748b;text-align:left;font-weight:600;white-space:nowrap">${h}</th>`).join('')}
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    }
+  }
+
+  if (mrpView === 'p-status') {
+    const zps = zapotrzebowania_p || [];
+    if (zps.length === 0) {
+      listHtml = '<div style="color:#475569;text-align:center;padding:24px;font-size:.79rem">Brak zapotrzebowań P.</div>';
+    } else {
+      const statusDef = {nowe:{bg:'#1e3a5f',text:'#60a5fa',label:'Nowe'},w_toku:{bg:'#1a3a1a',text:'#4ade80',label:'W toku'},zakonczone:{bg:'#1a2a1a',text:'#86efac',label:'Zakończone'},wstrzymane:{bg:'#3a1a1a',text:'#f87171',label:'Wstrzymane'},anulowane:{bg:'#2a2a2a',text:'#6b7280',label:'Anulowane'}};
+      listHtml = `<div style="display:flex;flex-direction:column;gap:6px">` + zps.map(z => {
+        const s = statusDef[z.p_status] || null;
+        const badge = z.p_numer && s
+          ? `<span style="background:${s.bg};color:${s.text};font-size:.64rem;font-weight:700;padding:2px 7px;border-radius:4px">${s.label}</span>`
+          : `<span style="font-size:.65rem;color:#f59e0b;border:1px solid #f59e0b44;border-radius:3px;padding:1px 6px">Brak zlecenia P</span>`;
+        return `<div style="background:#ffffff06;border:1px solid #ffffff10;border-radius:6px;padding:8px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="color:#a78bfa;font-family:monospace;font-weight:700;min-width:80px;font-size:.8rem">${z.wyrob_p_symbol||''}</span>
+          <span style="color:#e2e8f0;flex:1;font-size:.79rem">${z.wyrob_nazwa||'—'}</span>
+          <span style="color:#94a3b8;font-size:.74rem">${z.ilosc_wymagana||0} szt.</span>
+          ${badge}
+        </div>`;
+      }).join('') + '</div>';
+    }
+  }
+
+  return `<div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">${statsHtml}</div>
+    <div style="display:flex;gap:4px;margin-bottom:12px">${tabsHtml}</div>
+    ${listHtml}
+  </div>`;
+}
+
+// ─── Import PDF panel ──────────────────────────────────────────────────────────
+function renderDrzewoImportPanel() {
+  const { drzewoImportUploading: uploading, drzewoImportResult: result, drzewoImportError: error } = state;
+
+  const dropHtml = uploading
+    ? `<div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:32px">
+        <div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:28px;height:28px;animation:spin .8s linear infinite"></div>
+        <span style="color:#64748b;font-size:.79rem">Parsowanie PDF…</span>
+       </div>`
+    : `<div style="font-size:1.7rem;margin-bottom:8px">📄</div>
+       <div style="color:#94a3b8;font-size:.81rem;line-height:1.6">
+         Przeciągnij PDF drzewa technologicznego z Graffiti ERP<br>lub kliknij, by wybrać plik
+       </div>`;
+
+  const resultHtml = result
+    ? `<div style="background:#1a3a1a;border:1px solid #4ade8044;border-radius:6px;padding:12px;margin-top:10px;font-size:.77rem;color:#86efac">
+        ✓ Import zakończony: <strong>${result.symbol_glowny}</strong> · ${result.wyroby_created} nowych wyrobów · ${result.bom_created} pozycji BOM · ${result.items_parsed} pozycji w PDF
+        ${result.errors?.length ? `<div style="color:#fbbf24;margin-top:6px">Ostrzeżenia: ${result.errors.slice(0,3).join(', ')}</div>` : ''}
+       </div>` : '';
+
+  const errorHtml = error
+    ? `<div style="color:#f87171;font-size:.77rem;margin-top:10px">✗ ${error}</div>` : '';
+
+  return `<div>
+    <input type="file" id="drzewo-pdf-input" accept=".pdf" style="display:none"
+      onchange="if(this.files[0])drzewoUploadPdf(this.files[0])">
+    <div
+      onclick="document.getElementById('drzewo-pdf-input').click()"
+      ondragover="event.preventDefault();this.style.borderColor='#3b82f6'"
+      ondragleave="this.style.borderColor='#ffffff20'"
+      ondrop="event.preventDefault();this.style.borderColor='#ffffff20';if(event.dataTransfer.files[0])drzewoUploadPdf(event.dataTransfer.files[0])"
+      style="border:2px dashed #ffffff20;border-radius:8px;padding:32px 24px;text-align:center;cursor:pointer;transition:all .2s">
+      ${dropHtml}
+    </div>
+    ${resultHtml}
+    ${errorHtml}
+  </div>`;
 }
 
 </script>

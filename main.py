@@ -1839,167 +1839,309 @@ def delete_zapotrzebowanie(zap_id: int):
         return {"ok": True}
 
 # ── Import drzewa G/P z PDF (Graffiti ERP) ─────────────────────────────────────
+
+def _parse_graffiti_bom_pdf(pdf_bytes: bytes) -> dict:
+    """
+    Parsuje PDF 'Drzewo technologiczne' z Graffiti ERP używając analizy układu (x,y).
+    Każdy wiersz BOM to zestaw textboxów na tym samym Y:
+      - x < 160  : symbol G/P/M  (wcięcie x → głębokość hierarchii)
+      - 160-380  : [nr] Opis
+      - 380-440  : ilość
+      - 440-490  : JMT
+    Zwraca listę wierszy z polem 'depth' wyznaczonym z x0 symbolu.
+    """
+    import io as _io
+    import re as _re
+    from pdfminer.high_level import extract_pages as _extract_pages
+    from pdfminer.layout import LTTextBox as _LTTextBox
+
+    SKIP_Y_MAX   = 100    # nagłówek strony (tytuł, data, nr G, kolumny)
+    SKIP_Y_MIN   = 730    # stopka (Wydrukowano, Strona X/70)
+    X_SYM_MAX    = 160    # kolumna symboli G/P/M
+    X_OPIS_MIN   = 160    # kolumna [nr] Opis
+    X_OPIS_MAX   = 385
+    X_ILOSC_MIN  = 385    # kolumna ilości
+    X_ILOSC_MAX  = 445
+    X_JM_MIN     = 445    # kolumna JMT
+    X_JM_MAX     = 495
+    ROW_TOL      = 4      # tolerancja grupowania wierszy (pt)
+    X_BASE       = 28.8   # X lewej krawędzi dla głębokości 0
+    X_STEP       = 14.3   # przyrost X na jeden poziom wcięcia
+
+    SYM_RE = _re.compile(r'^([GPM]\d+)$')
+
+    rows = []
+
+    with _io.BytesIO(pdf_bytes) as buf:
+        for page_num, page_layout in enumerate(_extract_pages(buf)):
+            page_h = page_layout.height
+            boxes = []
+            for el in page_layout:
+                if not isinstance(el, _LTTextBox):
+                    continue
+                raw = el.get_text().strip()
+                if not raw:
+                    continue
+                y0 = page_h - el.y1   # 0 = góra strony
+                boxes.append({'x0': el.x0, 'y0': y0, 'text': raw})
+
+            # Sortuj: Y rosnąco (góra→dół), potem X rosnąco
+            boxes.sort(key=lambda b: (round(b['y0']), b['x0']))
+
+            # Grupuj boxy na tym samym Y w "wiersze"
+            page_rows = []
+            cur_row, cur_y = [], None
+            for b in boxes:
+                if cur_y is None or abs(b['y0'] - cur_y) <= ROW_TOL:
+                    cur_row.append(b)
+                    cur_y = b['y0']
+                else:
+                    if cur_row:
+                        page_rows.append(cur_row)
+                    cur_row, cur_y = [b], b['y0']
+            if cur_row:
+                page_rows.append(cur_row)
+
+            for row in page_rows:
+                y0 = row[0]['y0']
+                if y0 < SKIP_Y_MAX or y0 > SKIP_Y_MIN:
+                    continue
+
+                sym_box = opis_box = ilosc_box = jm_box = None
+                for b in row:
+                    x, txt = b['x0'], b['text']
+                    if x < X_SYM_MAX and SYM_RE.match(txt) and sym_box is None:
+                        sym_box = b
+                    elif X_OPIS_MIN <= x < X_OPIS_MAX and opis_box is None:
+                        opis_box = b
+                    elif X_ILOSC_MIN <= x < X_ILOSC_MAX and ilosc_box is None:
+                        ilosc_box = b
+                    elif X_JM_MIN <= x < X_JM_MAX and jm_box is None:
+                        jm_box = b
+
+                if sym_box is None:
+                    continue
+
+                sym  = sym_box['text']
+                opis = opis_box['text'] if opis_box else ''
+                # Usuń [nr] na początku opisu i złącz wieloliniowe
+                opis = _re.sub(r'^\[\d+\]\s*', '', opis)
+                opis = _re.sub(r'\s+', ' ', opis).strip()
+                # Usuń "Cechy dostaw: ..." z opisu materiału
+                opis = _re.sub(r'\s*Cechy dostaw:.*$', '', opis).strip()
+
+                ilosc = 1.0
+                if ilosc_box:
+                    raw_i = ilosc_box['text'].replace('\xa0', '').replace(' ', '').replace(',', '.')
+                    try:
+                        ilosc = float(raw_i)
+                    except Exception:
+                        pass
+
+                jm    = jm_box['text'].strip() if jm_box else 'szt'
+                depth = max(0, round((sym_box['x0'] - X_BASE) / X_STEP))
+                typ   = 'G' if sym.startswith('G') else ('P' if sym.startswith('P') else 'M')
+
+                rows.append({
+                    'symbol': sym,
+                    'opis':   opis,
+                    'ilosc':  ilosc,
+                    'jm':     jm,
+                    'depth':  depth,
+                    'typ':    typ,
+                })
+
+    if not rows:
+        raise ValueError("Nie znaleziono żadnych wierszy BOM w PDF")
+
+    # Pierwszy wiersz to wyrób główny (G lub P), depth=0
+    first = rows[0]
+    return {
+        'symbol_glowny': first['symbol'],
+        'nazwa_glowna':  first['opis'],
+        'typ_glowny':    first['typ'],
+        'rows':          rows,
+    }
+
+
 @app.post("/api/import-drzewo-gp", dependencies=[Depends(verify_key)])
 async def import_drzewo_gp(file: UploadFile = File(...)):
     """
     Parsuje plik PDF 'Drzewo technologiczne' z Graffiti ERP.
-    Tworzy/aktualizuje wyroby G i P oraz ich strukturę BOM.
+    Używa analizy układu PDF (współrzędne X) do odczytu hierarchii wcięć.
+    Tworzy/aktualizuje wyroby G i P oraz ich pełną strukturę BOM.
     """
-    import re, io as _io
+    import json as _json
+
     pdf_bytes = await file.read()
     if not pdf_bytes:
         raise HTTPException(400, "Pusty plik")
 
     try:
-        from pdfminer.high_level import extract_text as _extract
-        text = _extract(_io.BytesIO(pdf_bytes))
+        parsed = _parse_graffiti_bom_pdf(pdf_bytes)
     except Exception as e:
-        raise HTTPException(400, f"Błąd odczytu PDF: {e}")
+        raise HTTPException(400, f"Błąd parsowania PDF: {e}")
 
-    errors = []
+    rows          = parsed['rows']
+    glowny_symbol = parsed['symbol_glowny']
+    glowna_nazwa  = parsed['nazwa_glowna']
+    glowny_typ    = parsed['typ_glowny']
+
+    errors        = []
     wyroby_created = 0
-    bom_created = 0
-
-    # Wykryj nagłówek: "G14402 EL. EC250302-02-00000-000_Platformy"
-    header_match = re.search(
-        r'^(G\d+|P\d+)\s+(.+?)\s*$',
-        text, re.MULTILINE
-    )
-    if not header_match:
-        raise HTTPException(400, "Nie rozpoznano nagłówka drzewa G/P (oczekiwano G##### lub P#####)")
-
-    glowny_symbol = header_match.group(1).strip()
-    glowna_nazwa  = header_match.group(2).strip()
-    glowny_typ    = "G" if glowny_symbol.startswith("G") else "P"
-
-    # Regex do parsowania linii BOM
-    # Format: "P18638 [76098] Platforma 1 wg. rys...  2,000  szt  szt"
-    # lub:    "M00109 [818] MATERIAŁ KLIENTA  4,000  szt  szt"
-    line_pat = re.compile(
-        r'^((?:G|P|M)\d+)\s+\[\d+\]\s+(.+?)\s{2,}(\d[\d\s]*[,\.]\d+)\s+(\w+)\s+\w+',
-        re.MULTILINE
-    )
-
-    parsed_items = []
-    for m in line_pat.finditer(text):
-        symbol  = m.group(1).strip()
-        nazwa   = re.sub(r'\s+', ' ', m.group(2)).strip()
-        ilosc_s = m.group(3).replace(' ', '').replace(',', '.')
-        jm      = m.group(4).strip()
-        try:
-            ilosc = float(ilosc_s)
-        except Exception:
-            ilosc = 1.0
-        parsed_items.append({
-            "symbol": symbol, "nazwa": nazwa,
-            "ilosc": ilosc, "jm": jm,
-            "typ": "G" if symbol.startswith("G") else ("P" if symbol.startswith("P") else "M"),
-        })
+    bom_created    = 0
 
     with get_db() as conn:
-        # Utwórz/zaktualizuj wyrób główny
-        existing_g = conn.execute("SELECT id FROM wyroby WHERE symbol=?", (glowny_symbol,)).fetchone()
-        if existing_g:
-            gid = existing_g["id"]
-            conn.execute("UPDATE wyroby SET nazwa=?, typ=? WHERE id=?",
-                         (glowna_nazwa, glowny_typ, gid))
-        else:
+        # ── 1. Utwórz/zaktualizuj wszystkie wyroby P i G z drzewa ────────────
+        for row in rows:
+            if row['typ'] not in ('G', 'P'):
+                continue
+            ex = conn.execute(
+                "SELECT id FROM wyroby WHERE symbol=?", (row['symbol'],)
+            ).fetchone()
+            if ex:
+                conn.execute(
+                    "UPDATE wyroby SET nazwa=CASE WHEN nazwa='' OR nazwa IS NULL THEN ? ELSE nazwa END, "
+                    "jednostka=COALESCE(NULLIF(jednostka,''),?) WHERE symbol=?",
+                    (row['opis'], row['jm'], row['symbol'])
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO wyroby (symbol, typ, nazwa, jednostka) VALUES (?,?,?,?)",
+                    (row['symbol'], row['typ'], row['opis'], row['jm'])
+                )
+                wyroby_created += 1
+
+        # Pobierz ID wyrobu głównego (po upsert)
+        g_row = conn.execute(
+            "SELECT id FROM wyroby WHERE symbol=?", (glowny_symbol,)
+        ).fetchone()
+        if not g_row:
+            # Wstaw wyrób główny jeśli jeszcze nie istnieje
             cur = conn.execute(
-                "INSERT INTO wyroby (symbol,typ,nazwa) VALUES (?,?,?)",
+                "INSERT INTO wyroby (symbol, typ, nazwa) VALUES (?,?,?)",
                 (glowny_symbol, glowny_typ, glowna_nazwa)
             )
             gid = cur.lastrowid
             wyroby_created += 1
+        else:
+            gid = g_row['id']
+            conn.execute(
+                "UPDATE wyroby SET nazwa=?, typ=? WHERE id=?",
+                (glowna_nazwa, glowny_typ, gid)
+            )
 
-        # Utwórz/zaktualizuj półprodukty P i materiały M
-        for item in parsed_items:
-            if item["typ"] in ("P", "G"):
-                ex = conn.execute("SELECT id FROM wyroby WHERE symbol=?", (item["symbol"],)).fetchone()
-                if not ex:
-                    conn.execute(
-                        "INSERT INTO wyroby (symbol,typ,nazwa,jednostka) VALUES (?,?,?,?)",
-                        (item["symbol"], item["typ"], item["nazwa"], item["jm"])
-                    )
-                    wyroby_created += 1
-                else:
-                    # Aktualizuj nazwę jeśli pusta
-                    conn.execute(
-                        "UPDATE wyroby SET nazwa=CASE WHEN nazwa='' THEN ? ELSE nazwa END WHERE symbol=?",
-                        (item["nazwa"], item["symbol"])
-                    )
-            # Dla M – upewnij się że istnieje w materiały (jeśli nie ma – pomiń, tylko zapamiętaj indeks)
-
-        # Zbuduj relacje BOM dla głównego G/P
-        # Stratégia: bezpośrednie dzieci to te, które pojawiają się w sekcji głównej
-        # Wykrywamy przez wcięcia i kolejność – uproszczona heurystyka:
-        # elementy pojawiające się na pierwszym poziomie wcięcia to bezpośrednie dzieci G
-        direct_children_pat = re.compile(
-            r'^((?:P|M)\d+)\s+\[\d+\]\s+(.+?)\s{2,}(\d[\d\s]*[,\.]\d+)\s+(\w+)',
-            re.MULTILINE
+        # ── 2. Usuń stary BOM tego wyrobu G ───────────────────────────────────
+        conn.execute(
+            "DELETE FROM wyroby_bom WHERE wyrob_id=?", (gid,)
         )
-        pozycja = 0
-        seen_bom = set()
-        for m in direct_children_pat.finditer(text):
-            symbol_c = m.group(1).strip()
-            ilosc_s  = m.group(3).replace(' ', '').replace(',', '.')
-            jm_c     = m.group(4).strip()
-            try:
-                ilosc_c = float(ilosc_s)
-            except Exception:
-                ilosc_c = 1.0
 
-            if (gid, symbol_c) in seen_bom:
-                continue
-            seen_bom.add((gid, symbol_c))
+        # ── 3. Zbuduj hierarchię przez stos ojców ──────────────────────────────
+        # parent_stack[depth] = id wyrobu na tym poziomie
+        # depth 0 = G główne, depth 1 = dzieci G, depth 2 = dzieci P, ...
+        # Wiersz rows[0] to sam G (depth=0) - pomijamy go jako rodzic zaczyna od depth=1
+        parent_stack = {0: gid}
 
-            if symbol_c.startswith("M"):
-                # Materiał – znajdź w bazie materiałów
-                mat = conn.execute(
-                    "SELECT indeks FROM materialy WHERE indeks=?", (symbol_c,)
+        # Usuń stary BOM dla wszystkich P z tego drzewa (żeby uniknąć duplikatów
+        # gdy ten sam P występuje w wielu miejscach drzewa)
+        all_p_symbols = [r['symbol'] for r in rows if r['typ'] == 'P']
+        for psym in all_p_symbols:
+            pr = conn.execute("SELECT id FROM wyroby WHERE symbol=?", (psym,)).fetchone()
+            if pr:
+                conn.execute("DELETE FROM wyroby_bom WHERE wyrob_id=?", (pr['id'],))
+
+        # Przetwarzaj wiersze od indeksu 1 (pomijamy root G)
+        # Zbierz BOM per wyrob_id żeby wstawiać w kolejności z pozycją
+        bom_inserts = {}  # wyrob_id -> [(skladnik_info, pozycja)]
+
+        for row in rows[1:]:
+            depth  = row['depth']
+            sym    = row['symbol']
+            typ    = row['typ']
+            opis   = row['opis']
+            ilosc  = row['ilosc']
+            jm     = row['jm']
+
+            # Rodzic = element ze stosu na poziomie depth-1
+            parent_depth = depth - 1
+            if parent_depth < 0:
+                parent_depth = 0
+            parent_id = parent_stack.get(parent_depth, gid)
+
+            # Aktualizuj stos: ten element jest teraz rodzicem na swoim poziomie
+            if typ in ('G', 'P'):
+                child_row = conn.execute(
+                    "SELECT id FROM wyroby WHERE symbol=?", (sym,)
                 ).fetchone()
-                indeks_mat = mat["indeks"] if mat else symbol_c
+                child_id = child_row['id'] if child_row else None
+                if child_id:
+                    parent_stack[depth] = child_id
+                    # Wyczyść głębsze poziomy żeby nie "przeciekały" z poprzedniej gałęzi
+                    for d in list(parent_stack.keys()):
+                        if d > depth:
+                            del parent_stack[d]
+
+                if parent_id not in bom_inserts:
+                    bom_inserts[parent_id] = []
+                bom_inserts[parent_id].append({
+                    'typ': 'P',
+                    'symbol': sym,
+                    'child_id': child_id,
+                    'ilosc': ilosc,
+                    'jm': jm,
+                })
+            else:  # M
+                if parent_id not in bom_inserts:
+                    bom_inserts[parent_id] = []
+                bom_inserts[parent_id].append({
+                    'typ': 'M',
+                    'symbol': sym,
+                    'ilosc': ilosc,
+                    'jm': jm,
+                })
+
+        # ── 4. Wstaw BOM do bazy ───────────────────────────────────────────────
+        for wyrob_id, items in bom_inserts.items():
+            pozycja = 0
+            for item in items:
                 try:
-                    conn.execute(
-                        """INSERT OR IGNORE INTO wyroby_bom
-                           (wyrob_id, skladnik_id, typ_skladnika, material_indeks, ilosc, jednostka, pozycja)
-                           VALUES (?,0,'M',?,?,?,?)""",
-                        (gid, indeks_mat, ilosc_c, jm_c, pozycja)
-                    )
+                    if item['typ'] == 'M':
+                        conn.execute(
+                            """INSERT INTO wyroby_bom
+                               (wyrob_id, skladnik_id, typ_skladnika, material_indeks, ilosc, jednostka, pozycja)
+                               VALUES (?, 0, 'M', ?, ?, ?, ?)""",
+                            (wyrob_id, item['symbol'], item['ilosc'], item['jm'], pozycja)
+                        )
+                    else:  # P
+                        if item['child_id']:
+                            conn.execute(
+                                """INSERT INTO wyroby_bom
+                                   (wyrob_id, skladnik_id, typ_skladnika, ilosc, jednostka, pozycja)
+                                   VALUES (?, ?, 'P', ?, ?, ?)""",
+                                (wyrob_id, item['child_id'], item['ilosc'], item['jm'], pozycja)
+                            )
                     bom_created += 1
                 except Exception as e:
-                    errors.append(f"BOM M {symbol_c}: {e}")
-            else:
-                # Półprodukt P
-                child = conn.execute("SELECT id FROM wyroby WHERE symbol=?", (symbol_c,)).fetchone()
-                if child:
-                    try:
-                        conn.execute(
-                            """INSERT OR IGNORE INTO wyroby_bom
-                               (wyrob_id, skladnik_id, typ_skladnika, ilosc, jednostka, pozycja)
-                               VALUES (?,'P',?,?,?,?)""",
-                            (gid, child["id"], ilosc_c, jm_c, pozycja)
-                        )
-                        bom_created += 1
-                    except Exception as e:
-                        errors.append(f"BOM P {symbol_c}: {e}")
-            pozycja += 1
+                    errors.append(f"{item['typ']} {item['symbol']} (parent={wyrob_id}): {e}")
+                pozycja += 1
 
-        # Log importu
+        # ── 5. Log importu ─────────────────────────────────────────────────────
         conn.execute(
             """INSERT INTO import_log (typ, symbol_glowny, ilosc_wyrobow, ilosc_pozycji_bom, bledy)
-               VALUES ('drzewo_gp',?,?,?,?)""",
-            (glowny_symbol, wyroby_created, bom_created, json.dumps(errors, ensure_ascii=False))
+               VALUES ('drzewo_gp', ?, ?, ?, ?)""",
+            (glowny_symbol, wyroby_created, bom_created,
+             _json.dumps(errors[:50], ensure_ascii=False))
         )
 
     _threading.Thread(target=_db_backup_to_json, daemon=True).start()
     return {
-        "ok": True,
-        "symbol_glowny": glowny_symbol,
-        "nazwa_glowna": glowna_nazwa,
+        "ok":             True,
+        "symbol_glowny":  glowny_symbol,
+        "nazwa_glowna":   glowna_nazwa,
         "wyroby_created": wyroby_created,
-        "bom_created": bom_created,
-        "items_parsed": len(parsed_items),
-        "errors": errors[:20],
+        "bom_created":    bom_created,
+        "items_parsed":   len(rows),
+        "errors":         errors[:20],
     }
 
 # ── MRP: zapotrzebowanie materiałowe dla zlecenia G ───────────────────────────

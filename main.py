@@ -1696,75 +1696,140 @@ def delete_wyrob_bom(wid: int, bid: int):
 @app.get("/api/wyroby/{wid}/drzewo", dependencies=[Depends(verify_key)])
 def get_wyrob_drzewo(wid: int, max_depth: int = 10):
     """
-    Pełne drzewo struktury wyrobu – rekurencyjnie, do max_depth poziomów.
-    Zwraca też status realizacji jeśli do wyrobu P jest przypisane zlecenie.
+    Pełne drzewo struktury wyrobu – 3 zapytania SQL zamiast rekurencji N+1.
+    1. WITH RECURSIVE → wszystkie węzły drzewa (id, parent_id, depth)
+    2. Batch SELECT wszystkich wyrobów P z drzewa
+    3. Batch SELECT wszystkich zleceń dla tych wyrobów
+    Budowanie drzewa w pamięci: O(n).
     """
     with get_db() as conn:
-        # Najpierw pobierz sam korzeń
         root = conn.execute("SELECT * FROM wyroby WHERE id=?", (wid,)).fetchone()
         if not root:
             raise HTTPException(404, "Wyrób nie znaleziony")
 
-        def _build_node(wyrob_id: int, depth: int) -> dict:
-            w = conn.execute("SELECT * FROM wyroby WHERE id=?", (wyrob_id,)).fetchone()
-            if not w:
-                return {}
-            node = dict(w)
+        # ── Zapytanie 1: wszystkie krawędzie BOM osiągalne z korzenia ─────────
+        # WITH RECURSIVE przechodzi drzewo wyroby_bom w SQLite natywnie.
+        # Zwraca: (bom_id, wyrob_id=rodzic, skladnik_id, typ, material_indeks,
+        #          ilosc, jednostka, pozycja, uwagi, depth)
+        bom_rows = conn.execute("""
+            WITH RECURSIVE tree(
+                bom_id, wyrob_id, skladnik_id, typ_skladnika,
+                material_indeks, ilosc, jednostka, pozycja, uwagi, depth
+            ) AS (
+                -- korzeń: bezpośrednie dzieci wid
+                SELECT wb.id, wb.wyrob_id, wb.skladnik_id, wb.typ_skladnika,
+                       wb.material_indeks, wb.ilosc, wb.jednostka,
+                       wb.pozycja, wb.uwagi, 1
+                FROM wyroby_bom wb
+                WHERE wb.wyrob_id = ?
 
-            # Status zleceń powiązanych z tym P (może być wiele w różnych G)
-            zlecenia_p = conn.execute("""
+                UNION ALL
+
+                -- rekurencja: dzieci dzieci (tylko P mają dalszych potomków)
+                SELECT wb.id, wb.wyrob_id, wb.skladnik_id, wb.typ_skladnika,
+                       wb.material_indeks, wb.ilosc, wb.jednostka,
+                       wb.pozycja, wb.uwagi, tree.depth + 1
+                FROM wyroby_bom wb
+                JOIN tree ON wb.wyrob_id = tree.skladnik_id
+                         AND tree.typ_skladnika = 'P'
+                WHERE tree.depth < ?
+            )
+            SELECT * FROM tree
+            ORDER BY wyrob_id, pozycja, bom_id
+        """, (wid, max_depth)).fetchall()
+
+        # ── Zapytanie 2: batch wyrobów P (wszystkie IDs z drzewa) ─────────────
+        p_ids = list({r["skladnik_id"] for r in bom_rows if r["typ_skladnika"] == "P"})
+        p_ids.append(wid)  # dodaj korzeń
+        wyroby_map = {}
+        if p_ids:
+            placeholders = ",".join("?" * len(p_ids))
+            for w in conn.execute(
+                f"SELECT * FROM wyroby WHERE id IN ({placeholders})", p_ids
+            ).fetchall():
+                wyroby_map[w["id"]] = dict(w)
+
+        # ── Zapytanie 3: batch materiałów M (wszystkie indeksy z drzewa) ──────
+        m_indeksy = list({r["material_indeks"] for r in bom_rows
+                          if r["typ_skladnika"] == "M" and r["material_indeks"]})
+        materialy_map = {}
+        if m_indeksy:
+            placeholders = ",".join("?" * len(m_indeksy))
+            for m in conn.execute(
+                f"SELECT indeks, opis, jm, do_dyspozycji FROM materialy WHERE indeks IN ({placeholders})",
+                m_indeksy
+            ).fetchall():
+                materialy_map[m["indeks"]] = dict(m)
+
+        # ── Zapytanie 4: batch zleceń dla wyrobów P z drzewa ─────────────────
+        p_symbols = [wyroby_map[pid]["symbol"] for pid in p_ids if pid in wyroby_map]
+        zlecenia_map = {}  # symbol → [lista zleceń]
+        if p_symbols:
+            placeholders = ",".join("?" * len(p_symbols))
+            for z in conn.execute(f"""
                 SELECT z.id, z.numer, z.status, z.ilosc_sztuk,
-                       COUNT(o.id) as op_total,
+                       COUNT(o.id)  as op_total,
                        SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done
                 FROM zlecenia z
                 LEFT JOIN operacje o ON o.zlecenie_id = z.id
-                WHERE z.numer = ?
+                WHERE z.numer IN ({placeholders})
                 GROUP BY z.id
-            """, (w["symbol"],)).fetchall()
-            node["zlecenia"] = [dict(z) for z in zlecenia_p]
+            """, p_symbols).fetchall():
+                sym = z["numer"]
+                zlecenia_map.setdefault(sym, []).append(dict(z))
 
-            # Dzieci BOM
-            if depth < max_depth:
-                children_rows = conn.execute("""
-                    SELECT wb.*,
-                           w2.symbol as s_symbol, w2.nazwa as s_nazwa, w2.id as s_id,
-                           m.opis as m_opis, m.jm as m_jm, m.do_dyspozycji as m_stan,
-                           m.indeks as m_indeks
-                    FROM wyroby_bom wb
-                    LEFT JOIN wyroby w2 ON wb.skladnik_id = w2.id AND wb.typ_skladnika='P'
-                    LEFT JOIN materialy m ON wb.material_indeks = m.indeks AND wb.typ_skladnika='M'
-                    WHERE wb.wyrob_id=?
-                    ORDER BY wb.pozycja, wb.id
-                """, (wyrob_id,)).fetchall()
+        # ── Budowanie drzewa w pamięci ─────────────────────────────────────────
+        # children_map[wyrob_id] = [lista węzłów-dzieci]
+        children_map = {}
+        for r in bom_rows:
+            parent_id = r["wyrob_id"]
+            if parent_id not in children_map:
+                children_map[parent_id] = []
 
-                children = []
-                for cr in children_rows:
-                    cr_dict = dict(cr)
-                    if cr_dict["typ_skladnika"] == "P" and cr_dict.get("s_id"):
-                        child_node = _build_node(cr_dict["s_id"], depth + 1)
-                        child_node["_bom_ilosc"] = cr_dict["ilosc"]
-                        child_node["_bom_jednostka"] = cr_dict["jednostka"]
-                        child_node["_bom_pozycja"] = cr_dict["pozycja"]
-                        child_node["_bom_uwagi"] = cr_dict["uwagi"]
-                        child_node["_bom_id"] = cr_dict["id"]
-                        children.append(child_node)
-                    elif cr_dict["typ_skladnika"] == "M":
-                        children.append({
-                            "typ": "M",
-                            "material_indeks": cr_dict["material_indeks"],
-                            "material_opis": cr_dict.get("m_opis", ""),
-                            "material_jm": cr_dict.get("m_jm", ""),
-                            "material_stan": cr_dict.get("m_stan", 0),
-                            "ilosc": cr_dict["ilosc"],
-                            "jednostka": cr_dict["jednostka"],
-                            "_bom_id": cr_dict["id"],
-                        })
-                node["children"] = children
-            else:
+            if r["typ_skladnika"] == "P":
+                child_wyrob = wyroby_map.get(r["skladnik_id"], {})
+                node = dict(child_wyrob)
+                node["zlecenia"]       = zlecenia_map.get(child_wyrob.get("symbol",""), [])
+                node["_bom_id"]        = r["bom_id"]
+                node["_bom_ilosc"]     = r["ilosc"]
+                node["_bom_jednostka"] = r["jednostka"]
+                node["_bom_pozycja"]   = r["pozycja"]
+                node["_bom_uwagi"]     = r["uwagi"]
+                node["children"]       = []  # wypełni się poniżej
+                children_map[parent_id].append(node)
+            else:  # M
+                mat = materialy_map.get(r["material_indeks"], {})
+                children_map[parent_id].append({
+                    "typ":            "M",
+                    "material_indeks": r["material_indeks"],
+                    "material_opis":   mat.get("opis", r["material_indeks"]),
+                    "material_jm":     mat.get("jm", r["jednostka"]),
+                    "material_stan":   mat.get("do_dyspozycji", 0),
+                    "ilosc":           r["ilosc"],
+                    "jednostka":       r["jednostka"],
+                    "_bom_id":         r["bom_id"],
+                })
+
+        # Przypisz children do węzłów P (jeden przebieg)
+        def _attach_children(node: dict) -> dict:
+            nid = node.get("id")
+            if nid and nid in children_map:
+                node["children"] = [
+                    _attach_children(ch) if ch.get("typ") != "M" else ch
+                    for ch in children_map[nid]
+                ]
+            elif "children" not in node:
                 node["children"] = []
             return node
 
-        return _build_node(wid, 0)
+        # Zbuduj korzeń
+        root_node = dict(wyroby_map.get(wid, dict(root)))
+        root_node["zlecenia"] = zlecenia_map.get(root_node.get("symbol", ""), [])
+        root_node["children"] = [
+            _attach_children(ch) if ch.get("typ") != "M" else ch
+            for ch in children_map.get(wid, [])
+        ]
+        return root_node
 
 # ── Zapotrzebowania (G→P linkowanie do zleceń) ─────────────────────────────────
 @app.get("/api/zlecenia/{gid}/zapotrzebowania", dependencies=[Depends(verify_key)])
@@ -2107,7 +2172,7 @@ async def import_drzewo_gp(file: UploadFile = File(...)):
                 try:
                     if item['typ'] == 'M':
                         conn.execute(
-                            """INSERT INTO wyroby_bom
+                            """INSERT OR IGNORE INTO wyroby_bom
                                (wyrob_id, skladnik_id, typ_skladnika, material_indeks, ilosc, jednostka, pozycja)
                                VALUES (?, 0, 'M', ?, ?, ?, ?)""",
                             (wyrob_id, item['symbol'], item['ilosc'], item['jm'], pozycja)
@@ -2115,9 +2180,9 @@ async def import_drzewo_gp(file: UploadFile = File(...)):
                     else:  # P
                         if item['child_id']:
                             conn.execute(
-                                """INSERT INTO wyroby_bom
-                                   (wyrob_id, skladnik_id, typ_skladnika, ilosc, jednostka, pozycja)
-                                   VALUES (?, ?, 'P', ?, ?, ?)""",
+                                """INSERT OR IGNORE INTO wyroby_bom
+                                   (wyrob_id, skladnik_id, typ_skladnika, material_indeks, ilosc, jednostka, pozycja)
+                                   VALUES (?, ?, 'P', '', ?, ?, ?)""",
                                 (wyrob_id, item['child_id'], item['ilosc'], item['jm'], pozycja)
                             )
                     bom_created += 1
@@ -3472,7 +3537,7 @@ def init_db_on_start():
         pozycja INTEGER DEFAULT 0,            -- kolejnosc na liscie
         uwagi TEXT DEFAULT '',
         FOREIGN KEY (wyrob_id) REFERENCES wyroby(id) ON DELETE CASCADE,
-        UNIQUE(wyrob_id, skladnik_id, typ_skladnika))""")
+        UNIQUE(wyrob_id, skladnik_id, typ_skladnika, material_indeks))""")
     for _col, _def in [
         ("pozycja","INTEGER DEFAULT 0"),
         ("uwagi","TEXT DEFAULT ''"),
@@ -3480,6 +3545,27 @@ def init_db_on_start():
     ]:
         try: c.execute(f"ALTER TABLE wyroby_bom ADD COLUMN {_col} {_def}")
         except: pass
+    # Migracja UNIQUE: usuń stary indeks i utwórz nowy z material_indeks
+    try:
+        c.execute("DROP INDEX IF EXISTS sqlite_autoindex_wyroby_bom_1")
+    except: pass
+    try:
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_bom_unique
+                     ON wyroby_bom(wyrob_id, skladnik_id, typ_skladnika, material_indeks)""")
+    except: pass
+    # Indeksy wydajnościowe
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_bom_wyrob ON wyroby_bom(wyrob_id)")
+    except: pass
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_bom_skladnik ON wyroby_bom(skladnik_id) WHERE typ_skladnika='P'")
+    except: pass
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_wyroby_symbol ON wyroby(symbol)")
+    except: pass
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_zlecenia_numer ON zlecenia(numer)")
+    except: pass
 
     # Zapotrzebowania produkcyjne: G zleca określoną ilość P do wykonania
     # Powiązanie konkretnego zlecenia G z półproduktem P i jego zleceniem

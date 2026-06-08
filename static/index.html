@@ -8196,9 +8196,9 @@ async function drzewoUploadPdf(file) {
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const r = await fetch(SERVER_URL + '/api/import-drzewo-gp', {
+    const r = await fetch(SERVER_URL.replace(/\/$/, '') + '/api/import-drzewo-gp', {
       method: 'POST',
-      headers: {'x-api-key': state.apiKey || localStorage.getItem('apiKey') || ''},
+      headers: {'x-api-key': API_KEY},
       body: fd,
     });
     const d = await r.json();

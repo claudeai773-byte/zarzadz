@@ -24,9 +24,6 @@ def _parse(s):
 # ─── Konfiguracja ──────────────────────────────────────────────────────────────
 DB_PATH       = os.environ.get("DB_PATH",      "/data/produkcja.db")
 API_KEY       = os.environ.get("API_KEY",      "zmien-mnie-na-bezpieczny-klucz")
-if API_KEY == "zmien-mnie-na-bezpieczny-klucz":
-    import warnings
-    warnings.warn("[SECURITY] Używasz domyślnego API_KEY! Ustaw zmienną środowiskową API_KEY.", stacklevel=2)
 PORT          = int(os.environ.get("PORT",     8000))
 BACKUP_PATH   = os.environ.get("BACKUP_PATH",  "/data/backup.json")   # persystentny backup JSON
 BACKUP_INTERVAL = int(os.environ.get("BACKUP_INTERVAL", 120))        # co ile sekund auto-backup (domyślnie 2 min)
@@ -47,52 +44,13 @@ if not os.path.exists(os.path.dirname(DB_PATH)):
     DB_PATH     = os.path.join(_local, "produkcja.db")
     BACKUP_PATH = os.path.join(_local, "backup.json")
 
-from collections import defaultdict
-import threading
-
 app = FastAPI(title="Produkcja API", version="4.1")
-
-# ─── Dozwolone originy (ustaw przez env ALLOWED_ORIGINS, oddzielone przecinkiem) ─
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "")
-_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()] or ["*"]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["x-api-key", "Content-Type", "Accept"],
-    allow_credentials=False,
-    max_age=600,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-# ─── Rate limiting (prosta implementacja in-memory) ───────────────────────────
-_rl_lock   = threading.Lock()
-_rl_hits: dict = defaultdict(list)
-RL_WINDOW  = int(os.environ.get("RL_WINDOW_SEC", 60))
-RL_LIMIT   = int(os.environ.get("RL_LIMIT", 300))
-
-@app.middleware("http")
-async def rate_limit_middleware(request: Request, call_next):
-    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown").split(",")[0].strip()
-    now = time.time()
-    with _rl_lock:
-        hits = _rl_hits[ip]
-        hits[:] = [t for t in hits if now - t < RL_WINDOW]
-        if len(hits) >= RL_LIMIT:
-            return JSONResponse(status_code=429, content={"detail": "Zbyt wiele żądań – spróbuj za chwilę"})
-        hits.append(now)
-    return await call_next(request)
-
-# ─── Security headers ─────────────────────────────────────────────────────────
-@app.middleware("http")
-async def security_headers_middleware(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"]  = "nosniff"
-    response.headers["X-Frame-Options"]          = "DENY"
-    response.headers["X-XSS-Protection"]         = "1; mode=block"
-    response.headers["Referrer-Policy"]           = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"]        = "geolocation=(), microphone=(), camera=()"
-    return response
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -163,13 +121,6 @@ def _init_stawki_zlecenia(conn, zlecenie_id: int) -> int:
     return added
 
 # ─── SQL Proxy ────────────────────────────────────────────────────────────────
-_SQL_BLOCKED = ("DROP", "ATTACH", "DETACH", "VACUUM")
-
-def _check_sql_allowed(sql: str):
-    first = sql.strip().upper().split()[0] if sql.strip() else ""
-    if first in _SQL_BLOCKED:
-        raise HTTPException(403, f"Polecenie SQL '{first}' jest zablokowane")
-
 class SQLRequest(BaseModel):
     sql: str
     params: List[Any] = []
@@ -182,7 +133,6 @@ class TransactionRequest(BaseModel):
 
 @app.post("/sql", dependencies=[Depends(verify_key)])
 def execute_sql(req: SQLRequest):
-    _check_sql_allowed(req.sql)
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -210,8 +160,6 @@ def execute_sql(req: SQLRequest):
 
 @app.post("/transaction", dependencies=[Depends(verify_key)])
 def execute_transaction(req: TransactionRequest):
-    for op in req.operations:
-        _check_sql_allowed(op.get("sql", ""))
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -482,100 +430,6 @@ def delete_operacja(oid: int):
     with get_db() as conn:
         conn.execute("DELETE FROM operacje WHERE id=?", (oid,))
         return {"ok": True}
-
-# ─── Ręczne zakończenie operacji (majster) ────────────────────────────────────
-class ZakonczRecznieRequest(BaseModel):
-    user_id: int                            # pracownik który wykonał
-    data_zakonczenia: Optional[str] = None  # ISO datetime; domyślnie teraz
-    ilosc_sztuk: Optional[int] = None       # ile sztuk wykonano (gdy zlecenie > 1 szt.)
-    uwagi: Optional[str] = ""
-
-@app.post("/api/operacje/{oid}/zakoncz-recznie", dependencies=[Depends(verify_key)])
-def zakoncz_operacje_recznie(oid: int, req: ZakonczRecznieRequest):
-    """
-    Ręczne zakończenie operacji przez majstra.
-    Tworzy zamkniętą sesję pracy (start=data_zakonczenia-1min, end=data_zakonczenia)
-    z adnotacją o ręcznym zakończeniu, ustawia status operacji na 'zakonczona'
-    i aktualizuje ilosc_wykonana.
-    """
-    now = _now()
-    end_time = req.data_zakonczenia or now
-
-    with get_db() as conn:
-        op = conn.execute("""
-            SELECT o.*, z.ilosc_sztuk as zl_ilosc_sztuk, z.id as zl_id
-            FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id
-            WHERE o.id=?
-        """, (oid,)).fetchone()
-        if not op:
-            raise HTTPException(404, "Operacja nie znaleziona")
-        if op["status"] == "zakonczona":
-            raise HTTPException(409, "Operacja jest już zakończona")
-
-        user = conn.execute("SELECT id, full_name FROM users WHERE id=?", (req.user_id,)).fetchone()
-        if not user:
-            raise HTTPException(404, "Użytkownik nie znaleziony")
-
-        zl_ilosc = op["zl_ilosc_sztuk"] or 1
-        # Ile sztuk zostało już wykonane przez poprzednie sesje
-        juz_wykonano = op["ilosc_wykonana"] or 0
-        pozostalo = max(0, zl_ilosc - juz_wykonano)
-
-        # Ilość do zapisania w tej sesji
-        if zl_ilosc > 1:
-            # Gdy wiele sztuk – użyj podanej wartości, ale nie więcej niż pozostało
-            ilosc_sesji = min(req.ilosc_sztuk or pozostalo, pozostalo) if pozostalo > 0 else (req.ilosc_sztuk or 1)
-        else:
-            ilosc_sesji = 1  # Zlecenie 1-sztukowe – zawsze 1
-
-        # Sztuczny czas trwania sesji (1 minuta przed podanym czasem zakończenia)
-        try:
-            dt_end   = _parse(end_time)
-            dt_start = dt_end - _dt.timedelta(minutes=1)
-            start_time = dt_start.isoformat() + "Z"
-        except Exception:
-            start_time = end_time  # fallback – identyczne czasy
-
-        uwagi_sesji = f"[RĘCZNIE przez majstra] {req.uwagi or ''}".strip()
-
-        cur = conn.execute(
-            """INSERT INTO sesje_pracy
-               (operacja_id, user_id, typ, start_time, end_time, status,
-                ilosc_sztuk, uwagi, sesja_glowna)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
-            (oid, req.user_id, "operacja", start_time, end_time, "zakonczona",
-             ilosc_sesji, uwagi_sesji, 1)
-        )
-        sesja_id = cur.lastrowid
-
-        # Zaktualizuj ilosc_wykonana i ustaw status zakonczona
-        nowe_wykonano = juz_wykonano + ilosc_sesji
-        conn.execute(
-            "UPDATE operacje SET ilosc_wykonana=?, status='zakonczona' WHERE id=?",
-            (nowe_wykonano, oid)
-        )
-
-        # Sprawdź czy wszystkie operacje zakończone → zamknij zlecenie
-        pozostale_op = conn.execute(
-            "SELECT COUNT(*) FROM operacje WHERE zlecenie_id=? AND status NOT IN ('zakonczona','anulowane')",
-            (op["zl_id"],)
-        ).fetchone()[0]
-        if pozostale_op == 0:
-            conn.execute(
-                "UPDATE zlecenia SET status='zakonczone' WHERE id=? AND status NOT IN ('zakonczone','anulowane')",
-                (op["zl_id"],)
-            )
-
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
-    return {
-        "ok": True,
-        "sesja_id": sesja_id,
-        "operacja_id": oid,
-        "ilosc_sesji": ilosc_sesji,
-        "ilosc_wykonana_total": nowe_wykonano,
-        "pracownik": user["full_name"],
-        "end_time": end_time,
-    }
 
 # Endpoint KJ
 class KJRequest(BaseModel):
@@ -1281,7 +1135,6 @@ def stop_sesja(req: StopSesjaRequest):
 class EditSesjaTimeRequest(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
-    ilosc_sztuk: Optional[int] = None  # korekta ilości – dostępna gdy zlecenie ma ilosc_sztuk > 1
 
 @app.patch("/api/sesje/{sesja_id}/czas", dependencies=[Depends(verify_key)])
 def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
@@ -1291,11 +1144,6 @@ def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
             raise HTTPException(404, "Sesja nie istnieje")
         new_start = req.start_time or sesja["start_time"]
         new_end   = req.end_time   or sesja["end_time"]
-        new_ilosc = req.ilosc_sztuk if req.ilosc_sztuk is not None else (sesja["ilosc_sztuk"] or 0)
-
-        if req.ilosc_sztuk is not None and req.ilosc_sztuk < 0:
-            raise HTTPException(400, "Ilość sztuk nie może być ujemna")
-
         if new_end:
             try:
                 dt_start = _parse(new_start)
@@ -1306,32 +1154,11 @@ def edit_sesja_czas(sesja_id: int, req: EditSesjaTimeRequest):
                 raise
             except Exception:
                 raise HTTPException(400, "Nieprawidłowy format czasu")
-
-        old_ilosc = sesja["ilosc_sztuk"] or 0
         conn.execute(
-            "UPDATE sesje_pracy SET start_time=?, end_time=?, ilosc_sztuk=? WHERE id=?",
-            (new_start, new_end, new_ilosc, sesja_id)
+            "UPDATE sesje_pracy SET start_time=?, end_time=? WHERE id=?",
+            (new_start, new_end, sesja_id)
         )
-
-        # Jeśli zmieniono ilość i sesja dotyczy operacji produkcyjnej – zaktualizuj ilosc_wykonana
-        if req.ilosc_sztuk is not None and sesja["operacja_id"] and sesja["typ"] in ("operacja", "inne_zlecenie"):
-            delta = new_ilosc - old_ilosc
-            conn.execute(
-                "UPDATE operacje SET ilosc_wykonana = MAX(0, ilosc_wykonana + ?) WHERE id=?",
-                (delta, sesja["operacja_id"])
-            )
-            op = conn.execute(
-                "SELECT o.ilosc_wykonana, o.status, z.ilosc_sztuk FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?",
-                (sesja["operacja_id"],)
-            ).fetchone()
-            if op:
-                if op["ilosc_wykonana"] >= op["ilosc_sztuk"] and op["status"] != "zakonczona":
-                    conn.execute("UPDATE operacje SET status='zakonczona' WHERE id=?", (sesja["operacja_id"],))
-                elif op["ilosc_wykonana"] < op["ilosc_sztuk"] and op["status"] == "zakonczona":
-                    conn.execute("UPDATE operacje SET status='w_toku' WHERE id=?", (sesja["operacja_id"],))
-
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
-        return {"status": "ok", "sesja_id": sesja_id, "start_time": new_start, "end_time": new_end, "ilosc_sztuk": new_ilosc}
+        return {"status": "ok", "sesja_id": sesja_id, "start_time": new_start, "end_time": new_end}
 
 @app.delete("/api/sesje/{sesja_id}", dependencies=[Depends(verify_key)])
 def delete_sesja(sesja_id: int):
@@ -1723,6 +1550,626 @@ def generate_qr(kod: str):
             headers={"Content-Disposition": f'inline; filename="{kod}.png"'})
     except ImportError:
         raise HTTPException(500, "Brak biblioteki qrcode. Zainstaluj: pip install qrcode[pil]")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── Drzewo G/P – Wyroby i struktura BOM ─────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Model Pydantic ─────────────────────────────────────────────────────────────
+class WyrobRequest(BaseModel):
+    symbol: str
+    typ: str = "P"                   # 'G' lub 'P'
+    nazwa: str
+    numer_rysunku: Optional[str] = ""
+    jednostka: Optional[str] = "szt"
+    opis: Optional[str] = ""
+
+class WyrobyBomRequest(BaseModel):
+    skladnik_id: Optional[int] = None     # id z tabeli wyroby (dla typ=P)
+    typ_skladnika: str = "P"              # 'P' lub 'M'
+    material_indeks: Optional[str] = ""   # dla typ=M
+    ilosc: float = 1
+    jednostka: Optional[str] = "szt"
+    pozycja: Optional[int] = 0
+    uwagi: Optional[str] = ""
+
+class ZapotrzebowanieRequest(BaseModel):
+    zlecenie_g_id: int
+    wyrob_p_symbol: str
+    ilosc_wymagana: float = 1
+    priorytet: Optional[int] = 0
+    uwagi: Optional[str] = ""
+
+# ── CRUD wyrobów ───────────────────────────────────────────────────────────────
+@app.get("/api/wyroby", dependencies=[Depends(verify_key)])
+def get_wyroby(typ: Optional[str] = None, q: Optional[str] = None):
+    """Lista wyrobów G lub P, opcjonalnie filtrowana."""
+    with get_db() as conn:
+        clauses, params = [], []
+        if typ:
+            clauses.append("typ=?")
+            params.append(typ)
+        if q:
+            clauses.append("(symbol LIKE ? OR nazwa LIKE ?)")
+            params += [f"%{q}%", f"%{q}%"]
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(f"SELECT * FROM wyroby {where} ORDER BY symbol", params).fetchall()
+        return [dict(r) for r in rows]
+
+@app.get("/api/wyroby/{wid}", dependencies=[Depends(verify_key)])
+def get_wyrob(wid: int):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM wyroby WHERE id=?", (wid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Wyrób nie znaleziony")
+        return dict(row)
+
+@app.post("/api/wyroby", dependencies=[Depends(verify_key)])
+def create_wyrob(req: WyrobRequest):
+    if req.typ not in ("G", "P"):
+        raise HTTPException(400, "typ musi być 'G' lub 'P'")
+    with get_db() as conn:
+        try:
+            cur = conn.execute(
+                """INSERT INTO wyroby (symbol,typ,nazwa,numer_rysunku,jednostka,opis)
+                   VALUES (?,?,?,?,?,?)""",
+                (req.symbol.strip(), req.typ, req.nazwa.strip(),
+                 req.numer_rysunku or "", req.jednostka or "szt", req.opis or "")
+            )
+            return {"id": cur.lastrowid}
+        except Exception as e:
+            if "UNIQUE" in str(e):
+                raise HTTPException(409, f"Symbol '{req.symbol}' już istnieje")
+            raise HTTPException(500, str(e))
+
+@app.put("/api/wyroby/{wid}", dependencies=[Depends(verify_key)])
+def update_wyrob(wid: int, req: WyrobRequest):
+    if req.typ not in ("G", "P"):
+        raise HTTPException(400, "typ musi być 'G' lub 'P'")
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE wyroby SET symbol=?,typ=?,nazwa=?,numer_rysunku=?,jednostka=?,opis=?
+               WHERE id=?""",
+            (req.symbol.strip(), req.typ, req.nazwa.strip(),
+             req.numer_rysunku or "", req.jednostka or "szt", req.opis or "", wid)
+        )
+        return {"ok": True}
+
+@app.delete("/api/wyroby/{wid}", dependencies=[Depends(verify_key)])
+def delete_wyrob(wid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM wyroby_bom WHERE wyrob_id=? OR (typ_skladnika='P' AND skladnik_id=?)", (wid, wid))
+        conn.execute("DELETE FROM wyroby WHERE id=?", (wid,))
+        return {"ok": True}
+
+# ── BOM wyrobu ─────────────────────────────────────────────────────────────────
+@app.get("/api/wyroby/{wid}/bom", dependencies=[Depends(verify_key)])
+def get_wyrob_bom(wid: int):
+    """Bezpośrednie dzieci BOM danego wyrobu (1 poziom)."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT wb.*,
+                   w.symbol as skladnik_symbol, w.nazwa as skladnik_nazwa,
+                   w.typ as skladnik_typ_wyrobu,
+                   m.opis as material_opis, m.jm as material_jm,
+                   m.do_dyspozycji as material_stan
+            FROM wyroby_bom wb
+            LEFT JOIN wyroby w ON wb.skladnik_id = w.id AND wb.typ_skladnika = 'P'
+            LEFT JOIN materialy m ON wb.material_indeks = m.indeks AND wb.typ_skladnika = 'M'
+            WHERE wb.wyrob_id=?
+            ORDER BY wb.pozycja, wb.id
+        """, (wid,)).fetchall()
+        return [dict(r) for r in rows]
+
+@app.post("/api/wyroby/{wid}/bom", dependencies=[Depends(verify_key)])
+def add_wyrob_bom(wid: int, req: WyrobyBomRequest):
+    if req.typ_skladnika not in ("P", "M"):
+        raise HTTPException(400, "typ_skladnika musi być 'P' lub 'M'")
+    if req.typ_skladnika == "P" and not req.skladnik_id:
+        raise HTTPException(400, "Dla typ_skladnika='P' wymagane skladnik_id")
+    if req.typ_skladnika == "M" and not req.material_indeks:
+        raise HTTPException(400, "Dla typ_skladnika='M' wymagane material_indeks")
+    if req.typ_skladnika == "P" and req.skladnik_id == wid:
+        raise HTTPException(400, "Wyrób nie może być swoim własnym składnikiem")
+    with get_db() as conn:
+        try:
+            cur = conn.execute(
+                """INSERT OR REPLACE INTO wyroby_bom
+                   (wyrob_id, skladnik_id, typ_skladnika, material_indeks, ilosc, jednostka, pozycja, uwagi)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (wid, req.skladnik_id or 0, req.typ_skladnika,
+                 req.material_indeks or "", req.ilosc,
+                 req.jednostka or "szt", req.pozycja or 0, req.uwagi or "")
+            )
+            return {"id": cur.lastrowid}
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+@app.delete("/api/wyroby/{wid}/bom/{bid}", dependencies=[Depends(verify_key)])
+def delete_wyrob_bom(wid: int, bid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM wyroby_bom WHERE id=? AND wyrob_id=?", (bid, wid))
+        return {"ok": True}
+
+# ── Drzewo pełne (rekurencyjne) ────────────────────────────────────────────────
+@app.get("/api/wyroby/{wid}/drzewo", dependencies=[Depends(verify_key)])
+def get_wyrob_drzewo(wid: int, max_depth: int = 10):
+    """
+    Pełne drzewo struktury wyrobu – rekurencyjnie, do max_depth poziomów.
+    Zwraca też status realizacji jeśli do wyrobu P jest przypisane zlecenie.
+    """
+    with get_db() as conn:
+        # Najpierw pobierz sam korzeń
+        root = conn.execute("SELECT * FROM wyroby WHERE id=?", (wid,)).fetchone()
+        if not root:
+            raise HTTPException(404, "Wyrób nie znaleziony")
+
+        def _build_node(wyrob_id: int, depth: int) -> dict:
+            w = conn.execute("SELECT * FROM wyroby WHERE id=?", (wyrob_id,)).fetchone()
+            if not w:
+                return {}
+            node = dict(w)
+
+            # Status zleceń powiązanych z tym P (może być wiele w różnych G)
+            zlecenia_p = conn.execute("""
+                SELECT z.id, z.numer, z.status, z.ilosc_sztuk,
+                       COUNT(o.id) as op_total,
+                       SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done
+                FROM zlecenia z
+                LEFT JOIN operacje o ON o.zlecenie_id = z.id
+                WHERE z.numer = ?
+                GROUP BY z.id
+            """, (w["symbol"],)).fetchall()
+            node["zlecenia"] = [dict(z) for z in zlecenia_p]
+
+            # Dzieci BOM
+            if depth < max_depth:
+                children_rows = conn.execute("""
+                    SELECT wb.*,
+                           w2.symbol as s_symbol, w2.nazwa as s_nazwa, w2.id as s_id,
+                           m.opis as m_opis, m.jm as m_jm, m.do_dyspozycji as m_stan,
+                           m.indeks as m_indeks
+                    FROM wyroby_bom wb
+                    LEFT JOIN wyroby w2 ON wb.skladnik_id = w2.id AND wb.typ_skladnika='P'
+                    LEFT JOIN materialy m ON wb.material_indeks = m.indeks AND wb.typ_skladnika='M'
+                    WHERE wb.wyrob_id=?
+                    ORDER BY wb.pozycja, wb.id
+                """, (wyrob_id,)).fetchall()
+
+                children = []
+                for cr in children_rows:
+                    cr_dict = dict(cr)
+                    if cr_dict["typ_skladnika"] == "P" and cr_dict.get("s_id"):
+                        child_node = _build_node(cr_dict["s_id"], depth + 1)
+                        child_node["_bom_ilosc"] = cr_dict["ilosc"]
+                        child_node["_bom_jednostka"] = cr_dict["jednostka"]
+                        child_node["_bom_pozycja"] = cr_dict["pozycja"]
+                        child_node["_bom_uwagi"] = cr_dict["uwagi"]
+                        child_node["_bom_id"] = cr_dict["id"]
+                        children.append(child_node)
+                    elif cr_dict["typ_skladnika"] == "M":
+                        children.append({
+                            "typ": "M",
+                            "material_indeks": cr_dict["material_indeks"],
+                            "material_opis": cr_dict.get("m_opis", ""),
+                            "material_jm": cr_dict.get("m_jm", ""),
+                            "material_stan": cr_dict.get("m_stan", 0),
+                            "ilosc": cr_dict["ilosc"],
+                            "jednostka": cr_dict["jednostka"],
+                            "_bom_id": cr_dict["id"],
+                        })
+                node["children"] = children
+            else:
+                node["children"] = []
+            return node
+
+        return _build_node(wid, 0)
+
+# ── Zapotrzebowania (G→P linkowanie do zleceń) ─────────────────────────────────
+@app.get("/api/zlecenia/{gid}/zapotrzebowania", dependencies=[Depends(verify_key)])
+def get_zapotrzebowania(gid: int):
+    """Lista półproduktów P wymaganych przez zlecenie G z ich statusem realizacji."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT z.*,
+                   zp.numer as zlecenie_p_numer, zp.status as zlecenie_p_status,
+                   zp.ilosc_sztuk as zlecenie_p_ilosc_sztuk,
+                   (SELECT COUNT(*) FROM operacje o WHERE o.zlecenie_id=zp.id) as op_total,
+                   (SELECT COUNT(*) FROM operacje o WHERE o.zlecenie_id=zp.id AND o.status='zakonczona') as op_done,
+                   w.nazwa as wyrob_nazwa, w.numer_rysunku, w.id as wyrob_id
+            FROM zapotrzebowania z
+            LEFT JOIN zlecenia zp ON z.zlecenie_p_id = zp.id
+            LEFT JOIN wyroby w ON w.symbol = z.wyrob_p_symbol
+            WHERE z.zlecenie_g_id=?
+            ORDER BY z.priorytet DESC, z.id
+        """, (gid,)).fetchall()
+        return [dict(r) for r in rows]
+
+@app.post("/api/zlecenia/{gid}/zapotrzebowania", dependencies=[Depends(verify_key)])
+def add_zapotrzebowanie(gid: int, req: ZapotrzebowanieRequest):
+    with get_db() as conn:
+        g = conn.execute("SELECT id FROM zlecenia WHERE id=?", (gid,)).fetchone()
+        if not g:
+            raise HTTPException(404, "Zlecenie G nie znalezione")
+        cur = conn.execute(
+            """INSERT INTO zapotrzebowania
+               (zlecenie_g_id, wyrob_p_symbol, ilosc_wymagana, priorytet, uwagi)
+               VALUES (?,?,?,?,?)""",
+            (gid, req.wyrob_p_symbol.strip(), req.ilosc_wymagana,
+             req.priorytet or 0, req.uwagi or "")
+        )
+        return {"id": cur.lastrowid}
+
+@app.patch("/api/zapotrzebowania/{zap_id}/link", dependencies=[Depends(verify_key)])
+def link_zapotrzebowanie_to_zlecenie(zap_id: int, body: dict = Body(...)):
+    """Powiąż zapotrzebowanie P z istniejącym lub nowo utworzonym zleceniem P."""
+    zlecenie_p_id = body.get("zlecenie_p_id")
+    with get_db() as conn:
+        if zlecenie_p_id:
+            zp = conn.execute("SELECT id FROM zlecenia WHERE id=?", (zlecenie_p_id,)).fetchone()
+            if not zp:
+                raise HTTPException(404, "Zlecenie P nie znalezione")
+        conn.execute(
+            "UPDATE zapotrzebowania SET zlecenie_p_id=? WHERE id=?",
+            (zlecenie_p_id, zap_id)
+        )
+        return {"ok": True}
+
+@app.patch("/api/zapotrzebowania/{zap_id}/status", dependencies=[Depends(verify_key)])
+def update_zapotrzebowanie_status(zap_id: int, body: dict = Body(...)):
+    status = body.get("status")
+    if status not in ("oczekuje", "w_toku", "zakonczone", "anulowane"):
+        raise HTTPException(400, "Nieprawidłowy status")
+    ilosc_wyk = body.get("ilosc_wykonana")
+    with get_db() as conn:
+        if ilosc_wyk is not None:
+            conn.execute(
+                "UPDATE zapotrzebowania SET status=?, ilosc_wykonana=? WHERE id=?",
+                (status, ilosc_wyk, zap_id)
+            )
+        else:
+            conn.execute("UPDATE zapotrzebowania SET status=? WHERE id=?", (status, zap_id))
+        return {"ok": True}
+
+@app.delete("/api/zapotrzebowania/{zap_id}", dependencies=[Depends(verify_key)])
+def delete_zapotrzebowanie(zap_id: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM zapotrzebowania WHERE id=?", (zap_id,))
+        return {"ok": True}
+
+# ── Import drzewa G/P z PDF (Graffiti ERP) ─────────────────────────────────────
+@app.post("/api/import-drzewo-gp", dependencies=[Depends(verify_key)])
+async def import_drzewo_gp(file: UploadFile = File(...)):
+    """
+    Parsuje plik PDF 'Drzewo technologiczne' z Graffiti ERP.
+    Tworzy/aktualizuje wyroby G i P oraz ich strukturę BOM.
+    """
+    import re, io as _io
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        raise HTTPException(400, "Pusty plik")
+
+    try:
+        from pdfminer.high_level import extract_text as _extract
+        text = _extract(_io.BytesIO(pdf_bytes))
+    except Exception as e:
+        raise HTTPException(400, f"Błąd odczytu PDF: {e}")
+
+    errors = []
+    wyroby_created = 0
+    bom_created = 0
+
+    # Wykryj nagłówek: "G14402 EL. EC250302-02-00000-000_Platformy"
+    header_match = re.search(
+        r'^(G\d+|P\d+)\s+(.+?)\s*$',
+        text, re.MULTILINE
+    )
+    if not header_match:
+        raise HTTPException(400, "Nie rozpoznano nagłówka drzewa G/P (oczekiwano G##### lub P#####)")
+
+    glowny_symbol = header_match.group(1).strip()
+    glowna_nazwa  = header_match.group(2).strip()
+    glowny_typ    = "G" if glowny_symbol.startswith("G") else "P"
+
+    # Regex do parsowania linii BOM
+    # Format: "P18638 [76098] Platforma 1 wg. rys...  2,000  szt  szt"
+    # lub:    "M00109 [818] MATERIAŁ KLIENTA  4,000  szt  szt"
+    line_pat = re.compile(
+        r'^((?:G|P|M)\d+)\s+\[\d+\]\s+(.+?)\s{2,}(\d[\d\s]*[,\.]\d+)\s+(\w+)\s+\w+',
+        re.MULTILINE
+    )
+
+    parsed_items = []
+    for m in line_pat.finditer(text):
+        symbol  = m.group(1).strip()
+        nazwa   = re.sub(r'\s+', ' ', m.group(2)).strip()
+        ilosc_s = m.group(3).replace(' ', '').replace(',', '.')
+        jm      = m.group(4).strip()
+        try:
+            ilosc = float(ilosc_s)
+        except Exception:
+            ilosc = 1.0
+        parsed_items.append({
+            "symbol": symbol, "nazwa": nazwa,
+            "ilosc": ilosc, "jm": jm,
+            "typ": "G" if symbol.startswith("G") else ("P" if symbol.startswith("P") else "M"),
+        })
+
+    with get_db() as conn:
+        # Utwórz/zaktualizuj wyrób główny
+        existing_g = conn.execute("SELECT id FROM wyroby WHERE symbol=?", (glowny_symbol,)).fetchone()
+        if existing_g:
+            gid = existing_g["id"]
+            conn.execute("UPDATE wyroby SET nazwa=?, typ=? WHERE id=?",
+                         (glowna_nazwa, glowny_typ, gid))
+        else:
+            cur = conn.execute(
+                "INSERT INTO wyroby (symbol,typ,nazwa) VALUES (?,?,?)",
+                (glowny_symbol, glowny_typ, glowna_nazwa)
+            )
+            gid = cur.lastrowid
+            wyroby_created += 1
+
+        # Utwórz/zaktualizuj półprodukty P i materiały M
+        for item in parsed_items:
+            if item["typ"] in ("P", "G"):
+                ex = conn.execute("SELECT id FROM wyroby WHERE symbol=?", (item["symbol"],)).fetchone()
+                if not ex:
+                    conn.execute(
+                        "INSERT INTO wyroby (symbol,typ,nazwa,jednostka) VALUES (?,?,?,?)",
+                        (item["symbol"], item["typ"], item["nazwa"], item["jm"])
+                    )
+                    wyroby_created += 1
+                else:
+                    # Aktualizuj nazwę jeśli pusta
+                    conn.execute(
+                        "UPDATE wyroby SET nazwa=CASE WHEN nazwa='' THEN ? ELSE nazwa END WHERE symbol=?",
+                        (item["nazwa"], item["symbol"])
+                    )
+            # Dla M – upewnij się że istnieje w materiały (jeśli nie ma – pomiń, tylko zapamiętaj indeks)
+
+        # Zbuduj relacje BOM dla głównego G/P
+        # Stratégia: bezpośrednie dzieci to te, które pojawiają się w sekcji głównej
+        # Wykrywamy przez wcięcia i kolejność – uproszczona heurystyka:
+        # elementy pojawiające się na pierwszym poziomie wcięcia to bezpośrednie dzieci G
+        direct_children_pat = re.compile(
+            r'^((?:P|M)\d+)\s+\[\d+\]\s+(.+?)\s{2,}(\d[\d\s]*[,\.]\d+)\s+(\w+)',
+            re.MULTILINE
+        )
+        pozycja = 0
+        seen_bom = set()
+        for m in direct_children_pat.finditer(text):
+            symbol_c = m.group(1).strip()
+            ilosc_s  = m.group(3).replace(' ', '').replace(',', '.')
+            jm_c     = m.group(4).strip()
+            try:
+                ilosc_c = float(ilosc_s)
+            except Exception:
+                ilosc_c = 1.0
+
+            if (gid, symbol_c) in seen_bom:
+                continue
+            seen_bom.add((gid, symbol_c))
+
+            if symbol_c.startswith("M"):
+                # Materiał – znajdź w bazie materiałów
+                mat = conn.execute(
+                    "SELECT indeks FROM materialy WHERE indeks=?", (symbol_c,)
+                ).fetchone()
+                indeks_mat = mat["indeks"] if mat else symbol_c
+                try:
+                    conn.execute(
+                        """INSERT OR IGNORE INTO wyroby_bom
+                           (wyrob_id, skladnik_id, typ_skladnika, material_indeks, ilosc, jednostka, pozycja)
+                           VALUES (?,0,'M',?,?,?,?)""",
+                        (gid, indeks_mat, ilosc_c, jm_c, pozycja)
+                    )
+                    bom_created += 1
+                except Exception as e:
+                    errors.append(f"BOM M {symbol_c}: {e}")
+            else:
+                # Półprodukt P
+                child = conn.execute("SELECT id FROM wyroby WHERE symbol=?", (symbol_c,)).fetchone()
+                if child:
+                    try:
+                        conn.execute(
+                            """INSERT OR IGNORE INTO wyroby_bom
+                               (wyrob_id, skladnik_id, typ_skladnika, ilosc, jednostka, pozycja)
+                               VALUES (?,'P',?,?,?,?)""",
+                            (gid, child["id"], ilosc_c, jm_c, pozycja)
+                        )
+                        bom_created += 1
+                    except Exception as e:
+                        errors.append(f"BOM P {symbol_c}: {e}")
+            pozycja += 1
+
+        # Log importu
+        conn.execute(
+            """INSERT INTO import_log (typ, symbol_glowny, ilosc_wyrobow, ilosc_pozycji_bom, bledy)
+               VALUES ('drzewo_gp',?,?,?,?)""",
+            (glowny_symbol, wyroby_created, bom_created, json.dumps(errors, ensure_ascii=False))
+        )
+
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {
+        "ok": True,
+        "symbol_glowny": glowny_symbol,
+        "nazwa_glowna": glowna_nazwa,
+        "wyroby_created": wyroby_created,
+        "bom_created": bom_created,
+        "items_parsed": len(parsed_items),
+        "errors": errors[:20],
+    }
+
+# ── MRP: zapotrzebowanie materiałowe dla zlecenia G ───────────────────────────
+@app.get("/api/zlecenia/{gid}/mrp", dependencies=[Depends(verify_key)])
+def get_mrp_zlecenia(gid: int):
+    """
+    Oblicza sumaryczne zapotrzebowanie materiałowe dla zlecenia G.
+    Uwzględnia cały BOM rekurencyjnie.
+    Zwraca widok zbiorczy (per materiał) i szczegółowy (per P).
+    """
+    with get_db() as conn:
+        zl_g = conn.execute("SELECT * FROM zlecenia WHERE id=?", (gid,)).fetchone()
+        if not zl_g:
+            raise HTTPException(404, "Zlecenie nie znalezione")
+
+        ilosc_g = zl_g["ilosc_sztuk"] or 1
+
+        # Znajdź wyrób G powiązany numerem zlecenia
+        wyrob_g = conn.execute("SELECT * FROM wyroby WHERE symbol=?", (zl_g["numer"],)).fetchone()
+
+        def _collect_materials(wyrob_id: int, mnoznik: float, visited: set) -> list:
+            """Rekurencyjnie zbiera materiały z BOM."""
+            if wyrob_id in visited:
+                return []
+            visited = visited | {wyrob_id}
+            results = []
+            bom_rows = conn.execute("""
+                SELECT wb.*, w.id as w_id, w.symbol as w_symbol, w.nazwa as w_nazwa,
+                       m.opis as m_opis, m.jm as m_jm,
+                       m.do_dyspozycji as m_stan, m.stan_rzeczywisty as m_stan_rzecz,
+                       m.indeks as m_indeks, m.id as m_id
+                FROM wyroby_bom wb
+                LEFT JOIN wyroby w ON wb.skladnik_id=w.id AND wb.typ_skladnika='P'
+                LEFT JOIN materialy m ON wb.material_indeks=m.indeks AND wb.typ_skladnika='M'
+                WHERE wb.wyrob_id=?
+            """, (wyrob_id,)).fetchall()
+
+            for row in bom_rows:
+                rd = dict(row)
+                ilosc_wymagana = (rd["ilosc"] or 1) * mnoznik
+                if rd["typ_skladnika"] == "M":
+                    results.append({
+                        "material_indeks": rd["material_indeks"],
+                        "material_opis":   rd.get("m_opis") or rd["material_indeks"],
+                        "material_jm":     rd.get("m_jm", "szt"),
+                        "material_id":     rd.get("m_id"),
+                        "material_stan":   rd.get("m_stan") or 0,
+                        "material_stan_rzecz": rd.get("m_stan_rzecz") or 0,
+                        "ilosc_wymagana":  ilosc_wymagana,
+                        "jednostka":       rd["jednostka"],
+                    })
+                elif rd["typ_skladnika"] == "P" and rd.get("w_id"):
+                    # Rekurencja w głąb
+                    sub = _collect_materials(rd["w_id"], ilosc_wymagana, visited)
+                    results.extend(sub)
+            return results
+
+        # Zbierz wszystkie materiały
+        if wyrob_g:
+            raw_materials = _collect_materials(wyrob_g["id"], ilosc_g, set())
+        else:
+            # Fallback: użyj BOM z tabeli bom_pozycje
+            bom_rows = conn.execute("""
+                SELECT bp.*, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.indeks, m.id as m_id
+                FROM bom_pozycje bp
+                JOIN materialy m ON bp.material_id=m.id
+                WHERE bp.zlecenie_id=?
+            """, (gid,)).fetchall()
+            raw_materials = [{
+                "material_indeks": r["indeks"],
+                "material_opis":   r["opis"],
+                "material_jm":     r["jm"],
+                "material_id":     r["m_id"],
+                "material_stan":   r["do_dyspozycji"] or 0,
+                "material_stan_rzecz": r["stan_rzeczywisty"] or 0,
+                "ilosc_wymagana":  r["ilosc"] * ilosc_g,
+                "jednostka":       r["jm"],
+            } for r in bom_rows]
+
+        # Agreguj per materiał (widok zbiorczy)
+        zbiorczo: dict = {}
+        for mat in raw_materials:
+            key = mat["material_indeks"]
+            if key not in zbiorczo:
+                zbiorczo[key] = {**mat, "ilosc_wymagana": 0}
+            zbiorczo[key]["ilosc_wymagana"] += mat["ilosc_wymagana"]
+
+        zbiorczy = []
+        for key, mat in zbiorczo.items():
+            mat["ilosc_wymagana"] = round(mat["ilosc_wymagana"], 4)
+            mat["braki"] = max(0, round(mat["ilosc_wymagana"] - mat["material_stan"], 4))
+            mat["status_dostepnosci"] = (
+                "ok" if mat["material_stan"] >= mat["ilosc_wymagana"]
+                else ("czesciowo" if mat["material_stan"] > 0 else "brak")
+            )
+            zbiorczy.append(mat)
+
+        zbiorczy.sort(key=lambda x: x.get("material_opis", ""))
+
+        # Status zapotrzebowań P
+        zapotrz = conn.execute("""
+            SELECT z.*, zp.numer as p_numer, zp.status as p_status,
+                   zp.ilosc_sztuk as p_ilosc,
+                   w.nazwa as wyrob_nazwa
+            FROM zapotrzebowania z
+            LEFT JOIN zlecenia zp ON z.zlecenie_p_id = zp.id
+            LEFT JOIN wyroby w ON w.symbol = z.wyrob_p_symbol
+            WHERE z.zlecenie_g_id=?
+            ORDER BY z.priorytet DESC
+        """, (gid,)).fetchall()
+
+        return {
+            "zlecenie": dict(zl_g),
+            "wyrob_g": dict(wyrob_g) if wyrob_g else None,
+            "zapotrzebowania_p": [dict(r) for r in zapotrz],
+            "materialy_zbiorczy": zbiorczy,
+            "materialy_szczegolowy": [dict(m) for m in raw_materials],
+            "summary": {
+                "material_count": len(zbiorczy),
+                "brak_count": sum(1 for m in zbiorczy if m["status_dostepnosci"] == "brak"),
+                "czesciowo_count": sum(1 for m in zbiorczy if m["status_dostepnosci"] == "czesciowo"),
+                "ok_count": sum(1 for m in zbiorczy if m["status_dostepnosci"] == "ok"),
+            }
+        }
+
+# ── Widok: lista wyrobów G z postępem realizacji ──────────────────────────────
+@app.get("/api/wyroby-g/postep", dependencies=[Depends(verify_key)])
+def get_wyroby_g_postep():
+    """Widok zarządczy: wyroby G ze statusem zlecenia i postępem P."""
+    with get_db() as conn:
+        wyroby_g = conn.execute(
+            "SELECT * FROM wyroby WHERE typ='G' ORDER BY symbol"
+        ).fetchall()
+
+        result = []
+        for wg in wyroby_g:
+            wg_dict = dict(wg)
+
+            # Zlecenie G
+            zl_g = conn.execute(
+                "SELECT * FROM zlecenia WHERE numer=?", (wg["symbol"],)
+            ).fetchone()
+            wg_dict["zlecenie"] = dict(zl_g) if zl_g else None
+
+            # Zapotrzebowania P i ich realizacja
+            if zl_g:
+                zapotrz = conn.execute("""
+                    SELECT z.*, zp.status as p_status, w.nazwa as wyrob_nazwa
+                    FROM zapotrzebowania z
+                    LEFT JOIN zlecenia zp ON z.zlecenie_p_id = zp.id
+                    LEFT JOIN wyroby w ON w.symbol = z.wyrob_p_symbol
+                    WHERE z.zlecenie_g_id=?
+                """, (zl_g["id"],)).fetchall()
+                zapotrz_list = [dict(r) for r in zapotrz]
+
+                total_p = len(zapotrz_list)
+                done_p  = sum(1 for z in zapotrz_list if z.get("p_status") == "zakonczone")
+                wg_dict["zapotrzebowania_p"] = zapotrz_list
+                wg_dict["p_total"] = total_p
+                wg_dict["p_done"]  = done_p
+                wg_dict["p_postep_pct"] = round(done_p / total_p * 100) if total_p > 0 else 0
+            else:
+                wg_dict["zapotrzebowania_p"] = []
+                wg_dict["p_total"] = 0
+                wg_dict["p_done"] = 0
+                wg_dict["p_postep_pct"] = 0
+
+            result.append(wg_dict)
+        return result
+
 
 # ─── Statystyki dla majstra ──────────────────────────────────────────────────
 @app.get("/api/stats/majster", dependencies=[Depends(verify_key)])
@@ -2850,6 +3297,82 @@ def init_db_on_start():
         except Exception as e:
             print(f"  Migracja stawek zlecenia {zl_row[0]}: {e}")
 
+
+    # ─── Drzewo G/P (struktura wyrobów z ERP) ────────────────────────────────
+    # Katalog wyrobów / półproduktów (każde G i P to jeden rekord)
+    c.execute("""CREATE TABLE IF NOT EXISTS wyroby (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT UNIQUE NOT NULL,          -- np. G14402, P18653
+        typ TEXT NOT NULL DEFAULT 'P',         -- 'G' = wyrób główny, 'P' = półprodukt
+        nazwa TEXT NOT NULL,
+        numer_rysunku TEXT DEFAULT '',
+        jednostka TEXT DEFAULT 'szt',
+        opis TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    for _col, _def in [
+        ("numer_rysunku","TEXT DEFAULT ''"),
+        ("jednostka","TEXT DEFAULT 'szt'"),
+        ("opis","TEXT DEFAULT ''"),
+    ]:
+        try: c.execute(f"ALTER TABLE wyroby ADD COLUMN {_col} {_def}")
+        except: pass
+
+    # Struktura BOM wyrobów: wyrob_id zawiera skladnik_id w ilosci X
+    # (n-poziomowa hierarchia, wyrob P moze byc skladnikiem wielu G lub P)
+    c.execute("""CREATE TABLE IF NOT EXISTS wyroby_bom (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        wyrob_id INTEGER NOT NULL,             -- rodzic (G lub P)
+        skladnik_id INTEGER NOT NULL,          -- dziecko (P lub M)
+        typ_skladnika TEXT NOT NULL DEFAULT 'P', -- 'P'=polprodukt, 'M'=material
+        material_indeks TEXT DEFAULT '',       -- dla typ='M': indeks z tabeli materialy
+        ilosc REAL NOT NULL DEFAULT 1,
+        jednostka TEXT DEFAULT 'szt',
+        pozycja INTEGER DEFAULT 0,            -- kolejnosc na liscie
+        uwagi TEXT DEFAULT '',
+        FOREIGN KEY (wyrob_id) REFERENCES wyroby(id) ON DELETE CASCADE,
+        UNIQUE(wyrob_id, skladnik_id, typ_skladnika))""")
+    for _col, _def in [
+        ("pozycja","INTEGER DEFAULT 0"),
+        ("uwagi","TEXT DEFAULT ''"),
+        ("material_indeks","TEXT DEFAULT ''"),
+    ]:
+        try: c.execute(f"ALTER TABLE wyroby_bom ADD COLUMN {_col} {_def}")
+        except: pass
+
+    # Zapotrzebowania produkcyjne: G zleca określoną ilość P do wykonania
+    # Powiązanie konkretnego zlecenia G z półproduktem P i jego zleceniem
+    c.execute("""CREATE TABLE IF NOT EXISTS zapotrzebowania (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        zlecenie_g_id INTEGER NOT NULL,        -- zlecenie G (rodzic)
+        wyrob_p_symbol TEXT NOT NULL,          -- symbol P (np. P18653)
+        zlecenie_p_id INTEGER,                 -- zlecenie P (może być NULL jeśli nie założone)
+        ilosc_wymagana REAL NOT NULL DEFAULT 1,
+        ilosc_wykonana REAL DEFAULT 0,
+        status TEXT DEFAULT 'oczekuje',        -- oczekuje / w_toku / zakonczone / anulowane
+        priorytet INTEGER DEFAULT 0,
+        uwagi TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (zlecenie_g_id) REFERENCES zlecenia(id) ON DELETE CASCADE,
+        FOREIGN KEY (zlecenie_p_id) REFERENCES zlecenia(id) ON DELETE SET NULL)""")
+    for _col, _def in [
+        ("priorytet","INTEGER DEFAULT 0"),
+        ("uwagi","TEXT DEFAULT ''"),
+    ]:
+        try: c.execute(f"ALTER TABLE zapotrzebowania ADD COLUMN {_col} {_def}")
+        except: pass
+
+    # Indeks importów drzewa G/P z PDF/ERP
+    c.execute("""CREATE TABLE IF NOT EXISTS import_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        typ TEXT NOT NULL,                     -- 'drzewo_gp', 'karta_technologiczna'
+        symbol_glowny TEXT NOT NULL,
+        ilosc_wyrobow INTEGER DEFAULT 0,
+        ilosc_pozycji_bom INTEGER DEFAULT 0,
+        bledy TEXT DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_by INTEGER)""")
+
+
     conn.commit()
     conn.close()
     print(f"✓ Baza danych gotowa: {DB_PATH}")
@@ -2865,6 +3388,9 @@ _TABLES_TO_BACKUP = [
     "narzedzia",            # baza narzedzi (narzedzialnia)
     "narzedzia_rezerwacje", # rezerwacje narzedzi pod zlecenia
     "narzedzia_pobrania",   # historia pobran materialow z narzedzilalni
+    "wyroby",               # katalog wyrobow i polproduktow G/P
+    "wyroby_bom",           # struktura BOM wyrobow
+    "zapotrzebowania",      # zapotrzebowania P dla zlecen G
 ]
 
 # ─── GitHub Gist helpers ────────────────────────────────────────────────────────
@@ -3703,15 +4229,11 @@ def zwrot_narzedzia_v2(pid: int):
     return {"ok": True}
 
 
-# ─── Feedback ────────────────────────────────────────────────────────────────
-class FeedbackIn(BaseModel):
+
     user_id: Optional[int] = None
     user_name: Optional[str] = None
     ocena: int
     wiadomosc: Optional[str] = ""
-
-    def sanitized_message(self) -> str:
-        return (self.wiadomosc or "").strip()[:2000]
 
 @app.post("/api/feedback", dependencies=[Depends(verify_key)])
 def post_feedback(fb: FeedbackIn):
@@ -3720,7 +4242,7 @@ def post_feedback(fb: FeedbackIn):
     with get_db() as conn:
         conn.execute(
             "INSERT INTO app_feedback (user_id, user_name, ocena, wiadomosc, created_at) VALUES (?,?,?,?,?)",
-            (fb.user_id, fb.user_name, fb.ocena, fb.sanitized_message(), _now())
+            (fb.user_id, fb.user_name, fb.ocena, fb.wiadomosc or "", _now())
         )
     return {"ok": True}
 

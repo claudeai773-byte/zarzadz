@@ -3646,6 +3646,20 @@ def init_db_on_start():
         UNIQUE(zlecenie_id, material_indeks),
         FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id) ON DELETE CASCADE)""")
 
+    # ➤ Magazyn – rezerwacje materiałów (poprzednio w localStorage)
+    c.execute("""CREATE TABLE IF NOT EXISTS mag_rezerwacje (
+        id TEXT PRIMARY KEY,
+        material_id INTEGER NOT NULL,
+        material_indeks TEXT NOT NULL,
+        material_opis TEXT NOT NULL,
+        material_jm TEXT DEFAULT 'kg',
+        ilosc REAL NOT NULL DEFAULT 0,
+        zlecenie_nr TEXT DEFAULT '',
+        uwagi TEXT DEFAULT '',
+        status TEXT DEFAULT 'aktywna',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+
     # ➤ Narzędziownia – rezerwacje narzędzi pod zlecenia
     c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_rezerwacje (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3821,6 +3835,7 @@ _TABLES_TO_BACKUP = [
     "wyroby_bom",           # struktura BOM wyrobow
     "zapotrzebowania",      # zapotrzebowania P dla zlecen G
     "mrp_rezerwacje",       # rezerwacje materialow MRP pod zlecenia G
+    "mag_rezerwacje",       # rezerwacje materialow magazynowych (dawniej localStorage)
 ]
 
 # ─── GitHub Gist helpers ────────────────────────────────────────────────────────
@@ -4251,7 +4266,190 @@ def count_materialy():
         n = conn.execute("SELECT COUNT(*) FROM materialy").fetchone()[0]
         return {"count": n}
 
-# ─── BOM – pozycje materiałowe zlecenia ───────────────────────────────────────
+# ─── Materiały – ręczny CRUD ──────────────────────────────────────────────────
+class MaterialIn(BaseModel):
+    indeks: str
+    opis: str
+    kod: Optional[str] = ""
+    jm: Optional[str] = "kg"
+    do_dyspozycji: Optional[float] = 0
+    stan_rzeczywisty: Optional[float] = 0
+    rezerwacja: Optional[float] = 0
+    kod_paskowy: Optional[str] = ""
+
+@app.post("/api/materialy", dependencies=[Depends(verify_key)])
+def create_material(req: MaterialIn):
+    """Ręczne dodanie nowego materiału do bazy."""
+    now = _now()
+    with get_db() as conn:
+        existing = conn.execute("SELECT id FROM materialy WHERE indeks=?", (req.indeks,)).fetchone()
+        if existing:
+            raise HTTPException(400, f"Materiał o indeksie '{req.indeks}' już istnieje")
+        cur = conn.execute(
+            """INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (req.kod or "", req.indeks, req.opis, req.jm or "kg",
+             req.do_dyspozycji or 0, req.stan_rzeczywisty or 0,
+             req.rezerwacja or 0, req.kod_paskowy or "", now)
+        )
+        new_id = cur.lastrowid
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True, "id": new_id}
+
+@app.put("/api/materialy/{mid}", dependencies=[Depends(verify_key)])
+def update_material(mid: int, req: MaterialIn):
+    """Aktualizacja istniejącego materiału."""
+    now = _now()
+    with get_db() as conn:
+        existing = conn.execute("SELECT id FROM materialy WHERE id=?", (mid,)).fetchone()
+        if not existing:
+            raise HTTPException(404, "Materiał nie istnieje")
+        conflict = conn.execute("SELECT id FROM materialy WHERE indeks=? AND id!=?", (req.indeks, mid)).fetchone()
+        if conflict:
+            raise HTTPException(400, f"Inny materiał już posiada indeks '{req.indeks}'")
+        conn.execute(
+            """UPDATE materialy SET kod=?,indeks=?,opis=?,jm=?,do_dyspozycji=?,
+               stan_rzeczywisty=?,rezerwacja=?,kod_paskowy=?,updated_at=? WHERE id=?""",
+            (req.kod or "", req.indeks, req.opis, req.jm or "kg",
+             req.do_dyspozycji or 0, req.stan_rzeczywisty or 0,
+             req.rezerwacja or 0, req.kod_paskowy or "", now, mid)
+        )
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True}
+
+@app.delete("/api/materialy/{mid}", dependencies=[Depends(verify_key)])
+def delete_material(mid: int):
+    """Usunięcie materiału z bazy."""
+    with get_db() as conn:
+        existing = conn.execute("SELECT id FROM materialy WHERE id=?", (mid,)).fetchone()
+        if not existing:
+            raise HTTPException(404, "Materiał nie istnieje")
+        conn.execute("DELETE FROM mag_rezerwacje WHERE material_id=?", (mid,))
+        conn.execute("DELETE FROM bom_pozycje WHERE material_id=?", (mid,))
+        conn.execute("DELETE FROM materialy WHERE id=?", (mid,))
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True}
+
+# ─── Rezerwacje magazynowe (przeniesione z localStorage na serwer) ─────────────
+@app.get("/api/mag-rezerwacje", dependencies=[Depends(verify_key)])
+def get_mag_rezerwacje(status: Optional[str] = None):
+    with get_db() as conn:
+        if status:
+            rows = conn.execute(
+                "SELECT * FROM mag_rezerwacje WHERE status=? ORDER BY created_at DESC", (status,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM mag_rezerwacje ORDER BY created_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+@app.post("/api/mag-rezerwacje", dependencies=[Depends(verify_key)])
+def create_mag_rezerwacja(body: dict):
+    """Tworzy rezerwację materiału w magazynie."""
+    now = _now()
+    rez_id = body.get("id") or f"rez_{int(time.time()*1000)}"
+    material_id = body.get("material_id")
+    ilosc = float(body.get("ilosc", 0))
+    if not material_id or ilosc <= 0:
+        raise HTTPException(400, "Wymagane: material_id i ilosc > 0")
+    with get_db() as conn:
+        mat = conn.execute(
+            "SELECT id, indeks, opis, jm, do_dyspozycji FROM materialy WHERE id=?", (material_id,)
+        ).fetchone()
+        if not mat:
+            raise HTTPException(404, "Materiał nie istnieje")
+        conn.execute(
+            """INSERT INTO mag_rezerwacje (id, material_id, material_indeks, material_opis, material_jm,
+               ilosc, zlecenie_nr, uwagi, status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (rez_id, mat["id"], mat["indeks"], mat["opis"], mat["jm"],
+             ilosc, body.get("zlecenie_nr",""), body.get("uwagi",""),
+             "aktywna", now, now)
+        )
+        conn.execute(
+            "UPDATE materialy SET do_dyspozycji = do_dyspozycji - ? WHERE id=?",
+            (ilosc, material_id)
+        )
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True, "id": rez_id}
+
+@app.patch("/api/mag-rezerwacje/{rid}/zwolnij", dependencies=[Depends(verify_key)])
+def zwolnij_mag_rezerwacje(rid: str):
+    """Zwalnia rezerwację i przywraca stan do dyspozycji."""
+    now = _now()
+    with get_db() as conn:
+        rez = conn.execute("SELECT * FROM mag_rezerwacje WHERE id=?", (rid,)).fetchone()
+        if not rez:
+            raise HTTPException(404, "Rezerwacja nie istnieje")
+        if rez["status"] != "aktywna":
+            raise HTTPException(400, "Rezerwacja nie jest aktywna")
+        conn.execute(
+            "UPDATE mag_rezerwacje SET status='zwolniona', updated_at=? WHERE id=?", (now, rid)
+        )
+        conn.execute(
+            "UPDATE materialy SET do_dyspozycji = do_dyspozycji + ? WHERE id=?",
+            (rez["ilosc"], rez["material_id"])
+        )
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True}
+
+@app.delete("/api/mag-rezerwacje/{rid}", dependencies=[Depends(verify_key)])
+def delete_mag_rezerwacja(rid: str):
+    """Usuwa rezerwację. Jeśli aktywna – przywraca stan do dyspozycji."""
+    now = _now()
+    with get_db() as conn:
+        rez = conn.execute("SELECT * FROM mag_rezerwacje WHERE id=?", (rid,)).fetchone()
+        if not rez:
+            raise HTTPException(404, "Rezerwacja nie istnieje")
+        if rez["status"] == "aktywna":
+            conn.execute(
+                "UPDATE materialy SET do_dyspozycji = do_dyspozycji + ? WHERE id=?",
+                (rez["ilosc"], rez["material_id"])
+            )
+        conn.execute("DELETE FROM mag_rezerwacje WHERE id=?", (rid,))
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True}
+
+# ─── Import rezerwacji z localStorage (migracja jednorazowa) ──────────────────
+@app.post("/api/mag-rezerwacje/import-local", dependencies=[Depends(verify_key)])
+def import_mag_rezerwacje_from_local(body: dict):
+    """Importuje rezerwacje zapisane w localStorage przeglądarki do bazy serwera."""
+    lista = body.get("rezerwacje", [])
+    if not lista:
+        return {"ok": True, "imported": 0}
+    now = _now()
+    imported = 0
+    with get_db() as conn:
+        for rez in lista:
+            rez_id = rez.get("id")
+            if not rez_id:
+                continue
+            exists = conn.execute("SELECT id FROM mag_rezerwacje WHERE id=?", (rez_id,)).fetchone()
+            if exists:
+                continue
+            material_id = rez.get("material_id")
+            mat = conn.execute("SELECT id, indeks, opis, jm FROM materialy WHERE id=?", (material_id,)).fetchone() if material_id else None
+            if not mat:
+                continue
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO mag_rezerwacje
+                       (id, material_id, material_indeks, material_opis, material_jm,
+                        ilosc, zlecenie_nr, uwagi, status, created_at, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (rez_id, mat["id"], mat["indeks"], mat["opis"], mat["jm"],
+                     float(rez.get("ilosc", 0)), rez.get("zlecenie_nr",""),
+                     rez.get("uwagi",""), rez.get("status","aktywna"),
+                     rez.get("created_at", now), now)
+                )
+                imported += 1
+            except Exception:
+                pass
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True, "imported": imported}
+
+
 class BomPozycjaIn(BaseModel):
     material_id: int
     ilosc: float

@@ -432,6 +432,18 @@ let state = {
   feedbackMsg: '',
   adminFeedbacks: null,
 
+  // ─── Wizard: Nowe zlecenie z drzewem G→P ────────────────────────────────────
+  nzModal: false,       // czy wizard otwarty
+  nzStep: 1,            // 1=dane zlecenia  2=drzewo G→P
+  nzNumer: '', nzNazwa: '', nzOpis: '', nzTermin: '', nzIlosc: 1,
+  nzCena: 0, nzMatKlienta: false,
+  nzTree: null,         // korzeń G
+  nzEditNode: null,     // id węzła edytowanego
+  nzMatSearch: '',
+  nzMatResults: [],
+  nzMatSearching: false,
+  nzSaving: false,
+
   // BOM
   bomData: {},        // {zlecenie_id: [...pozycje]}
   bomSearch: '',
@@ -5075,7 +5087,7 @@ function renderZlecenia() {
 
   if (canEdit) {
     html += `<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-      <button class="btn btn-accent" onclick="setState({zlecenieModal:{}})">+ Nowe zlecenie</button>
+      <button class="btn btn-accent" onclick="nzOpen()">+ Nowe zlecenie</button>
       <button class="btn btn-blue" onclick="document.getElementById('pdf-import-zlecenia').click()">📄 Import PDF</button>
       <input type="file" id="pdf-import-zlecenia" accept=".pdf" style="display:none"
         onchange="handlePdfParse(this)">
@@ -5228,6 +5240,11 @@ function renderZlecenia() {
         </div>` : ''}
       </div>`;
     });
+  }
+
+  // Modal wizard nowe zlecenie
+  if (state.nzModal) {
+    html += renderNzWizard();
   }
 
   // Modal zlecenie
@@ -8145,6 +8162,752 @@ async function _initStep3DScene(stepUrl) {
   }
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODUŁ: WIZARD – Nowe zlecenie z drzewem G→P
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _nzIdCounter = 1;
+function nzNewId() { return 'nz_' + (_nzIdCounter++); }
+
+function nzOpen() {
+  setState({
+    nzModal: true, nzStep: 1,
+    nzNumer: '', nzNazwa: '', nzOpis: '', nzTermin: '',
+    nzIlosc: 1, nzCena: 0, nzMatKlienta: false,
+    nzTree: null, nzEditNode: null,
+    nzMatSearch: '', nzMatResults: [], nzSaving: false,
+  });
+}
+
+function nzClose() {
+  if (state.nzSaving) return;
+  setState({ nzModal: false });
+}
+
+// ── Krok 1 → 2: buduj korzeń G na podstawie numeru/nazwy zlecenia ────────────
+function nzGoStep2() {
+  const numer = (document.getElementById('nz-numer')?.value || '').trim();
+  const nazwa = (document.getElementById('nz-nazwa')?.value || '').trim();
+  const opis  = (document.getElementById('nz-opis')?.value  || '');
+  const termin= (document.getElementById('nz-termin')?.value|| '');
+  const ilosc = parseInt(document.getElementById('nz-ilosc')?.value) || 1;
+  const cena  = parseFloat(document.getElementById('nz-cena')?.value) || 0;
+  const matKl = document.getElementById('nz-mat')?.value === '1';
+  if (!numer || !nazwa) { alert('Numer i nazwa zlecenia są wymagane'); return; }
+
+  // Korzeń G – symbol = numer zlecenia
+  const root = {
+    _id: nzNewId(), typ: 'G',
+    symbol: numer, nazwa: nazwa,
+    ilosc: ilosc, jednostka: 'szt',
+    children: [],
+  };
+
+  setState({
+    nzStep: 2,
+    nzNumer: numer, nzNazwa: nazwa, nzOpis: opis,
+    nzTermin: termin, nzIlosc: ilosc, nzCena: cena, nzMatKlienta: matKl,
+    nzTree: root,
+    nzEditNode: null,
+  });
+}
+
+// ── Pomocniki operacje na drzewie ────────────────────────────────────────────
+
+function nzFindNode(node, id) {
+  if (!node) return null;
+  if (node._id === id) return node;
+  for (const c of (node.children || [])) {
+    const found = nzFindNode(c, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function nzFindParent(root, id) {
+  if (!root) return null;
+  for (const c of (root.children || [])) {
+    if (c._id === id) return root;
+    const found = nzFindParent(c, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function nzDeleteNode(id) {
+  const root = state.nzTree;
+  if (!root || root._id === id) return;
+  function del(node) {
+    if (!node.children) return;
+    node.children = node.children.filter(c => c._id !== id);
+    node.children.forEach(del);
+  }
+  const clone = JSON.parse(JSON.stringify(root));
+  del(clone);
+  const editNode = state.nzEditNode === id ? null : state.nzEditNode;
+  setState({ nzTree: clone, nzEditNode: editNode });
+}
+
+function nzMoveNode(id, dir) {
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const parent = nzFindParent(root, id);
+  if (!parent) return;
+  const idx = parent.children.findIndex(c => c._id === id);
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= parent.children.length) return;
+  [parent.children[idx], parent.children[newIdx]] = [parent.children[newIdx], parent.children[idx]];
+  setState({ nzTree: root });
+}
+
+// ── Dodaj węzeł ──────────────────────────────────────────────────────────────
+
+function nzAddP(parentId) {
+  // Dodaj pusty węzeł P (operacja produkcyjna) jako dziecko wskazanego węzła
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const parent = nzFindNode(root, parentId);
+  if (!parent) return;
+  const newNode = {
+    _id: nzNewId(), typ: 'P',
+    symbol: '', nazwa: '',
+    stanowisko: '', czas_norma: 0, czas_zbrojenia: 0, opis_czynnosci: '',
+    ilosc: 1, jednostka: 'szt',
+    children: [],
+  };
+  parent.children.push(newNode);
+  setState({ nzTree: root, nzEditNode: newNode._id });
+}
+
+function nzAddM(parentId) {
+  // Dodaj pusty węzeł M (materiał) jako dziecko wskazanego węzła
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const parent = nzFindNode(root, parentId);
+  if (!parent) return;
+  const newNode = {
+    _id: nzNewId(), typ: 'M',
+    material_indeks: '', material_opis: '', material_jm: 'szt',
+    ilosc: 1, jednostka: 'szt',
+    // pola zapotrzebowania materiałowego
+    mat_tryb: 'sztuki',      // 'dlugosc' | 'wymiary' | 'sztuki'
+    mat_dlugosc: 0,          // mm – przy trybie 'dlugosc'
+    mat_szer: 0,             // mm – szerokość przy trybie 'wymiary'
+    mat_wys: 0,              // mm – wysokość/długość przy trybie 'wymiary'
+    mat_ilosc_szt: 1,        // ilość na 1 sztukę wyrobu
+  };
+  parent.children.push(newNode);
+  setState({ nzTree: root, nzEditNode: newNode._id,
+             nzMatSearch: '', nzMatResults: [] });
+}
+
+// ── Wylicz zapotrzebowanie materiałowe węzła M ────────────────────────────────
+function nzCalcZapotrzebowanie(node, ilocZlecenia) {
+  const tryb = node.mat_tryb || 'sztuki';
+  const qty = ilocZlecenia || 1;
+  if (tryb === 'dlugosc') {
+    const dlMm = parseFloat(node.mat_dlugosc) || 0;
+    const razem = dlMm * (parseFloat(node.mat_ilosc_szt) || 1) * qty;
+    return { wartosc: razem, jm: 'mm', opis: `${dlMm} mm/szt × ${parseFloat(node.mat_ilosc_szt)||1} szt/wyrób × ${qty} wyrobów = ${razem.toLocaleString('pl-PL')} mm` };
+  }
+  if (tryb === 'wymiary') {
+    const l = parseFloat(node.mat_wys) || 0;
+    const w = parseFloat(node.mat_szer) || 0;
+    const razem = l * w * (parseFloat(node.mat_ilosc_szt) || 1) * qty;
+    return { wartosc: razem, jm: 'mm²', opis: `${l}×${w} mm × ${parseFloat(node.mat_ilosc_szt)||1} szt/wyrób × ${qty} wyrobów = ${razem.toLocaleString('pl-PL')} mm²` };
+  }
+  // sztuki
+  const szt = (parseFloat(node.mat_ilosc_szt) || 1) * qty;
+  return { wartosc: szt, jm: node.material_jm || 'szt', opis: `${parseFloat(node.mat_ilosc_szt)||1} szt/wyrób × ${qty} wyrobów = ${szt.toLocaleString('pl-PL')} szt` };
+}
+
+// ── Panel edycji węzła ───────────────────────────────────────────────────────
+
+function nzUpdateField(id, field, value) {
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const node = nzFindNode(root, id);
+  if (!node) return;
+  node[field] = value;
+  setState({ nzTree: root });
+}
+
+async function nzSearchMat() {
+  const q = (document.getElementById('nz-mat-search')?.value || state.nzMatSearch || '').trim();
+  if (q.length < 2) { setState({ nzMatResults: [] }); return; }
+  setState({ nzMatSearching: true });
+  try {
+    const res = await get(`/api/materialy?q=${encodeURIComponent(q)}&limit=20`);
+    setState({ nzMatResults: res, nzMatSearching: false });
+  } catch(e) { setState({ nzMatSearching: false }); }
+}
+
+function nzSelectMat(nodeId, mat) {
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const node = nzFindNode(root, nodeId);
+  if (!node) return;
+  node.material_indeks = mat.indeks;
+  node.material_opis   = mat.opis;
+  node.material_jm     = mat.jm;
+  node.jednostka       = mat.jm;
+  node.nazwa           = mat.opis; // pomocnicze
+  setState({ nzTree: root, nzMatResults: [], nzMatSearch: '' });
+}
+
+// ── Zapis do bazy ────────────────────────────────────────────────────────────
+
+async function nzSave() {
+  if (state.nzSaving) return;
+  const tree = state.nzTree;
+  if (!tree) { alert('Brak drzewa do zapisu'); return; }
+
+  // Walidacja – korzeń G i przynajmniej jeden węzeł P
+  if (!tree.symbol || !tree.nazwa) { alert('Numer i nazwa zlecenia są wymagane'); return; }
+
+  setState({ nzSaving: true });
+  try {
+    // 1. Utwórz zlecenie główne (G)
+    const zl = await post('/api/zlecenia', {
+      numer: state.nzNumer,
+      nazwa: state.nzNazwa,
+      opis: state.nzOpis || '',
+      termin: state.nzTermin || null,
+      ilosc_sztuk: state.nzIlosc,
+      cena_brutto_szt: state.nzCena,
+      material_od_klienta: state.nzMatKlienta ? 1 : 0,
+    });
+    const zlecenieId = zl.id;
+
+    // 2. Utwórz lub pobierz wyrób G w drzewie BOM
+    let wyrob_g_id = null;
+    try {
+      const wg = await post('/api/wyroby', {
+        symbol: state.nzNumer,
+        typ: 'G',
+        nazwa: state.nzNazwa,
+        jednostka: 'szt',
+      });
+      wyrob_g_id = wg.id;
+    } catch(e) {
+      // Może już istnieć – pobierz po symbolu
+      const list = await get('/api/wyroby?typ=G&q=' + encodeURIComponent(state.nzNumer));
+      const found = list.find(w => w.symbol === state.nzNumer);
+      if (found) wyrob_g_id = found.id;
+      else throw new Error('Nie udało się utworzyć wyrobu G: ' + e.message);
+    }
+
+    // 3. Rekurencyjnie przetwórz dzieci – tworząc operacje, wyroby P, BOM
+    let opKolejnosc = 1;
+
+    async function processChildren(parentWyrob_id, children) {
+      for (const node of (children || [])) {
+        if (node.typ === 'P') {
+          // Węzeł P – to operacja produkcyjna lub półprodukt
+          // a) Dodaj operację do zlecenia
+          if (node.nazwa) {
+            await post('/api/operacje', {
+              zlecenie_id: zlecenieId,
+              nazwa: node.nazwa,
+              kolejnosc: opKolejnosc++,
+              czas_norma: parseFloat(node.czas_norma) || 0,
+              stanowisko: node.stanowisko || '',
+              opis_czynnosci: node.opis_czynnosci || '',
+              czas_zbrojenia_min: parseFloat(node.czas_zbrojenia) || 0,
+            });
+          }
+          // b) Utwórz wyrób P w drzewie BOM (jeśli podano symbol)
+          if (node.symbol) {
+            let wyrob_p_id = null;
+            try {
+              const wp = await post('/api/wyroby', {
+                symbol: node.symbol,
+                typ: 'P',
+                nazwa: node.nazwa || node.symbol,
+                jednostka: node.jednostka || 'szt',
+              });
+              wyrob_p_id = wp.id;
+            } catch(e) {
+              const list = await get('/api/wyroby?typ=P&q=' + encodeURIComponent(node.symbol));
+              const found = list.find(w => w.symbol === node.symbol);
+              if (found) wyrob_p_id = found.id;
+            }
+            if (wyrob_p_id) {
+              // Dodaj do BOM rodzica
+              try {
+                await post(`/api/wyroby/${parentWyrob_id}/bom`, {
+                  skladnik_id: wyrob_p_id,
+                  typ_skladnika: 'P',
+                  ilosc: parseFloat(node.ilosc) || 1,
+                  jednostka: node.jednostka || 'szt',
+                  pozycja: opKolejnosc - 1,
+                });
+              } catch(e) { console.warn('BOM P:', e); }
+              // Rekurencja
+              if (node.children && node.children.length) {
+                await processChildren(wyrob_p_id, node.children);
+              }
+            }
+          }
+        } else if (node.typ === 'M' && node.material_indeks) {
+          // Węzeł M – materiał z bazy
+          // Wylicz zapotrzebowanie na podstawie trybu pomiaru
+          const zap = nzCalcZapotrzebowanie(node, state.nzIlosc || 1);
+          try {
+            await post(`/api/wyroby/${parentWyrob_id}/bom`, {
+              typ_skladnika: 'M',
+              material_indeks: node.material_indeks,
+              ilosc: zap.wartosc,
+              jednostka: zap.jm,
+              uwagi: node.material_opis || '',
+              pozycja: opKolejnosc,
+            });
+          } catch(e) { console.warn('BOM M:', e); }
+        }
+      }
+    }
+
+    await processChildren(wyrob_g_id, tree.children);
+
+    // 4. Odśwież listę zleceń i drzewo
+    await loadZlecenia();
+    if (state.tab === 'drzewo') loadDrzewoGP();
+
+    setState({ nzModal: false, nzSaving: false });
+    alert(`✅ Zlecenie ${state.nzNumer} zostało utworzone z drzewem G→P!`);
+  } catch(e) {
+    setState({ nzSaving: false });
+    alert('Błąd zapisu: ' + e.message);
+  }
+}
+
+// ── Render Wizarda ────────────────────────────────────────────────────────────
+
+function renderNzWizard() {
+  const s = state;
+  const step = s.nzStep;
+
+  // Pasek kroku
+  const stepBar = `
+    <div style="display:flex;align-items:center;gap:0;margin-bottom:22px">
+      ${[{n:1,lbl:'Dane zlecenia'},{n:2,lbl:'Struktura G→P'}].map(({n,lbl}) => {
+        const active = step === n;
+        const done   = step > n;
+        const col = done ? '#4ade80' : active ? '#3b82f6' : '#334155';
+        const tcol = done||active ? '#fff' : '#475569';
+        return `<div style="display:flex;align-items:center;flex:1">
+          <div style="display:flex;align-items:center;gap:7px;flex:1">
+            <div style="width:26px;height:26px;border-radius:50%;background:${col};color:#fff;
+                        font-weight:700;font-size:.78rem;display:flex;align-items:center;justify-content:center;
+                        flex-shrink:0">${done?'✓':n}</div>
+            <span style="font-size:.8rem;font-weight:${active?700:400};color:${tcol}">${lbl}</span>
+          </div>
+          ${n<2?`<div style="height:2px;flex:1;background:${done?'#4ade80':'#1e293b'};margin:0 10px"></div>`:''}
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  let body = '';
+
+  if (step === 1) {
+    body = `
+      <div class="field"><label>Numer zlecenia *</label>
+        <input id="nz-numer" type="text" placeholder="np. ZL-2024/001"
+               value="${s.nzNumer}"
+               style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
+      </div>
+      <div class="field"><label>Nazwa zlecenia *</label>
+        <input id="nz-nazwa" type="text" placeholder="np. Wał napędowy Ø50"
+               value="${s.nzNazwa}"
+               style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
+      </div>
+      <div class="field"><label>Opis</label>
+        <textarea id="nz-opis" rows="2"
+                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px;resize:vertical">${s.nzOpis||''}</textarea>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field"><label>Termin</label>
+          <input id="nz-termin" type="date" value="${s.nzTermin||''}"
+                 style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
+        </div>
+        <div class="field"><label>Ilość sztuk</label>
+          <input id="nz-ilosc" type="number" value="${s.nzIlosc||1}" min="1"
+                 style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="field"><label>Cena brutto/szt (zł)</label>
+          <input id="nz-cena" type="number" step="0.01" value="${s.nzCena||0}"
+                 style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
+        </div>
+        <div class="field"><label>Materiał od klienta</label>
+          <select id="nz-mat"
+                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
+            <option value="0" ${!s.nzMatKlienta?'selected':''}>Nie – definiuję materiały</option>
+            <option value="1" ${s.nzMatKlienta?'selected':''}>Tak – klient dostarcza</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:8px">
+        <button onclick="nzClose()"
+                style="flex:1;background:#ffffff10;color:#94a3b8;border:1px solid #ffffff15;border-radius:6px;padding:10px;cursor:pointer;font-size:.9rem">
+          Anuluj
+        </button>
+        <button onclick="nzGoStep2()"
+                style="flex:2;background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:10px;cursor:pointer;font-weight:700;font-size:.9rem">
+          Dalej: Struktura G→P →
+        </button>
+      </div>`;
+
+  } else {
+    // Krok 2 – drzewo
+    const tree = s.nzTree;
+    const editId = s.nzEditNode;
+    const editNode = editId ? nzFindNode(tree, editId) : null;
+
+    // Render drzewa
+    function renderNzNode(node, depth) {
+      const indent = depth * 18;
+      const isG = node.typ === 'G';
+      const isP = node.typ === 'P';
+      const isM = node.typ === 'M';
+      const isEditing = node._id === editId;
+      const borderCol = isG ? '#3b82f6' : isP ? '#8b5cf6' : '#6b7280';
+      const bg = isEditing ? 'rgba(59,130,246,0.12)' : (isG ? 'rgba(59,130,246,0.06)' : isP ? 'rgba(139,92,246,0.06)' : 'rgba(107,114,128,0.05)');
+      const label = isG ? `<span style="color:#60a5fa;font-family:monospace;font-weight:700">${node.symbol}</span> <span style="color:#e2e8f0">${node.nazwa}</span>`
+                  : isP ? `<span style="color:#a78bfa;font-size:.72rem;font-family:monospace">${node.symbol||'—'}</span> <span style="color:#e2e8f0;font-size:.8rem">${node.nazwa||'(bez nazwy)'}</span>`
+                  : `<span style="color:#9ca3af;font-family:monospace;font-size:.7rem">${node.material_indeks||'—'}</span> <span style="color:#9ca3af;font-size:.78rem">${node.material_opis||''}</span>`;
+      const ilocStr = (() => {
+        if (isM) {
+          const zap = nzCalcZapotrzebowanie(node, s.nzIlosc || 1);
+          return `<span style="color:#94a3b8;font-size:.7rem;margin-left:auto">${(+node.mat_ilosc_szt||1).toLocaleString('pl-PL',{maximumFractionDigits:2})} ${node.material_jm||'szt'}/wyrób → <b style="color:#60a5fa">${zap.wartosc.toLocaleString('pl-PL',{maximumFractionDigits:3})} ${zap.jm}</b></span>`;
+        }
+        return `<span style="color:#94a3b8;font-size:.7rem;margin-left:auto">${(+node.ilosc).toLocaleString('pl-PL',{maximumFractionDigits:2})} ${node.jednostka||node.material_jm||'szt'}</span>`;
+      })();
+      const badge = isG ? `<span style="font-size:.6rem;padding:1px 5px;border-radius:3px;background:#1e3a5f;color:#60a5fa;border:1px solid #3b82f633">G</span>`
+                   : isP ? `<span style="font-size:.6rem;padding:1px 5px;border-radius:3px;background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf633">P</span>`
+                   : `<span style="font-size:.6rem;padding:1px 5px;border-radius:3px;background:#1a1f2e;color:#6b7280;border:1px solid #6b728033">M</span>`;
+
+      // Przyciski akcji
+      const actBtns = isG ? `
+          <button onclick="nzAddP('${node._id}')" title="Dodaj operację/półprodukt P"
+                  style="background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf633;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer">+ P</button>
+          <button onclick="nzAddM('${node._id}')" title="Dodaj materiał M"
+                  style="background:#1a1f2e;color:#6b7280;border:1px solid #6b728033;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer">+ M</button>`
+        : isP ? `
+          <button onclick="nzAddP('${node._id}')" title="Dodaj pod-operację"
+                  style="background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf633;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer">+ P</button>
+          <button onclick="nzAddM('${node._id}')" title="Dodaj materiał"
+                  style="background:#1a1f2e;color:#6b7280;border:1px solid #6b728033;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer">+ M</button>
+          <button onclick="nzDeleteNode('${node._id}')" title="Usuń"
+                  style="background:#3a1a1a;color:#f87171;border:1px solid #f8717133;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer">✕</button>` 
+        : `
+          <button onclick="nzDeleteNode('${node._id}')" title="Usuń"
+                  style="background:#3a1a1a;color:#f87171;border:1px solid #f8717133;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer">✕</button>`;
+
+      const rowHtml = `
+        <div style="margin-left:${indent}px;margin-bottom:3px;
+                    background:${bg};border-left:2px solid ${borderCol};
+                    border-radius:4px;padding:5px 8px;
+                    display:flex;align-items:center;gap:6px;cursor:pointer"
+             onclick="setState({nzEditNode:'${node._id}',nzMatSearch:'',nzMatResults:[]})">
+          ${badge}
+          <div style="flex:1;display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden">
+            ${label}
+          </div>
+          ${ilocStr}
+          <div style="display:flex;gap:3px;flex-shrink:0" onclick="event.stopPropagation()">
+            ${actBtns}
+          </div>
+        </div>`;
+
+      const childHtml = (node.children||[]).map(c => renderNzNode(c, depth+1)).join('');
+      return rowHtml + childHtml;
+    }
+
+    const treeHtml = tree ? renderNzNode(tree, 0) : '';
+
+    // Panel edycji prawej strony
+    let editPanel = '';
+    if (editNode) {
+      if (editNode.typ === 'G') {
+        editPanel = `
+          <div style="font-size:.78rem;font-weight:700;color:#60a5fa;margin-bottom:10px">🌳 Wyrób główny G</div>
+          <div style="font-size:.75rem;color:#64748b">Symbol: <b style="color:#e2e8f0">${editNode.symbol}</b></div>
+          <div style="font-size:.75rem;color:#64748b;margin-top:2px">Nazwa: <b style="color:#e2e8f0">${editNode.nazwa}</b></div>
+          <div style="margin-top:10px;padding:8px;background:#0f172a;border-radius:6px;font-size:.72rem;color:#475569">
+            Korzeń G pochodzi z danych zlecenia.<br>Dodaj operacje (P) i materiały (M) poniżej.
+          </div>
+          <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+            <button onclick="nzAddP('${editNode._id}')"
+                    style="background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf644;border-radius:6px;padding:8px;cursor:pointer;font-size:.82rem;font-weight:600">
+              + Dodaj operację / półprodukt (P)
+            </button>
+            <button onclick="nzAddM('${editNode._id}')"
+                    style="background:#1a1f2e;color:#6b7280;border:1px solid #6b728044;border-radius:6px;padding:8px;cursor:pointer;font-size:.82rem">
+              + Dodaj materiał (M)
+            </button>
+          </div>`;
+
+      } else if (editNode.typ === 'P') {
+        const stanOptions = (state.stawki||[]).map(s =>
+          `<option value="${s.stanowisko}" ${editNode.stanowisko===s.stanowisko?'selected':''}>${s.stanowisko}</option>`
+        ).join('');
+        editPanel = `
+          <div style="font-size:.78rem;font-weight:700;color:#a78bfa;margin-bottom:10px">⚙ Operacja / Półprodukt P</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div>
+              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Symbol (opcjonalny – do drzewa BOM)</label>
+              <input type="text" placeholder="np. P-001"
+                     value="${editNode.symbol||''}"
+                     onchange="nzUpdateField('${editNode._id}','symbol',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+            </div>
+            <div>
+              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Nazwa operacji *</label>
+              <input type="text" placeholder="np. Toczenie wału"
+                     value="${editNode.nazwa||''}"
+                     onchange="nzUpdateField('${editNode._id}','nazwa',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+            </div>
+            <div>
+              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Stanowisko / operacja</label>
+              <select onchange="nzUpdateField('${editNode._id}','stanowisko',this.value)"
+                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+                <option value="">— wybierz —</option>
+                ${stanOptions}
+              </select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Czas (min/szt)</label>
+                <input type="number" step="0.5" min="0"
+                       value="${editNode.czas_norma||0}"
+                       onchange="nzUpdateField('${editNode._id}','czas_norma',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Zbrojenie (min)</label>
+                <input type="number" step="1" min="0"
+                       value="${editNode.czas_zbrojenia||0}"
+                       onchange="nzUpdateField('${editNode._id}','czas_zbrojenia',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość (do BOM)</label>
+                <input type="number" step="0.01" min="0.01"
+                       value="${editNode.ilosc||1}"
+                       onchange="nzUpdateField('${editNode._id}','ilosc',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Jednostka</label>
+                <input type="text"
+                       value="${editNode.jednostka||'szt'}"
+                       onchange="nzUpdateField('${editNode._id}','jednostka',this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+            </div>
+            <div>
+              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Opis czynności</label>
+              <textarea rows="2" onchange="nzUpdateField('${editNode._id}','opis_czynnosci',this.value)"
+                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical">${editNode.opis_czynnosci||''}</textarea>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:4px">
+              <button onclick="nzAddP('${editNode._id}')"
+                      style="flex:1;background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf633;border-radius:5px;padding:6px;cursor:pointer;font-size:.75rem">+ P</button>
+              <button onclick="nzAddM('${editNode._id}')"
+                      style="flex:1;background:#1a1f2e;color:#6b7280;border:1px solid #6b728033;border-radius:5px;padding:6px;cursor:pointer;font-size:.75rem">+ M</button>
+              <button onclick="nzDeleteNode('${editNode._id}')"
+                      style="background:#3a1a1a;color:#f87171;border:1px solid #f8717133;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:.75rem">✕ Usuń</button>
+            </div>
+          </div>`;
+
+      } else if (editNode.typ === 'M') {
+        const matResults = state.nzMatResults || [];
+        const matSearching = state.nzMatSearching;
+        const tryb = editNode.mat_tryb || 'sztuki';
+        const ilocZlecenia = s.nzIlosc || 1;
+        const zap = nzCalcZapotrzebowanie(editNode, ilocZlecenia);
+
+        const trybBtns = ['dlugosc','wymiary','sztuki'].map(t => {
+          const labels = {dlugosc:'📏 Długość', wymiary:'📐 Wymiary L×W', sztuki:'🔩 Sztuki'};
+          const active = tryb === t;
+          return `<button onclick="nzUpdateField('${editNode._id}','mat_tryb','${t}')"
+            style="flex:1;padding:6px 4px;border-radius:5px;cursor:pointer;font-size:.72rem;font-weight:${active?700:400};
+                   background:${active?'#3b82f6':'#0f172a'};color:${active?'#fff':'#64748b'};
+                   border:1px solid ${active?'#3b82f6':'#1e293b'}">${labels[t]}</button>`;
+        }).join('');
+
+        let trybFields = '';
+        if (tryb === 'dlugosc') {
+          trybFields = `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Długość na 1 szt (mm)</label>
+                <input type="number" step="0.1" min="0"
+                       value="${editNode.mat_dlugosc||0}"
+                       onchange="nzUpdateField('${editNode._id}','mat_dlugosc',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość pręt./el. na wyrób</label>
+                <input type="number" step="0.01" min="0.01"
+                       value="${editNode.mat_ilosc_szt||1}"
+                       onchange="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+            </div>`;
+        } else if (tryb === 'wymiary') {
+          trybFields = `
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Długość (mm)</label>
+                <input type="number" step="0.1" min="0"
+                       value="${editNode.mat_wys||0}"
+                       onchange="nzUpdateField('${editNode._id}','mat_wys',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Szerokość (mm)</label>
+                <input type="number" step="0.1" min="0"
+                       value="${editNode.mat_szer||0}"
+                       onchange="nzUpdateField('${editNode._id}','mat_szer',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Szt na wyrób</label>
+                <input type="number" step="0.01" min="0.01"
+                       value="${editNode.mat_ilosc_szt||1}"
+                       onchange="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+            </div>`;
+        } else {
+          trybFields = `
+            <div>
+              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość sztuk na 1 wyrób</label>
+              <input type="number" step="0.01" min="0.01"
+                     value="${editNode.mat_ilosc_szt||1}"
+                     onchange="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+            </div>`;
+        }
+
+        editPanel = `
+          <div style="font-size:.78rem;font-weight:700;color:#6b7280;margin-bottom:10px">📦 Materiał M</div>
+          ${editNode.material_indeks ? `
+            <div style="background:#0f172a;border:1px solid #1e3a2f;border-radius:6px;padding:8px 10px;margin-bottom:10px">
+              <div style="font-size:.7rem;color:#4ade80;font-weight:700">✓ Wybrany materiał</div>
+              <div style="font-family:monospace;font-size:.78rem;color:#e2e8f0;margin-top:2px">${editNode.material_indeks}</div>
+              <div style="font-size:.76rem;color:#94a3b8">${editNode.material_opis||''}</div>
+            </div>` : ''}
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div>
+              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">🔍 Szukaj materiału</label>
+              <div style="display:flex;gap:6px">
+                <input id="nz-mat-search" type="text" placeholder="Wpisz indeks lub opis..."
+                       value="${state.nzMatSearch||''}"
+                       oninput="setState({nzMatSearch:this.value},true)"
+                       onkeyup="if(event.key==='Enter'||this.value.length>=3)nzSearchMat()"
+                       style="flex:1;background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;font-size:.8rem;outline:none">
+                <button onclick="nzSearchMat()"
+                        style="background:#3b82f6;color:#fff;border:none;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:.8rem">🔍</button>
+              </div>
+            </div>
+            ${matSearching ? '<div style="color:#64748b;font-size:.78rem;padding:4px">Szukam...</div>' : ''}
+            ${matResults.length ? `
+              <div style="max-height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
+                ${matResults.map(m => `
+                  <div onclick="nzSelectMat('${editNode._id}',${JSON.stringify(m).replace(/"/g,'&quot;')})"
+                       style="padding:5px 8px;border-radius:4px;border:1px solid #1e293b;background:#0f172a;
+                              cursor:pointer;font-size:.75rem"
+                       onmouseover="this.style.borderColor='#3b82f6'"
+                       onmouseout="this.style.borderColor='#1e293b'">
+                    <span style="font-family:monospace;color:#60a5fa">${m.indeks||'—'}</span>
+                    <span style="color:#cbd5e1;margin-left:6px">${m.opis||''}</span>
+                    <span style="color:#475569;margin-left:6px">${m.jm||''}</span>
+                    <span style="color:#4ade80;margin-left:auto;float:right">${(m.do_dyspozycji||0).toLocaleString('pl-PL',{maximumFractionDigits:2})} ${m.jm||'szt'}</span>
+                  </div>`).join('')}
+              </div>` : ''}
+
+            <!-- Tryb pomiaru -->
+            <div>
+              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:5px">📊 Typ zapotrzebowania</label>
+              <div style="display:flex;gap:4px">${trybBtns}</div>
+            </div>
+
+            <!-- Pola zależne od trybu -->
+            ${trybFields}
+
+            <!-- Wyliczone zapotrzebowanie -->
+            <div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:6px;padding:8px 10px">
+              <div style="font-size:.7rem;color:#60a5fa;font-weight:700;margin-bottom:3px">📋 Zapotrzebowanie dla zlecenia (${ilocZlecenia} szt)</div>
+              <div style="font-size:.82rem;color:#e2e8f0;font-weight:700">${zap.wartosc.toLocaleString('pl-PL',{maximumFractionDigits:3})} ${zap.jm}</div>
+              <div style="font-size:.68rem;color:#475569;margin-top:2px">${zap.opis}</div>
+            </div>
+
+            <button onclick="nzDeleteNode('${editNode._id}')"
+                    style="background:#3a1a1a;color:#f87171;border:1px solid #f8717133;border-radius:5px;padding:6px;cursor:pointer;font-size:.78rem;margin-top:2px">
+              ✕ Usuń ten materiał
+            </button>
+          </div>`;
+      }
+    } else {
+      editPanel = `
+        <div style="color:#334155;text-align:center;padding:20px 10px;font-size:.8rem">
+          <div style="font-size:1.6rem;margin-bottom:8px">👆</div>
+          Kliknij węzeł w drzewie<br>aby go edytować
+        </div>`;
+    }
+
+    body = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;min-height:340px">
+        <!-- Lewa: drzewo -->
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px">
+            Struktura drzewa
+          </div>
+          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px;
+                      flex:1;overflow-y:auto;max-height:360px;min-height:120px">
+            ${treeHtml || '<div style="color:#334155;font-size:.78rem;padding:8px">Brak węzłów</div>'}
+          </div>
+          <div style="font-size:.7rem;color:#334155;line-height:1.6">
+            <span style="color:#60a5fa">G</span> = wyrób główny &nbsp;
+            <span style="color:#a78bfa">P</span> = operacja/półprodukt &nbsp;
+            <span style="color:#6b7280">M</span> = materiał
+          </div>
+        </div>
+        <!-- Prawa: panel edycji -->
+        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;
+                    overflow-y:auto;max-height:400px">
+          ${editPanel}
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button onclick="setState({nzStep:1})"
+                style="background:#ffffff10;color:#94a3b8;border:1px solid #ffffff15;border-radius:6px;
+                       padding:10px 16px;cursor:pointer;font-size:.85rem">
+          ← Wróć
+        </button>
+        <button onclick="nzSave()" ${s.nzSaving?'disabled':''}
+                style="flex:1;background:${s.nzSaving?'#1e293b':'#16a34a'};color:${s.nzSaving?'#475569':'#fff'};
+                       border:none;border-radius:6px;padding:10px;cursor:${s.nzSaving?'wait':'pointer'};
+                       font-weight:700;font-size:.9rem">
+          ${s.nzSaving ? '⏳ Zapisuję...' : '💾 Utwórz zlecenie'}
+        </button>
+      </div>`;
+  }
+
+  return `
+    <div class="modal-overlay" onclick="if(event.target===this&&!state.nzSaving)nzClose()">
+      <div class="modal" style="max-width:820px;width:95vw">
+        <button class="modal-close" onclick="nzClose()">×</button>
+        <h3 style="margin-bottom:18px">🏭 Nowe zlecenie produkcyjne</h3>
+        ${stepBar}
+        ${body}
+      </div>
+    </div>`;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MODUŁ: DRZEWO G/P – Struktura technologiczna
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -8287,10 +9050,17 @@ function renderDrzewoNode(node, depth, ilocZlecona) {
     const ilocStr = ilocEfekt != null
       ? `<span style="color:#d1d5db;font-weight:600;margin-left:auto">${(+ilocEfekt).toLocaleString('pl-PL',{maximumFractionDigits:2})} ${node.material_jm || node.jednostka || ''}</span>`
       : '';
+    const pozStr = node._bom_pozycja != null && node._bom_pozycja !== 0
+      ? `<span style="color:#4b5563;font-size:.61rem;font-family:monospace;min-width:28px">P${String(node._bom_pozycja).padStart(2,'0')}</span>`
+      : '<span style="min-width:28px"></span>';
+    const opisStr = node.material_opis && node.material_opis !== node.material_indeks
+      ? node.material_opis
+      : (node._bom_uwagi || node.material_opis || '—');
     return `<div style="margin-left:${indent}px;margin-bottom:2px;background:rgba(107,114,128,0.06);border-left:2px solid #6b728040;border-radius:4px;padding:4px 10px;display:flex;align-items:center;gap:8px;font-size:0.73rem;color:#9ca3af">
+      ${pozStr}
       <span style="opacity:.5;font-size:.62rem">▣</span>
       <span style="color:#6b7280;min-width:70px;font-family:monospace">${node.material_indeks||''}</span>
-      <span style="flex:1">${node.material_opis||'—'}</span>
+      <span style="flex:1;color:#9ca3af">${opisStr}</span>
       ${ilocStr}
     </div>`;
   }

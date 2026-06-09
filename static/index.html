@@ -464,6 +464,8 @@ let state = {
   magazynZapotrzebowanie: null, // dane zapotrzebowania ze wszystkich zleceń
   magazynZapotrzebowanieLoading: false,
   magazynBraki: false,          // czy są braki → ikona ! w navbarze
+  magazynDodajOpen: false,      // czy formularz dodawania materiału jest otwarty
+  magazynEditMat: null,         // materiał do edycji lub null
   rezerwacjaModal: null,        // {material_id, material_opis, material_indeks, stan} | null
   magazynLastRefresh: null,     // czas ostatniego odświeżenia danych magazynu
 
@@ -717,18 +719,100 @@ async function loadMagazynMaterialySearch() {
   } catch(e) { setState({magazynMatSearching: false}); }
 }
 
-// ── Rezerwacje (localStorage) ───────────────────────────────────
+// ── Rezerwacje (serwer API – trwałe przez restarty) ─────────────────────────
 function loadRezerwacje() {
+  // Zwraca aktualny stan z pamięci (synchronicznie dla renderowania)
+  return state.magazynRezerwacje || [];
+}
+async function loadRezerwacjeZSerwera() {
+  if (!SERVER_URL || !API_KEY) return;
   try {
-    return JSON.parse(localStorage.getItem('mag_rezerwacje') || '[]');
-  } catch(_) { return []; }
+    const res = await get('/api/mag-rezerwacje');
+    if (Array.isArray(res)) {
+      setState({magazynRezerwacje: res});
+      // Migracja jednorazowa – przenies lokalne rezerwacje na serwer
+      const lokalne = JSON.parse(localStorage.getItem('mag_rezerwacje') || '[]');
+      if (lokalne.length > 0) {
+        try {
+          await post('/api/mag-rezerwacje/import-local', {rezerwacje: lokalne});
+          localStorage.removeItem('mag_rezerwacje');
+          const res2 = await get('/api/mag-rezerwacje');
+          if (Array.isArray(res2)) setState({magazynRezerwacje: res2});
+          console.log(`✓ Zmigrowano ${lokalne.length} rezerwacji z localStorage na serwer`);
+        } catch(_) {}
+      }
+    }
+  } catch(_) {
+    // Fallback: użyj localStorage jeśli serwer niedostępny
+    try { setState({magazynRezerwacje: JSON.parse(localStorage.getItem('mag_rezerwacje') || '[]')}); } catch(_2){}
+  }
 }
-function saveRezerwacje(lista) {
-  localStorage.setItem('mag_rezerwacje', JSON.stringify(lista));
-  setState({magazynRezerwacje: lista});
-  // Backup asynchronicznie po każdej zmianie
-  setTimeout(() => backupRezerwacjeDoSerwera(), 500);
+
+// ── Ręczny CRUD materiałów ───────────────────────────────────────────────────
+async function zapiszNabyMaterial() {
+  const indeks = document.getElementById('mat-f-indeks')?.value?.trim();
+  const opis   = document.getElementById('mat-f-opis')?.value?.trim();
+  if (!indeks) { alert('Indeks jest wymagany'); return; }
+  if (!opis)   { alert('Opis artykułu jest wymagany'); return; }
+  const body = {
+    indeks,
+    opis,
+    kod:             document.getElementById('mat-f-kod')?.value?.trim() || '',
+    jm:              document.getElementById('mat-f-jm')?.value || 'kg',
+    do_dyspozycji:   parseFloat(document.getElementById('mat-f-dysp')?.value) || 0,
+    stan_rzeczywisty:parseFloat(document.getElementById('mat-f-stan')?.value) || 0,
+    kod_paskowy:     document.getElementById('mat-f-kp')?.value?.trim() || '',
+  };
+  try {
+    await post('/api/materialy', body);
+    setState({magazynDodajOpen: false, magazynEditMat: null});
+    await loadMagazynMaterialyCount();
+    if (state.magazynMatSearch) await loadMagazynMaterialySearch();
+    else setState({magazynMatSearch: indeks}, true), await loadMagazynMaterialySearch();
+  } catch(e) {
+    alert('Błąd: ' + (e.message || JSON.stringify(e)));
+  }
 }
+function otworzEdycjeMaterialu(mat) {
+  setState({magazynEditMat: mat, magazynDodajOpen: false}, true);
+  // Scroll do góry karty
+  setTimeout(() => document.querySelector('.card')?.scrollIntoView({behavior:'smooth'}), 100);
+}
+async function zapiszEdycjeMaterialu(mid) {
+  const indeks = document.getElementById('mat-f-indeks')?.value?.trim();
+  const opis   = document.getElementById('mat-f-opis')?.value?.trim();
+  if (!indeks) { alert('Indeks jest wymagany'); return; }
+  if (!opis)   { alert('Opis artykułu jest wymagany'); return; }
+  const body = {
+    indeks,
+    opis,
+    kod:             document.getElementById('mat-f-kod')?.value?.trim() || '',
+    jm:              document.getElementById('mat-f-jm')?.value || 'kg',
+    do_dyspozycji:   parseFloat(document.getElementById('mat-f-dysp')?.value) || 0,
+    stan_rzeczywisty:parseFloat(document.getElementById('mat-f-stan')?.value) || 0,
+    kod_paskowy:     document.getElementById('mat-f-kp')?.value?.trim() || '',
+  };
+  try {
+    await put('/api/materialy/' + mid, body);
+    setState({magazynEditMat: null});
+    await loadMagazynMaterialySearch();
+  } catch(e) {
+    alert('Błąd: ' + (e.message || JSON.stringify(e)));
+  }
+}
+async function usunMaterial(mid) {
+  const mat = (state.magazynMatResults||[]).find(m => m.id === mid);
+  const opis = mat ? mat.opis : 'ten materiał';
+  if (!confirm(`Usunąć materiał:\n"${opis}"?\n\nUwaga: zostaną usunięte też powiązane pozycje BOM i rezerwacje.`)) return;
+  try {
+    await del('/api/materialy/' + mid);
+    await loadMagazynMaterialyCount();
+    await loadMagazynMaterialySearch();
+  } catch(e) {
+    alert('Błąd: ' + (e.message || JSON.stringify(e)));
+  }
+}
+
 function openRezerwacjaModal(mat) {
   setState({rezerwacjaModal: {
     material_id: mat.id,
@@ -738,41 +822,49 @@ function openRezerwacjaModal(mat) {
     jm: mat.jm || 'szt',
   }});
 }
-function dodajRezerwacje() {
+async function dodajRezerwacje() {
   const m = state.rezerwacjaModal;
   if (!m) return;
   const zlecenie = document.getElementById('rez-zlecenie')?.value?.trim();
   const ilosc = parseFloat(document.getElementById('rez-ilosc')?.value) || 0;
-  const cel = document.getElementById('rez-cel')?.value || 'produkcja';
   const uwagi = document.getElementById('rez-uwagi')?.value?.trim() || '';
   if (!zlecenie) { alert('Wpisz numer zlecenia G... lub P... (lub cel zakładowy)'); return; }
   if (ilosc <= 0) { alert('Podaj ilość > 0'); return; }
-  const lista = loadRezerwacje();
-  lista.push({
-    id: Date.now(),
-    material_id: m.material_id,
-    material_opis: m.material_opis,
-    material_indeks: m.material_indeks,
-    jm: m.jm,
-    zlecenie,
-    ilosc,
-    cel,
-    uwagi,
-    data: new Date().toISOString().slice(0,10),
-    status: 'aktywna',
-  });
-  saveRezerwacje(lista);
-  setState({rezerwacjaModal: null});
+  try {
+    await post('/api/mag-rezerwacje', {
+      id: 'rez_' + Date.now(),
+      material_id: m.material_id,
+      ilosc,
+      zlecenie_nr: zlecenie,
+      uwagi,
+    });
+    const res = await get('/api/mag-rezerwacje');
+    if (Array.isArray(res)) setState({magazynRezerwacje: res, rezerwacjaModal: null});
+    else setState({rezerwacjaModal: null});
+    // Odśwież też stany materiałów
+    if (state.magazynMatSearch) loadMagazynMaterialySearch();
+  } catch(e) {
+    alert('Błąd zapisu rezerwacji: ' + (e.message || e));
+  }
 }
-function usunRezerwacje(id) {
+async function usunRezerwacje(id) {
   if (!confirm('Usunąć rezerwację?')) return;
-  const lista = loadRezerwacje().filter(r => r.id !== id);
-  saveRezerwacje(lista);
+  try {
+    await del('/api/mag-rezerwacje/' + id);
+    const res = await get('/api/mag-rezerwacje');
+    if (Array.isArray(res)) setState({magazynRezerwacje: res});
+    if (state.magazynMatSearch) loadMagazynMaterialySearch();
+  } catch(e) { alert('Błąd: ' + (e.message||e)); }
 }
-function zwolnijRezerwacje(id) {
-  const lista = loadRezerwacje().map(r => r.id === id ? {...r, status: 'zwolniona'} : r);
-  saveRezerwacje(lista);
+async function zwolnijRezerwacje(id) {
+  try {
+    await patch('/api/mag-rezerwacje/' + id + '/zwolnij', {});
+    const res = await get('/api/mag-rezerwacje');
+    if (Array.isArray(res)) setState({magazynRezerwacje: res});
+    if (state.magazynMatSearch) loadMagazynMaterialySearch();
+  } catch(e) { alert('Błąd: ' + (e.message||e)); }
 }
+
 
 async function loadPracownikWydajnosc(okres) {
   const o = okres || state.pracaWydOkres;
@@ -1389,6 +1481,7 @@ function loadTabData(tab) {
   if (tab==='magazyn')  {
     loadMagazynier();
     loadMagazynBraki();
+    loadRezerwacjeZSerwera();
     setState({magazynLastRefresh: new Date().toLocaleTimeString('pl-PL',{hour:'2-digit',minute:'2-digit'})}, true);
   }
   if (tab==='zlecenia') { loadZlecenia(); get('/api/stawki').then(d=>setState({stawki:d},true)).catch(()=>{}); }
@@ -3735,14 +3828,58 @@ function renderMajsterPodsumowanie(stats) {
   // Modal szczegółów zlecenia
   if (state.zlecenieModal) {
     const m = state.zlecenieModal;
+    const zlTab = m.zlModalTab || 'sesje';
+    
+    // Zakładki
+    const zlTabs = [
+      {id:'sesje', label:'📋 Sesje i koszty'},
+      {id:'drzewo', label:'🌳 Drzewo G→P'},
+    ];
+    const tabsHtml = zlTabs.map(t => {
+      const active = zlTab === t.id;
+      return '<button onclick="setState({zlecenieModal:{...state.zlecenieModal,zlModalTab:\''+t.id+'\'}}'+        (t.id==='drzewo'&&!state.zlecenieModal.zlTree?';zlModalLoadTree()':'') + ')" '+
+        'style="padding:7px 14px;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:'+
+        (active?'700':'400')+';background:'+        (active?'var(--accent)':' transparent')+';color:'+        (active?'#1a1f2e':'var(--dim)')+'">'+t.label+'</button>';
+    }).join('');
+
     html += '<div class="modal-overlay" onclick="if(event.target===this)setState({zlecenieModal:null})">'
           + '<div class="modal" style="max-height:85vh;overflow-y:auto">'
           + '<button class="modal-close" onclick="setState({zlecenieModal:null})">×</button>'
           + '<div style="font-size:16px;font-weight:700;margin-bottom:4px">' + (m.numer||'') + '</div>'
-          + '<div style="color:var(--dim);font-size:13px;margin-bottom:14px">' + (m.nazwa||'') + '</div>';
+          + '<div style="color:var(--dim);font-size:13px;margin-bottom:14px">' + (m.nazwa||'') + '</div>'
+          + '<div style="display:flex;gap:4px;margin-bottom:16px;background:var(--entry);padding:4px;border-radius:8px">' + tabsHtml + '</div>';
 
     if (m.loading) {
       html += '<div style="text-align:center;padding:20px;color:var(--dim)">⏳ Ładowanie...</div>';
+    } else if (zlTab === 'drzewo') {
+      // Zakładka: Drzewo G→P
+      if (m.zlTreeLoading) {
+        html += '<div style="text-align:center;padding:30px;color:var(--dim)">⏳ Ładowanie drzewa...</div>';
+      } else if (!m.zlTree) {
+        html += '<div style="text-align:center;padding:30px">' +
+          '<div style="font-size:32px;margin-bottom:10px">🌳</div>' +
+          '<div style="color:var(--dim);font-size:13px;margin-bottom:12px">Załaduj strukturę drzewa G→P dla tego zlecenia</div>' +
+          '<button onclick="zlModalLoadTree()" style="background:var(--blue);color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700">Wczytaj drzewo</button>' +
+          '</div>';
+      } else if (m.zlTree === 'brak') {
+        html += '<div style="text-align:center;padding:30px;color:var(--dim)">' +
+          '<div style="font-size:32px;margin-bottom:10px">❌</div>' +
+          '<div style="font-size:13px">Brak wyrobu G o numerze <strong>' + m.numer + '</strong> w bazie drzew.<br>' +
+          '<span style="font-size:11px">Utwórz zlecenie przez wizard G→P lub zaimportuj z PDF.</span></div>' +
+          '</div>';
+      } else {
+        // Render drzewa
+        const nodeCount = (function cnt(n){return 1+(n.children||[]).reduce((s,c)=>s+cnt(c),0);})(m.zlTree);
+        html += '<div style="display:flex;gap:6px;margin-bottom:10px;align-items:center">' +
+          '<span style="color:var(--dim);font-size:11px">' + nodeCount + ' węzłów</span>' +
+          '<div style="flex:1"></div>' +
+          '<button onclick="setState({zlecenieModal:{...state.zlecenieModal,zlTree:null,zlTreeLoading:false}})" ' +
+          'style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:5px;padding:3px 10px;font-size:11px;cursor:pointer">↺ Odśwież</button>' +
+          '</div>' +
+          '<div style="background:var(--entry);border-radius:10px;padding:12px;overflow-x:auto">' +
+          renderDrzewoNode(m.zlTree, 0, m.ilosc_sztuk || 1) +
+          '</div>';
+      }
     } else {
       if (m.koszt_total != null) {
         const kosztProd = m.koszt_produktow || 0;
@@ -3867,7 +4004,8 @@ async function openZlecenieModal(zid) {
   const all = [...(state.majsterStats?.zlecenia||[]), ...(state.majsterStats?.wszystkie_zlecenia||[])];
   const z = all.find(x=>x.id===zid) || {id:zid, numer:'#'+zid, nazwa:'', cena_brutto_szt:0, ilosc_sztuk:0};
   setState({zlecenieModal:{id:zid, numer:z.numer, nazwa:z.nazwa,
-    wartosc:(z.cena_brutto_szt||0)*(z.ilosc_sztuk||0), loading:true, sesje:null, koszt_total:null}});
+    wartosc:(z.cena_brutto_szt||0)*(z.ilosc_sztuk||0), loading:true, sesje:null, koszt_total:null,
+    zlModalTab: 'sesje', zlTree: null, zlTreeLoading: false, ilosc_sztuk: z.ilosc_sztuk||1}});
   try {
     const data = await get('/api/zlecenia/' + zid + '/szczegoly');
     setState({zlecenieModal:{...state.zlecenieModal, loading:false,
@@ -3876,6 +4014,25 @@ async function openZlecenieModal(zid) {
       produkty:data.produkty||[], wartosc:data.wartosc||state.zlecenieModal.wartosc}});
   } catch(e) {
     setState({zlecenieModal:{...state.zlecenieModal, loading:false, sesje:[]}});
+  }
+}
+
+async function zlModalLoadTree() {
+  const m = state.zlecenieModal;
+  if (!m || m.zlTreeLoading) return;
+  setState({zlecenieModal:{...m, zlTreeLoading:true, zlTree:null}});
+  try {
+    // Szukaj wyrobu G po numerze zlecenia
+    const wyroby = await get('/api/wyroby?typ=G&q=' + encodeURIComponent(m.numer));
+    const wg = wyroby.find(w => w.symbol === m.numer);
+    if (!wg) {
+      setState({zlecenieModal:{...state.zlecenieModal, zlTreeLoading:false, zlTree:'brak'}});
+      return;
+    }
+    const tree = await get('/api/wyroby/' + wg.id + '/drzewo');
+    setState({zlecenieModal:{...state.zlecenieModal, zlTreeLoading:false, zlTree:tree, zlWyrobId:wg.id}});
+  } catch(e) {
+    setState({zlecenieModal:{...state.zlecenieModal, zlTreeLoading:false, zlTree:'brak'}});
   }
 }
 
@@ -4068,7 +4225,7 @@ function renderMagazyn() {
 function switchMagazynTab(tab) {
   setState({magazynSubTab: tab}, true);
   if (tab === 'materialy' && state.magazynMatCount === null) loadMagazynMaterialyCount();
-  if (tab === 'rezerwacje') setState({magazynRezerwacje: loadRezerwacje()}, true);
+  if (tab === 'rezerwacje') { loadRezerwacjeZSerwera(); }
   if (tab === 'zapotrzebowanie' && !state.magazynZapotrzebowanie && !state.magazynZapotrzebowanieLoading) {
     loadMagazynZapotrzebowanie();
   }
@@ -4109,7 +4266,68 @@ function renderMagazynTransport() {
 // ─── Sub-tab: Materiały ───────────────────────────────────────────────────────
 function renderMagazynMaterialy() {
   const cnt = state.magazynMatCount;
+  const addOpen = state.magazynDodajOpen;
+  const editMat = state.magazynEditMat; // {id, indeks, opis, ...} jeśli edytujemy
+
+  // Formularz dodawania / edytowania
+  let formHtml = '';
+  if (addOpen || editMat) {
+    const m = editMat || {};
+    formHtml = `
+    <div class="card" style="margin-bottom:14px;border:1px solid var(--accent)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:12px">${editMat ? '✏️ Edytuj materiał' : '➕ Dodaj nowy materiał'}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Indeks <span style="color:var(--red)">*</span></div>
+          <input id="mat-f-indeks" placeholder="np. P19518" value="${m.indeks||''}"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Kod (opcjonalny)</div>
+          <input id="mat-f-kod" placeholder="np. 78111" value="${m.kod||''}"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Opis artykułu <span style="color:var(--red)">*</span></div>
+        <input id="mat-f-opis" placeholder="np. Ceownik 100x50x6 S355" value="${(m.opis||'').replace(/"/g,'&quot;')}"
+          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">J.m.</div>
+          <select id="mat-f-jm"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px">
+            ${['kg','szt','mb','m2','m3','t','l'].map(u => `<option${(m.jm||'kg')===u?' selected':''}>${u}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Do dyspozycji</div>
+          <input id="mat-f-dysp" type="number" step="0.001" min="0" value="${m.do_dyspozycji||0}"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Stan rzeczywisty</div>
+          <input id="mat-f-stan" type="number" step="0.001" min="0" value="${m.stan_rzeczywisty||0}"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Kod paskowy (opcjonalny)</div>
+        <input id="mat-f-kp" placeholder="EAN / kod" value="${m.kod_paskowy||''}"
+          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" onclick="${editMat ? `zapiszEdycjeMaterialu(${m.id})` : 'zapiszNabyMaterial()'}" style="flex:1">
+          ${editMat ? '💾 Zapisz zmiany' : '✅ Dodaj materiał'}
+        </button>
+        <button class="btn-outline" onclick="setState({magazynDodajOpen:false,magazynEditMat:null},true)" style="flex:1">Anuluj</button>
+      </div>
+    </div>`;
+  }
+
   let html = `
+  ${formHtml}
   <div class="card" style="margin-bottom:14px">
     <div style="font-size:13px;font-weight:700;margin-bottom:12px">📂 Import bazy materiałów (.xlsx)</div>
     <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.5">
@@ -4126,7 +4344,10 @@ function renderMagazynMaterialy() {
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div style="font-size:13px;font-weight:700">🔍 Baza materiałów</div>
-      <span style="font-size:12px;color:var(--dim)">${cnt !== null ? cnt + ' pozycji' : '...'}</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:12px;color:var(--dim)">${cnt !== null ? cnt + ' pozycji' : '...'}</span>
+        <button class="btn-sm btn-accent" onclick="setState({magazynDodajOpen:true,magazynEditMat:null},true)" style="font-size:11px;padding:4px 10px">➕ Dodaj</button>
+      </div>
     </div>
     <div style="display:flex;gap:6px;margin-bottom:10px">
       <input id="mag-mat-search" type="text" placeholder="Szukaj wg opisu lub indeksu..."
@@ -4142,7 +4363,7 @@ function renderMagazynMaterialy() {
     html += `<div style="margin-top:4px">`;
     for (const m of state.magazynMatResults) {
       const dostepne = m.do_dyspozycji ?? m.stan_rzeczywisty ?? 0;
-      const rez = loadRezerwacje().filter(r => r.material_id === m.id && r.status === 'aktywna');
+      const rez = (state.magazynRezerwacje||[]).filter(r => r.material_id === m.id && r.status === 'aktywna');
       const rezSum = rez.reduce((a,r)=>a+r.ilosc, 0);
       const wolne = dostepne - rezSum;
       html += `
@@ -4158,8 +4379,10 @@ function renderMagazynMaterialy() {
             ${wolne < dostepne ? `<div style="font-size:10px;color:var(--dim)">wolne: ${wolne.toFixed(wolne%1===0?0:2)} ${m.jm}</div>` : ''}
           </div>
         </div>
-        <div style="margin-top:8px">
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn-sm btn-accent" onclick="openRezerwacjaModal(${JSON.stringify(m).replace(/"/g,'&quot;')})">🔒 Zarezerwuj</button>
+          <button class="btn-sm" style="background:var(--panel);border:1px solid var(--border);color:var(--text)" onclick="otworzEdycjeMaterialu(${JSON.stringify(m).replace(/"/g,'&quot;')})">✏️ Edytuj</button>
+          <button class="btn-sm" style="background:var(--panel);border:1px solid var(--red);color:var(--red)" onclick="usunMaterial(${m.id})">🗑</button>
         </div>
       </div>`;
     }
@@ -4175,7 +4398,7 @@ function renderMagazynMaterialy() {
 
 // ─── Sub-tab: Rezerwacje ──────────────────────────────────────────────────────
 function renderMagazynRezerwacje() {
-  const lista = state.magazynRezerwacje.length ? state.magazynRezerwacje : loadRezerwacje();
+  const lista = state.magazynRezerwacje || [];
   const aktywne = lista.filter(r => r.status === 'aktywna');
   const zwolnione = lista.filter(r => r.status === 'zwolniona');
 
@@ -4183,10 +4406,6 @@ function renderMagazynRezerwacje() {
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
     <div class="section-hdr" style="margin-bottom:0">🔒 Rezerwacje materiałów (${aktywne.length} aktywnych)</div>
     <button class="btn-sm btn-accent" onclick="switchMagazynTab('materialy')">+ Nowa</button>
-  </div>
-  <div style="font-size:12px;color:var(--dim);margin-bottom:12px;background:rgba(232,160,32,0.08);border:1px dashed var(--accent);border-radius:8px;padding:8px 12px;">
-    💡 Rezerwacje blokują materiał na konkretne zlecenie (G.../P...) lub cel zakładowy.
-    Dane przechowywane lokalnie w przeglądarce.
   </div>`;
 
   if (!aktywne.length) {
@@ -4197,25 +4416,26 @@ function renderMagazynRezerwacje() {
     </div>`;
   } else {
     aktywne.forEach(r => {
-      const celColor = r.cel === 'produkcja' ? 'var(--blue)' : r.cel === 'zakładowe' ? 'var(--purple)' : 'var(--dim)';
+      const jm = r.material_jm || r.jm || '';
+      const zlecNr = r.zlecenie_nr || r.zlecenie || '';
+      const dataStr = (r.created_at || r.data || '').slice(0,10);
       html += `
-      <div class="card" style="padding:12px;margin-bottom:8px;border-left:3px solid ${celColor}">
+      <div class="card" style="padding:12px;margin-bottom:8px;border-left:3px solid var(--blue)">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1;min-width:0">
-            <div style="font-weight:700;font-size:14px;color:var(--accent)">${r.zlecenie}</div>
+            <div style="font-weight:700;font-size:14px;color:var(--accent)">${zlecNr}</div>
             <div style="font-size:13px;margin-top:2px">${r.material_opis}</div>
             <div style="font-size:11px;color:var(--dim);margin-top:2px">${r.material_indeks||''}</div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center">
-              <span style="background:rgba(52,152,219,0.15);color:var(--blue);border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">${r.ilosc} ${r.jm}</span>
-              <span style="background:rgba(155,89,182,0.12);color:${celColor};border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600">${r.cel==='produkcja'?'🔧 Produkcja':r.cel==='zakładowe'?'🏭 Zakładowe':'🔒 '+r.cel}</span>
-              <span style="font-size:11px;color:var(--dim)">📅 ${r.data}</span>
+              <span style="background:rgba(52,152,219,0.15);color:var(--blue);border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">${r.ilosc} ${jm}</span>
+              <span style="font-size:11px;color:var(--dim)">📅 ${dataStr}</span>
             </div>
             ${r.uwagi ? `<div style="font-size:11px;color:var(--dim);margin-top:4px;font-style:italic">${r.uwagi}</div>` : ''}
           </div>
         </div>
         <div style="display:flex;gap:6px;margin-top:10px">
-          <button class="btn-sm" style="background:rgba(39,174,96,0.15);color:var(--green);border-color:var(--green)" onclick="zwolnijRezerwacje(${r.id})">✓ Zwolnij</button>
-          <button class="btn-sm btn-red" onclick="usunRezerwacje(${r.id})">🗑 Usuń</button>
+          <button class="btn-sm" style="background:rgba(39,174,96,0.15);color:var(--green);border-color:var(--green)" onclick="zwolnijRezerwacje('${r.id}')">✓ Zwolnij</button>
+          <button class="btn-sm btn-red" onclick="usunRezerwacje('${r.id}')">🗑 Usuń</button>
         </div>
       </div>`;
     });
@@ -4224,14 +4444,17 @@ function renderMagazynRezerwacje() {
   if (zwolnione.length) {
     html += `<div class="section-hdr" style="margin-top:16px">Historia zwolnionych (${zwolnione.length})</div>`;
     zwolnione.slice(-5).reverse().forEach(r => {
+      const jm = r.material_jm || r.jm || '';
+      const zlecNr = r.zlecenie_nr || r.zlecenie || '';
+      const dataStr = (r.created_at || r.data || '').slice(0,10);
       html += `
       <div class="card" style="padding:10px;margin-bottom:6px;opacity:0.6">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div>
-            <div style="font-size:12px;font-weight:700;color:var(--dim)">${r.zlecenie} – ${r.material_opis}</div>
-            <div style="font-size:11px;color:var(--dim)">${r.ilosc} ${r.jm} | ${r.data}</div>
+            <div style="font-size:12px;font-weight:700;color:var(--dim)">${zlecNr} – ${r.material_opis}</div>
+            <div style="font-size:11px;color:var(--dim)">${r.ilosc} ${jm} | ${dataStr}</div>
           </div>
-          <button class="btn-sm btn-red" onclick="usunRezerwacje(${r.id})">🗑</button>
+          <button class="btn-sm btn-red" onclick="usunRezerwacje('${r.id}')">🗑</button>
         </div>
       </div>`;
     });
@@ -7801,9 +8024,10 @@ function startMagazynAutoRefresh() {
       setState({magazynLastRefresh: teraz}, true);
       await loadMagazynZapotrzebowanie();
     }
-    // Rezerwacje – zsynchronizuj z localStorage (na wypadek innej zakładki/okna)
+    // Rezerwacje – synchronizuj z serwera
     if (subTab === 'rezerwacje') {
-      setState({magazynRezerwacje: loadRezerwacje(), magazynLastRefresh: teraz}, true);
+      setState({magazynLastRefresh: teraz}, true);
+      await loadRezerwacjeZSerwera();
       render();
     }
     // Materiały – odśwież wyniki wyszukiwania jeśli było zapytanie
@@ -7816,28 +8040,17 @@ function startMagazynAutoRefresh() {
   }, 60000);
 }
 
-// ── Backup rezerwacji do serwera ───────────────────────────────
+// ── Synchronizacja rezerwacji z serwera (przy starcie i odświeżeniu) ──────────
 async function backupRezerwacjeDoSerwera() {
-  if (!SERVER_URL || !API_KEY) return;
-  const lista = loadRezerwacje();
-  try {
-    await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/admin/backup/rezerwacje', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', 'x-api-key': API_KEY},
-      body: JSON.stringify({rezerwacje: lista, timestamp: new Date().toISOString()}),
-    });
-  } catch(_) {
-    // Jeśli endpoint nie istnieje – zapisz do localStorage jako backup lokalny
-    try {
-      localStorage.setItem('mag_rezerwacje_backup_' + new Date().toISOString().slice(0,10), JSON.stringify(lista));
-    } catch(_2) {}
-  }
+  // Zachowane dla kompatybilności – teraz ładujemy z serwera zamiast pushować
+  await loadRezerwacjeZSerwera();
 }
 
-// Auto-backup co 5 minut
+// Odświeżaj rezerwacje z serwera co 2 minuty
 setInterval(() => {
-  if (state.screen === 'main') backupRezerwacjeDoSerwera();
-}, 5 * 60 * 1000);
+  if (state.screen === 'main') loadRezerwacjeZSerwera();
+}, 2 * 60 * 1000);
+
 
 render();
 
@@ -8806,8 +9019,8 @@ function renderNzWizard() {
               <div style="display:flex;gap:6px">
                 <input id="nz-mat-search" type="text" placeholder="Wpisz indeks lub opis..."
                        value="${state.nzMatSearch||''}"
-                       oninput="setState({nzMatSearch:this.value},true)"
-                       onkeyup="if(event.key==='Enter'||this.value.length>=3)nzSearchMat()"
+                       oninput="setState({nzMatSearch:this.value},true);clearTimeout(window._nzMatTimer);window._nzMatTimer=setTimeout(function(){if((document.getElementById('nz-mat-search')||{value:''}).value.trim().length>=2)nzSearchMat();},500)"
+                       onkeydown="if(event.key==='Enter'){event.preventDefault();clearTimeout(window._nzMatTimer);nzSearchMat();}"
                        style="flex:1;background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;font-size:.8rem;outline:none">
                 <button onclick="nzSearchMat()"
                         style="background:#3b82f6;color:#fff;border:none;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:.8rem">🔍</button>
@@ -9009,7 +9222,7 @@ function drzewoCollapseAll() {
 }
 
 // ─── Render węzła drzewa ───────────────────────────────────────────────────────
-function renderDrzewoNode(node, depth, ilocZlecona) {
+function renderDrzewoNode(node, depth, ilocZlecona, parentWyrobId) {
   if (!node) return '';
   const key = node._bom_id ? ('b' + node._bom_id) : (node.id ? ('w' + node.id + 'd' + depth) : (node.symbol || node.material_indeks || '') + depth);
   const isM = node.typ === 'M';
@@ -9056,12 +9269,17 @@ function renderDrzewoNode(node, depth, ilocZlecona) {
     const opisStr = node.material_opis && node.material_opis !== node.material_indeks
       ? node.material_opis
       : (node._bom_uwagi || node.material_opis || '—');
+    const delMBtn = (node._bom_id && parentWyrobId)
+      ? `<button onclick="event.stopPropagation();drzewoDeleteBomNode(${node._bom_id},${parentWyrobId})"
+           title="Usuń z drzewa" style="background:transparent;border:none;color:#6b7280;cursor:pointer;font-size:.78rem;padding:0 2px;line-height:1;flex-shrink:0" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#6b7280'">✕</button>`
+      : '';
     return `<div style="margin-left:${indent}px;margin-bottom:2px;background:rgba(107,114,128,0.06);border-left:2px solid #6b728040;border-radius:4px;padding:4px 10px;display:flex;align-items:center;gap:8px;font-size:0.73rem;color:#9ca3af">
       ${pozStr}
       <span style="opacity:.5;font-size:.62rem">▣</span>
       <span style="color:#6b7280;min-width:70px;font-family:monospace">${node.material_indeks||''}</span>
       <span style="flex:1;color:#9ca3af">${opisStr}</span>
       ${ilocStr}
+      ${delMBtn}
     </div>`;
   }
 
@@ -9088,7 +9306,7 @@ function renderDrzewoNode(node, depth, ilocZlecona) {
     : '';
 
   const childrenHtml = (isOpen && hasChildren)
-    ? `<div style="margin-top:2px">${node.children.map((c,i) => renderDrzewoNode(c, depth+1, ilocEfekt || ilocZlecona)).join('')}</div>`
+    ? `<div style="margin-top:2px">${node.children.map((c,i) => renderDrzewoNode(c, depth+1, ilocEfekt || ilocZlecona, node.id)).join('')}</div>`
     : '';
 
   return `<div style="margin-left:${indent}px;margin-bottom:4px">
@@ -9102,6 +9320,7 @@ function renderDrzewoNode(node, depth, ilocZlecona) {
       ${progHtml}
       ${noZlHtml}
       ${countBadge}
+      ${(!isG && node._bom_id && parentWyrobId) ? `<button onclick="event.stopPropagation();drzewoDeleteBomNode(${node._bom_id},${parentWyrobId})" title="Usuń z drzewa" style="background:transparent;border:none;color:#475569;cursor:pointer;font-size:.8rem;padding:0 2px;flex-shrink:0" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#475569'">✕</button>` : ''}
     </div>
     ${childrenHtml}
   </div>`;
@@ -9514,6 +9733,20 @@ function renderDrzewoMrp(data) {
     <div style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap">${tabsHtml}</div>
     ${listHtml}
   </div>`;
+}
+
+// ─── Usuwanie węzłów z drzewa BOM ─────────────────────────────────────────────
+async function drzewoDeleteBomNode(bomId, parentWyrobId) {
+  if (!confirm('Usunąć ten węzeł z drzewa BOM? Operacja jest nieodwracalna.')) return;
+  try {
+    await del(`/api/wyroby/${parentWyrobId}/bom/${bomId}`);
+    // Odśwież drzewo
+    if (state.drzewoSelectedG) {
+      setState({drzewoTree: null, drzewoTreeLoading: true}, true); render();
+      const tree = await get('/api/wyroby/' + state.drzewoSelectedG.id + '/drzewo');
+      setState({drzewoTree: tree, drzewoTreeLoading: false});
+    }
+  } catch(e) { alert('Błąd usuwania: ' + e.message); }
 }
 
 // ─── Import PDF panel ──────────────────────────────────────────────────────────

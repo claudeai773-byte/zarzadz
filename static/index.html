@@ -8166,7 +8166,7 @@ async function loadDrzewoGP() {
 }
 
 async function drzewoSelectG(wyrob) {
-  setState({drzewoSelectedG: wyrob, drzewoPanel: 'drzewo', drzewoTree: null, drzewoTreeLoading: true, drzewoMrp: null});
+  setState({drzewoSelectedG: wyrob, drzewoPanel: 'drzewo', drzewoTree: null, drzewoTreeLoading: true, drzewoMrp: null, drzewoMrpView: 'zbiorczy'});
   try {
     const tree = await get('/api/wyroby/' + wyrob.id + '/drzewo');
     setState({drzewoTree: tree, drzewoTreeLoading: false});
@@ -8432,7 +8432,10 @@ function renderDrzewoGP() {
   if (selG) {
     const tabsHtml = ['drzewo','mrp','import'].map(t => {
       const labels = {drzewo:'🌲 Drzewo BOM', mrp:'📊 MRP / Materiały', import:'📄 Import PDF'};
-      return `<button onclick="setState({drzewoPanel:'${t}'});${t==='mrp'&&zlecenieG?'drzewoLoadMrp('+zlecenieG.id+')':''}"
+      const clickAction = t === 'mrp' && zlecenieG
+        ? `setState({drzewoPanel:'mrp',drzewoMrp:null,drzewoMrpView:'zbiorczy',drzewoMrpLoading:true},true);render();drzewoLoadMrp(${zlecenieG.id});`
+        : `setState({drzewoPanel:'${t}'})`;
+      return `<button onclick="${clickAction}"
         style="background:${panel===t?'#3b82f6':'transparent'};color:${panel===t?'#fff':'#64748b'};border:none;border-radius:6px;padding:6px 14px;font-size:.76rem;cursor:pointer;font-weight:600;transition:all .15s">${labels[t]}</button>`;
     }).join('');
 
@@ -8477,16 +8480,15 @@ function renderDrzewoGP() {
       if (!zlecenieG) {
         panelContent = `<div style="color:#475569;padding:24px;font-size:.79rem">Brak aktywnego zlecenia G dla wyrobu <strong style="color:#60a5fa">${selG.symbol}</strong>.<br>Utwórz zlecenie o tym numerze w zakładce Zlecenia.</div>`;
       } else if (mrpLoading) {
-        panelContent = '<div style="display:flex;justify-content:center;padding:40px"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:28px;height:28px;animation:spin .8s linear infinite"></div></div>';
+        panelContent = '<div style="display:flex;align-items:center;gap:12px;color:#475569;padding:40px;justify-content:center"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:28px;height:28px;animation:spin .8s linear infinite"></div><span style="font-size:.79rem">Obliczanie MRP…</span></div>';
       } else if (mrp) {
-        panelContent = renderDrzewoMrp(mrp);
+        const refreshBtn = `<button onclick="drzewoLoadMrp(${zlecenieG.id})" title="Odśwież" style="background:transparent;border:1px solid #ffffff15;border-radius:5px;padding:3px 8px;color:#64748b;font-size:.71rem;cursor:pointer;margin-left:auto">↻ Odśwież</button>`;
+        panelContent = `<div style="display:flex;justify-content:flex-end;margin-bottom:6px">${refreshBtn}</div>` + renderDrzewoMrp(mrp);
       } else {
-        panelContent = `<div style="text-align:center;padding:32px">
-          <button onclick="drzewoLoadMrp(${zlecenieG.id})"
-            style="background:#1e3a5f;color:#60a5fa;border:1px solid #3b82f640;border-radius:8px;padding:10px 24px;cursor:pointer;font-weight:600;font-size:.8rem">
-            📊 Załaduj MRP
-          </button>
-        </div>`;
+        // Auto-start ładowania od razu zamiast pokazywać przycisk
+        const _autoGid = zlecenieG.id;
+        setTimeout(() => { if (state.drzewoPanel==='mrp' && !state.drzewoMrp && !state.drzewoMrpLoading) drzewoLoadMrp(_autoGid); }, 0);
+        panelContent = '<div style="display:flex;align-items:center;gap:12px;color:#475569;padding:40px;justify-content:center"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:28px;height:28px;animation:spin .8s linear infinite"></div><span style="font-size:.79rem">Ładowanie MRP…</span></div>';
       }
     }
 

@@ -505,7 +505,7 @@ let state = {
   drzewoExpanded: {},        // {nodeKey: bool}
   drzewoMrp: null,
   drzewoMrpLoading: false,
-  drzewoMrpView: 'zbiorczy', // zbiorczy | p-status
+  drzewoMrpView: 'zbiorczy', // zbiorczy | p-status | lista-zakupow | czasy
   drzewoImportResult: null,
   drzewoImportError: null,
   drzewoImportUploading: false,
@@ -8220,14 +8220,40 @@ async function drzewoSaveNowy() {
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
+// ─── Helpers: rozwiń / zwiń całe drzewo ───────────────────────────────────────
+function _collectNodeKeys(node, depth, acc) {
+  if (!node) return;
+  const key = node._bom_id ? ('b' + node._bom_id) : (node.id ? ('w' + node.id + 'd' + depth) : (node.symbol || node.material_indeks || '') + depth);
+  acc[key] = true;
+  if (node.children) node.children.forEach(c => _collectNodeKeys(c, depth + 1, acc));
+}
+
+function drzewoExpandAll() {
+  const tree = state.drzewoTree;
+  if (!tree) return;
+  const exp = {};
+  _collectNodeKeys(tree, 0, exp);
+  setState({drzewoExpanded: exp}, true); render();
+}
+
+function drzewoCollapseAll() {
+  const tree = state.drzewoTree;
+  if (!tree) return;
+  const exp = {};
+  const key0 = tree._bom_id ? ('b' + tree._bom_id) : (tree.id ? ('w' + tree.id + 'd0') : (tree.symbol || '') + '0');
+  exp[key0] = true; // zostaw tylko korzeń
+  setState({drzewoExpanded: exp}, true); render();
+}
+
 // ─── Render węzła drzewa ───────────────────────────────────────────────────────
 function renderDrzewoNode(node, depth, ilocZlecona) {
   if (!node) return '';
-  const key = node._bom_id || (node.symbol || node.material_indeks || '') + '-' + depth;
+  const key = node._bom_id ? ('b' + node._bom_id) : (node.id ? ('w' + node.id + 'd' + depth) : (node.symbol || node.material_indeks || '') + depth);
   const isM = node.typ === 'M';
   const isG = node.typ === 'G';
   const hasChildren = node.children && node.children.length > 0;
-  const isOpen = depth < 2 ? (state.drzewoExpanded[key] !== false) : !!state.drzewoExpanded[key];
+  // Domyślnie rozwiń tylko głębokość 0 (korzeń G). depth>=1 collapsed dla wydajności z dużymi drzewami.
+  const isOpen = depth < 1 ? (state.drzewoExpanded[key] !== false) : !!state.drzewoExpanded[key];
 
   const indent = depth * 22;
   const borderColor = isG ? '#3b82f6' : isM ? '#6b7280' : '#8b5cf6';
@@ -8239,7 +8265,7 @@ function renderDrzewoNode(node, depth, ilocZlecona) {
   const progPct = opTotal > 0 ? Math.round(opDone / opTotal * 100) : 0;
   const progColor = progPct === 100 ? '#4ade80' : '#3b82f6';
 
-  const ilocBOM = node._bom_ilosc;
+  const ilocBOM = node._bom_ilosc != null ? node._bom_ilosc : node.ilosc;
   const ilocEfekt = (ilocZlecona != null && ilocBOM != null) ? ilocBOM * ilocZlecona : ilocBOM;
 
   const statusDef = {
@@ -8434,7 +8460,14 @@ function renderDrzewoGP() {
       if (treeLoading) {
         panelContent = '<div style="display:flex;align-items:center;gap:12px;color:#475569;padding:24px"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:20px;height:20px;animation:spin .8s linear infinite"></div><span style="font-size:.79rem">Ładowanie drzewa…</span></div>';
       } else if (tree) {
-        panelContent = renderDrzewoNode(tree, 0, ilocSztuk);
+        const nodeCount = (function cnt(n){return 1 + (n.children||[]).reduce((s,c)=>s+cnt(c),0);})(tree);
+        const treeToolbar = `<div style="display:flex;gap:6px;margin-bottom:10px;align-items:center">
+          <span style="color:#475569;font-size:.72rem">${nodeCount} węzłów</span>
+          <div style="flex:1"></div>
+          <button onclick="drzewoExpandAll()" style="background:#ffffff0a;color:#94a3b8;border:1px solid #ffffff15;border-radius:5px;padding:3px 10px;font-size:.71rem;cursor:pointer">⊕ Rozwiń wszystko</button>
+          <button onclick="drzewoCollapseAll()" style="background:#ffffff0a;color:#94a3b8;border:1px solid #ffffff15;border-radius:5px;padding:3px 10px;font-size:.71rem;cursor:pointer">⊖ Zwiń wszystko</button>
+        </div>`;
+        panelContent = treeToolbar + renderDrzewoNode(tree, 0, ilocSztuk);
       } else {
         panelContent = '<div style="color:#475569;padding:24px;font-size:.79rem">Brak struktury BOM. Zaimportuj drzewo z PDF lub uzupełnij ręcznie.</div>';
       }
@@ -8517,23 +8550,28 @@ function renderDrzewoGP() {
 
 // ─── MRP card ──────────────────────────────────────────────────────────────────
 function renderDrzewoMrp(data) {
-  const { summary, materialy_zbiorczy, zapotrzebowania_p } = data;
+  const { summary, materialy_zbiorczy, zapotrzebowania_p, czasy_stanowisk } = data;
   const MRP_COLOR = { ok: '#4ade80', czesciowo: '#fbbf24', brak: '#f87171' };
   const mrpView = state.drzewoMrpView;
+
+  const listaZakupow = (materialy_zbiorczy || []).filter(m => (m.braki || 0) > 0);
 
   const statsHtml = [
     {label:'Materiałów', val:summary.material_count, color:'#94a3b8'},
     {label:'OK',          val:summary.ok_count,       color:MRP_COLOR.ok},
     {label:'Częściowo',   val:summary.czesciowo_count, color:MRP_COLOR.czesciowo},
     {label:'Brak',        val:summary.brak_count,      color:MRP_COLOR.brak},
+    {label:'Do zakupu',   val:listaZakupow.length,     color:'#f97316'},
   ].map(s => `<div style="background:#ffffff08;border:1px solid ${s.color}33;border-radius:8px;padding:10px 18px;text-align:center">
     <div style="color:${s.color};font-size:1.5rem;font-weight:700">${s.val}</div>
     <div style="color:#64748b;font-size:.71rem;margin-top:2px">${s.label}</div>
   </div>`).join('');
 
   const tabsHtml = [
-    {id:'zbiorczy', label:'Materiały (zbiorczy)'},
-    {id:'p-status', label:`Półprodukty P (${(zapotrzebowania_p||[]).length})`},
+    {id:'zbiorczy',      label:'Materiały (zbiorczy)'},
+    {id:'lista-zakupow', label:`🛒 Lista zakupów (${listaZakupow.length})`},
+    {id:'p-status',      label:`Półprodukty P (${(zapotrzebowania_p||[]).length})`},
+    {id:'czasy',         label:'⏱ Czasy operacji'},
   ].map(t => `<button onclick="setState({drzewoMrpView:'${t.id}'},true);render()"
     style="background:${mrpView===t.id?'#3b82f6':'#ffffff10'};color:${mrpView===t.id?'#fff':'#94a3b8'};border:none;border-radius:6px;padding:5px 13px;font-size:.74rem;cursor:pointer;font-weight:600">${t.label}</button>`).join('');
 
@@ -8557,7 +8595,7 @@ function renderDrzewoMrp(data) {
           <td style="padding:5px 10px"><div style="width:8px;height:8px;border-radius:50%;background:${MRP_COLOR[m.status_dostepnosci]||'#94a3b8'};display:inline-block"></div></td>
         </tr>`;
       }).join('');
-      listHtml = `<div style="max-height:380px;overflow-y:auto">
+      listHtml = `<div style="max-height:400px;overflow-y:auto">
         <table style="width:100%;border-collapse:collapse;font-size:.75rem">
           <thead><tr style="border-bottom:1px solid #ffffff15">
             ${['Indeks','Opis','Wymagane','Dostępne','Brak',''].map(h=>`<th style="padding:6px 10px;color:#64748b;text-align:left;font-weight:600;white-space:nowrap">${h}</th>`).join('')}
@@ -8565,6 +8603,72 @@ function renderDrzewoMrp(data) {
           <tbody>${rows}</tbody>
         </table>
       </div>`;
+    }
+  }
+
+  if (mrpView === 'lista-zakupow') {
+    if (listaZakupow.length === 0) {
+      listHtml = `<div style="color:#4ade80;text-align:center;padding:32px;font-size:.86rem">✓ Wszystkie materiały dostępne na stanie – brak pozycji do zamówienia.</div>`;
+    } else {
+      const rows = listaZakupow.map((m, i) => {
+        const statusColor = m.material_stan > 0 ? MRP_COLOR.czesciowo : MRP_COLOR.brak;
+        const statusLabel = m.material_stan > 0 ? 'Częściowo' : 'Brak';
+        return `<tr style="border-bottom:1px solid #ffffff08;background:${i%2===0?'transparent':'#ffffff04'}">
+          <td style="padding:6px 10px;color:#64748b;font-family:monospace;font-size:.71rem">${m.material_indeks||''}</td>
+          <td style="padding:6px 10px;color:#e2e8f0;font-size:.76rem">${m.material_opis||''}</td>
+          <td style="padding:6px 10px;color:#e2e8f0;text-align:right;font-size:.76rem;font-weight:700">${(+m.ilosc_wymagana).toLocaleString('pl-PL',{maximumFractionDigits:3})} ${m.material_jm||''}</td>
+          <td style="padding:6px 10px;color:#94a3b8;text-align:right;font-size:.76rem">${(+(m.material_stan||0)).toLocaleString('pl-PL',{maximumFractionDigits:3})}</td>
+          <td style="padding:6px 10px;color:${MRP_COLOR.brak};text-align:right;font-size:.76rem;font-weight:700">${(+m.braki).toLocaleString('pl-PL',{maximumFractionDigits:3})} ${m.material_jm||''}</td>
+          <td style="padding:6px 10px"><span style="background:${statusColor}22;color:${statusColor};font-size:.63rem;padding:2px 6px;border-radius:4px">${statusLabel}</span></td>
+        </tr>`;
+      }).join('');
+
+      // Export do schowka jako TSV
+      const exportTsv = () => {
+        const header = 'Indeks\tOpis\tWymagane\tJM\tNa stanie\tBrakuje\n';
+        const body = listaZakupow.map(m =>
+          `${m.material_indeks||''}\t${m.material_opis||''}\t${(+m.ilosc_wymagana).toFixed(3)}\t${m.material_jm||''}\t${(+(m.material_stan||0)).toFixed(3)}\t${(+m.braki).toFixed(3)}`
+        ).join('\n');
+        navigator.clipboard.writeText(header + body).then(() => {
+          alert(`Skopiowano ${listaZakupow.length} pozycji do schowka (format TSV – wklej do Excela)`);
+        });
+      };
+      window._mrpExportTsv = exportTsv;
+
+      // Rezerwacja materiałów
+      const _gidForReserve = (state.drzewoZleceniaG||[]).find(z => z.numer === (state.drzewoSelectedG||{}).symbol);
+      window._mrpRezerwuj = async function() {
+        if (!_gidForReserve) { alert('Brak zlecenia G'); return; }
+        const pozycje = (data.materialy_zbiorczy || [])
+          .filter(m => (m.ilosc_wymagana||0) > 0)
+          .map(m => ({material_indeks: m.material_indeks, ilosc_do_rezerwacji: m.ilosc_wymagana}));
+        if (!pozycje.length) { alert('Brak materiałów'); return; }
+        if (!confirm(`Zarezerwować dostępne stany dla ${pozycje.length} materiałów?\nTo zmniejszy "do dyspozycji" na magazynie.`)) return;
+        try {
+          const res = await post('/api/zlecenia/' + _gidForReserve.id + '/mrp/rezerwuj', {pozycje, tryb:'dostepne'});
+          alert('✓ Zarezerwowano: ' + res.zarezerwowane + ' poz.\nPominięto: ' + res.pominięte);
+          drzewoLoadMrp(_gidForReserve.id);
+        } catch(e) { alert('Błąd: ' + e.message); }
+      };
+
+      listHtml = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <span style="color:#f97316;font-weight:700;font-size:.82rem">⚠ ${listaZakupow.length} pozycji do zamówienia</span>
+          <div style="flex:1"></div>
+          <button onclick="window._mrpExportTsv()"
+            style="background:#1a3a1a;color:#4ade80;border:1px solid #4ade8040;border-radius:6px;padding:5px 12px;font-size:.73rem;cursor:pointer">📋 Kopiuj TSV</button>
+          ${_gidForReserve ? `<button onclick="window._mrpRezerwuj()"
+            style="background:#1a2a4a;color:#60a5fa;border:1px solid #3b82f640;border-radius:6px;padding:5px 12px;font-size:.73rem;cursor:pointer"
+            title="Blokuje dostępne stany magazynowe pod to zlecenie">🔒 Zarezerwuj dostępne stany</button>` : ''}
+        </div>
+        <div style="max-height:420px;overflow-y:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:.75rem">
+            <thead><tr style="border-bottom:1px solid #ffffff15">
+              ${['Indeks','Opis','Wymagane','Dostępne','Brakuje','Status'].map(h=>`<th style="padding:6px 10px;color:#64748b;text-align:left;font-weight:600;white-space:nowrap">${h}</th>`).join('')}
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
     }
   }
 
@@ -8589,9 +8693,53 @@ function renderDrzewoMrp(data) {
     }
   }
 
+  if (mrpView === 'czasy') {
+    const czasy = czasy_stanowisk || [];
+    if (czasy.length === 0) {
+      listHtml = `<div style="color:#475569;text-align:center;padding:32px;font-size:.79rem">
+        Brak danych o operacjach.<br>
+        <span style="font-size:.72rem">Upewnij się że zlecenia P mają zdefiniowane operacje ze stanowiskami i czasami normy.</span>
+      </div>`;
+    } else {
+      const totalMin = czasy.reduce((s, c) => s + (c.czas_razem_min || 0), 0);
+      const totalH = (totalMin / 60).toFixed(1);
+      const maxMin = Math.max(...czasy.map(c => c.czas_razem_min || 0), 1);
+
+      const rows = czasy.map((c, i) => {
+        const pct = Math.round((c.czas_razem_min / maxMin) * 100);
+        const hNorma = ((c.czas_norma_min || 0) / 60).toFixed(2);
+        const hZbroj = ((c.zbrojenie_min || 0) / 60).toFixed(2);
+        const hRazem = ((c.czas_razem_min || 0) / 60).toFixed(2);
+        return `<div style="background:#ffffff06;border:1px solid #ffffff10;border-radius:6px;padding:10px 14px;margin-bottom:6px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+            <span style="color:#60a5fa;font-weight:700;font-size:.82rem;min-width:120px">${c.stanowisko}</span>
+            <span style="color:#e2e8f0;font-size:.78rem;font-weight:600">${hRazem} h razem</span>
+            <span style="color:#64748b;font-size:.72rem">(norma: ${hNorma} h + zbrojenie: ${hZbroj} h)</span>
+          </div>
+          <div style="background:#ffffff0a;border-radius:3px;height:6px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:#3b82f6;border-radius:3px;transition:width .3s"></div>
+          </div>
+        </div>`;
+      }).join('');
+
+      listHtml = `
+        <div style="display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap">
+          <div style="background:#ffffff08;border:1px solid #3b82f633;border-radius:8px;padding:10px 18px;text-align:center">
+            <div style="color:#60a5fa;font-size:1.4rem;font-weight:700">${totalH} h</div>
+            <div style="color:#64748b;font-size:.71rem;margin-top:2px">Łączny czas</div>
+          </div>
+          <div style="background:#ffffff08;border:1px solid #8b5cf633;border-radius:8px;padding:10px 18px;text-align:center">
+            <div style="color:#a78bfa;font-size:1.4rem;font-weight:700">${czasy.length}</div>
+            <div style="color:#64748b;font-size:.71rem;margin-top:2px">Stanowisk</div>
+          </div>
+        </div>
+        <div>${rows}</div>`;
+    }
+  }
+
   return `<div>
     <div style="display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap">${statsHtml}</div>
-    <div style="display:flex;gap:4px;margin-bottom:12px">${tabsHtml}</div>
+    <div style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap">${tabsHtml}</div>
     ${listHtml}
   </div>`;
 }

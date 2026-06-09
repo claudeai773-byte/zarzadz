@@ -2318,12 +2318,75 @@ def get_mrp_zlecenia(gid: int):
             ORDER BY z.priorytet DESC
         """, (gid,)).fetchall()
 
+        # ── Agregacja czasów operacji per stanowisko ──────────────────────────
+        czasy_stanowisk: dict = {}
+        if wyrob_g:
+            # Zbierz wszystkie symbole P rekurencyjnie z BOM
+            def _collect_p_symbols(wyrob_id: int, visited: set) -> set:
+                if wyrob_id in visited:
+                    return set()
+                visited = visited | {wyrob_id}
+                p_syms = set()
+                sub_rows = conn.execute(
+                    "SELECT typ_skladnika, skladnik_id FROM wyroby_bom WHERE wyrob_id=?",
+                    (wyrob_id,)
+                ).fetchall()
+                for sr in sub_rows:
+                    if sr["typ_skladnika"] == "P" and sr["skladnik_id"]:
+                        sub_w = conn.execute(
+                            "SELECT symbol FROM wyroby WHERE id=?", (sr["skladnik_id"],)
+                        ).fetchone()
+                        if sub_w:
+                            p_syms.add(sub_w["symbol"])
+                            p_syms |= _collect_p_symbols(sr["skladnik_id"], visited)
+                return p_syms
+
+            all_p_syms = _collect_p_symbols(wyrob_g["id"], set())
+            # Dodaj też symbol G (zlecenie G może mieć własne operacje)
+            all_syms = list(all_p_syms | {zl_g["numer"]})
+
+            if all_syms:
+                placeholders = ",".join("?" * len(all_syms))
+                op_rows = conn.execute(f"""
+                    SELECT o.stanowisko,
+                           o.czas_norma,
+                           COALESCE(o.czas_zbrojenia_min, 0) as czas_zbrojenia_min,
+                           COALESCE(z.ilosc_sztuk, 1) as ilosc_sztuk
+                    FROM operacje o
+                    JOIN zlecenia z ON o.zlecenie_id = z.id
+                    WHERE z.numer IN ({placeholders})
+                      AND o.stanowisko IS NOT NULL
+                      AND o.stanowisko != ''
+                """, all_syms).fetchall()
+
+                for op in op_rows:
+                    st = op["stanowisko"]
+                    if st not in czasy_stanowisk:
+                        czasy_stanowisk[st] = {
+                            "stanowisko": st,
+                            "czas_norma_min": 0.0,
+                            "zbrojenie_min": 0.0,
+                            "czas_razem_min": 0.0,
+                        }
+                    ilosc = op["ilosc_sztuk"] or 1
+                    norma = (op["czas_norma"] or 0.0) * ilosc
+                    zbroj = op["czas_zbrojenia_min"] or 0.0
+                    czasy_stanowisk[st]["czas_norma_min"] += norma
+                    czasy_stanowisk[st]["zbrojenie_min"]  += zbroj
+                    czasy_stanowisk[st]["czas_razem_min"] += norma + zbroj
+
+        czasy_lista = sorted(
+            [{"stanowisko": k, **v} for k, v in czasy_stanowisk.items()],
+            key=lambda x: x["czas_razem_min"], reverse=True
+        )
+
         return {
             "zlecenie": dict(zl_g),
             "wyrob_g": dict(wyrob_g) if wyrob_g else None,
             "zapotrzebowania_p": [dict(r) for r in zapotrz],
             "materialy_zbiorczy": zbiorczy,
             "materialy_szczegolowy": [dict(m) for m in raw_materials],
+            "czasy_stanowisk": czasy_lista,
             "summary": {
                 "material_count": len(zbiorczy),
                 "brak_count": sum(1 for m in zbiorczy if m["status_dostepnosci"] == "brak"),
@@ -2332,7 +2395,111 @@ def get_mrp_zlecenia(gid: int):
             }
         }
 
-# ── Widok: lista wyrobów G z postępem realizacji ──────────────────────────────
+# ── MRP: Rezerwacja materiałów dla zlecenia G ─────────────────────────────────
+@app.post("/api/zlecenia/{gid}/mrp/rezerwuj", dependencies=[Depends(verify_key)])
+def mrp_rezerwuj(gid: int, body: dict = Body(...)):
+    """
+    Rezerwuje materiały MRP dla zlecenia G.
+    Tworzy wpisy w mrp_rezerwacje i zmniejsza materialy.do_dyspozycji.
+    body: { "pozycje": [{material_indeks, ilosc_do_rezerwacji}] }
+    body.tryb: "dostepne" → rezerwuj tyle ile jest na stanie (min(wymagane, dostepne))
+               "wszystko"  → rezerwuj pełne wymaganie (nawet jeśli brak na stanie)
+    """
+    pozycje = body.get("pozycje", [])
+    tryb = body.get("tryb", "dostepne")  # dostepne | wszystko
+    if not pozycje:
+        raise HTTPException(400, "Brak pozycji do rezerwacji")
+
+    with get_db() as conn:
+        zl = conn.execute("SELECT numer FROM zlecenia WHERE id=?", (gid,)).fetchone()
+        if not zl:
+            raise HTTPException(404, "Zlecenie nie znalezione")
+        zlecenie_nr = zl["numer"]
+
+        zarezerwowane = []
+        pominięte = []
+
+        for poz in pozycje:
+            indeks = poz.get("material_indeks", "").strip()
+            ilosc_req = float(poz.get("ilosc_do_rezerwacji", 0) or 0)
+            if not indeks or ilosc_req <= 0:
+                continue
+
+            mat = conn.execute(
+                "SELECT id, do_dyspozycji FROM materialy WHERE indeks=?", (indeks,)
+            ).fetchone()
+            if not mat:
+                pominięte.append({"indeks": indeks, "powod": "nie znaleziono"})
+                continue
+
+            dostepne = float(mat["do_dyspozycji"] or 0)
+            if tryb == "dostepne":
+                ilosc_rez = min(ilosc_req, max(dostepne, 0))
+            else:
+                ilosc_rez = ilosc_req
+
+            if ilosc_rez <= 0:
+                pominięte.append({"indeks": indeks, "powod": "brak stanu"})
+                continue
+
+            # Zmniejsz do_dyspozycji
+            new_dysp = max(dostepne - ilosc_rez, 0)
+            conn.execute(
+                "UPDATE materialy SET do_dyspozycji=? WHERE indeks=?",
+                (round(new_dysp, 4), indeks)
+            )
+
+            # Zapisz rezerwację
+            conn.execute("""
+                INSERT OR IGNORE INTO mrp_rezerwacje
+                    (zlecenie_id, zlecenie_nr, material_indeks, ilosc)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(zlecenie_id, material_indeks) DO UPDATE SET
+                    ilosc = ilosc + excluded.ilosc,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (gid, zlecenie_nr, indeks, round(ilosc_rez, 4)))
+            zarezerwowane.append({"indeks": indeks, "ilosc": round(ilosc_rez, 4)})
+
+        return {
+            "ok": True,
+            "zarezerwowane": len(zarezerwowane),
+            "pominięte": len(pominięte),
+            "szczegoly": zarezerwowane,
+        }
+
+
+@app.delete("/api/zlecenia/{gid}/mrp/rezerwuj", dependencies=[Depends(verify_key)])
+def mrp_anuluj_rezerwacje(gid: int):
+    """Anuluje wszystkie rezerwacje MRP dla zlecenia i przywraca stany magazynowe."""
+    with get_db() as conn:
+        rezerwy = conn.execute(
+            "SELECT material_indeks, ilosc FROM mrp_rezerwacje WHERE zlecenie_id=?", (gid,)
+        ).fetchall()
+        for r in rezerwy:
+            conn.execute(
+                "UPDATE materialy SET do_dyspozycji = do_dyspozycji + ? WHERE indeks=?",
+                (r["ilosc"], r["material_indeks"])
+            )
+        deleted = conn.execute(
+            "DELETE FROM mrp_rezerwacje WHERE zlecenie_id=?", (gid,)
+        ).rowcount
+        return {"ok": True, "zwolniono": deleted}
+
+
+@app.get("/api/zlecenia/{gid}/mrp/rezerwacje", dependencies=[Depends(verify_key)])
+def mrp_get_rezerwacje(gid: int):
+    """Zwraca aktualne rezerwacje MRP dla zlecenia."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT r.*, m.opis as material_opis, m.jm as material_jm
+            FROM mrp_rezerwacje r
+            LEFT JOIN materialy m ON m.indeks = r.material_indeks
+            WHERE r.zlecenie_id=?
+            ORDER BY r.material_indeks
+        """, (gid,)).fetchall()
+        return [dict(r) for r in rows]
+
+
 @app.get("/api/wyroby-g/postep", dependencies=[Depends(verify_key)])
 def get_wyroby_g_postep():
     """Widok zarządczy: wyroby G ze statusem zlecenia i postępem P."""
@@ -3445,6 +3612,18 @@ def init_db_on_start():
         try: c.execute(f"ALTER TABLE narzedzia ADD COLUMN {_col} {_def}")
         except: pass
 
+    # ➤ MRP – rezerwacje materiałów pod zlecenia G
+    c.execute("""CREATE TABLE IF NOT EXISTS mrp_rezerwacje (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        zlecenie_id INTEGER NOT NULL,
+        zlecenie_nr TEXT NOT NULL,
+        material_indeks TEXT NOT NULL,
+        ilosc REAL NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(zlecenie_id, material_indeks),
+        FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id) ON DELETE CASCADE)""")
+
     # ➤ Narzędziownia – rezerwacje narzędzi pod zlecenia
     c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_rezerwacje (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3619,6 +3798,7 @@ _TABLES_TO_BACKUP = [
     "wyroby",               # katalog wyrobow i polproduktow G/P
     "wyroby_bom",           # struktura BOM wyrobow
     "zapotrzebowania",      # zapotrzebowania P dla zlecen G
+    "mrp_rezerwacje",       # rezerwacje materialow MRP pod zlecenia G
 ]
 
 # ─── GitHub Gist helpers ────────────────────────────────────────────────────────

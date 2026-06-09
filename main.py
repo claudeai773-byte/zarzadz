@@ -1779,44 +1779,66 @@ def get_wyrob_drzewo(wid: int, max_depth: int = 10):
                 zlecenia_map.setdefault(sym, []).append(dict(z))
 
         # ── Budowanie drzewa w pamięci ─────────────────────────────────────────
-        # children_map[wyrob_id] = [lista węzłów-dzieci]
-        children_map = {}
+        # Kluczowa zmiana: węzły P są indeksowane po bom_id (unikalnym), nie po
+        # wyrob_id – dzięki temu ten sam wyrób P występujący wielokrotnie w drzewie
+        # (pod różnymi rodzicami lub z różnymi ilościami) tworzy osobne węzły
+        # i nie dochodzi do scalania/sumowania ilości.
+        #
+        # children_by_parent[wyrob_id] = [lista węzłów-dzieci (obiekty słownikowe)]
+        # nodes_by_bom_id[bom_id]      = węzeł P (referencja do obiektu w liście children)
+
+        children_by_parent: dict = {}   # wyrob_id  → [child_node, ...]
+        nodes_by_bom_id: dict    = {}   # bom_id    → node dict (tylko P)
+
         for r in bom_rows:
             parent_id = r["wyrob_id"]
-            if parent_id not in children_map:
-                children_map[parent_id] = []
+            children_by_parent.setdefault(parent_id, [])
 
             if r["typ_skladnika"] == "P":
                 child_wyrob = wyroby_map.get(r["skladnik_id"], {})
+                # Filtruj zlecenia wg ilosc_sztuk – pobieramy te, których ilosc_sztuk
+                # odpowiada ilości z BOM (lub wszystkie, jeśli nie ma dopasowania).
+                all_zl = zlecenia_map.get(child_wyrob.get("symbol", ""), [])
+                bom_ilosc = r["ilosc"]
+                matching = [z for z in all_zl if z.get("ilosc_sztuk") == bom_ilosc]
+                zlecenia_for_node = matching if matching else all_zl
+
                 node = dict(child_wyrob)
-                node["zlecenia"]       = zlecenia_map.get(child_wyrob.get("symbol",""), [])
+                node["zlecenia"]       = zlecenia_for_node
                 node["_bom_id"]        = r["bom_id"]
-                node["_bom_ilosc"]     = r["ilosc"]
+                node["_bom_ilosc"]     = bom_ilosc
                 node["_bom_jednostka"] = r["jednostka"]
                 node["_bom_pozycja"]   = r["pozycja"]
                 node["_bom_uwagi"]     = r["uwagi"]
                 node["children"]       = []  # wypełni się poniżej
-                children_map[parent_id].append(node)
+                children_by_parent[parent_id].append(node)
+                nodes_by_bom_id[r["bom_id"]] = node
             else:  # M
                 mat = materialy_map.get(r["material_indeks"], {})
-                children_map[parent_id].append({
+                m_node = {
                     "typ":            "M",
                     "material_indeks": r["material_indeks"],
-                    "material_opis":   mat.get("opis", r["material_indeks"]),
+                    # Opis: priorytet słownik materiałów → fallback uwagi BOM → indeks
+                    "material_opis":   mat.get("opis") or r.get("uwagi") or r["material_indeks"],
                     "material_jm":     mat.get("jm", r["jednostka"]),
                     "material_stan":   mat.get("do_dyspozycji", 0),
                     "ilosc":           r["ilosc"],
                     "jednostka":       r["jednostka"],
                     "_bom_id":         r["bom_id"],
-                })
+                    "_bom_pozycja":    r["pozycja"],
+                    "_bom_uwagi":      r.get("uwagi", ""),
+                }
+                children_by_parent[parent_id].append(m_node)
 
-        # Przypisz children do węzłów P (jeden przebieg)
+        # Przypisz children do węzłów P (jeden przebieg po bom_rows).
+        # Używamy nodes_by_bom_id żeby trafić w konkretny węzeł-instancję,
+        # a nie w dowolne wystąpienie tego samego wyrob_id.
         def _attach_children(node: dict) -> dict:
             nid = node.get("id")
-            if nid and nid in children_map:
+            if nid and nid in children_by_parent:
                 node["children"] = [
-                    _attach_children(ch) if ch.get("typ") != "M" else ch
-                    for ch in children_map[nid]
+                    _attach_children(dict(ch)) if ch.get("typ") != "M" else ch
+                    for ch in children_by_parent[nid]
                 ]
             elif "children" not in node:
                 node["children"] = []
@@ -1826,8 +1848,8 @@ def get_wyrob_drzewo(wid: int, max_depth: int = 10):
         root_node = dict(wyroby_map.get(wid, dict(root)))
         root_node["zlecenia"] = zlecenia_map.get(root_node.get("symbol", ""), [])
         root_node["children"] = [
-            _attach_children(ch) if ch.get("typ") != "M" else ch
-            for ch in children_map.get(wid, [])
+            _attach_children(dict(ch)) if ch.get("typ") != "M" else ch
+            for ch in children_by_parent.get(wid, [])
         ]
         return root_node
 

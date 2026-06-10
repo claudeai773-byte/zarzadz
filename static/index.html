@@ -1596,6 +1596,8 @@ async function deleteZlecenie(id) {
   try {
     await del(`/api/zlecenia/${id}`);
     await loadZlecenia();
+    // Odśwież drzewo jeśli aktywna zakładka
+    if (state.tab === 'drzewo') loadDrzewoGP();
   } catch(e) {
     alert('Błąd: ' + e.message);
   }
@@ -4020,6 +4022,14 @@ async function deleteZlecenieFromModal(zid) {
     await del('/api/zlecenia/' + zid);
     setState({zlecenieModal: null});
     await loadMajster();
+    // Odśwież drzewo – zlecenie znika automatycznie
+    if (state.tab === 'drzewo' || true) {
+      const [g, p, zl] = await Promise.all([
+        get('/api/wyroby?typ=G'), get('/api/wyroby?typ=P'), get('/api/zlecenia'),
+      ]);
+      const zlG = zl.filter(z => g.some(wg => wg.symbol === z.numer));
+      setState({drzewoWyrobyG: g, drzewoWyrobyP: p, drzewoZleceniaG: zlG});
+    }
     alert('Zlecenie zostało usunięte.');
   } catch(e) {
     alert('Błąd usuwania: ' + e.message);
@@ -8717,61 +8727,69 @@ async function nzSave() {
     }
 
     // 3. Rekurencyjnie przetwórz drzewo – tworząc operacje, wyroby P, BOM
-    let opKolejnosc = 1;
+    let opKolejnosc = 1;   // kolejność operacji w zleceniu
+    let pKolejnosc = 1;    // numer auto-symbolu węzłów P (niezależny od op)
 
     // Zapisz listę operacji (ops[]) danego węzła do bazy jako operacje zlecenia
     async function saveNodeOps(nodeOps) {
       for (const op of (nodeOps || [])) {
         if (!op.nazwa && !op.stanowisko) continue; // pomiń puste
-        await post('/api/operacje', {
-          zlecenie_id: zlecenieId,
-          nazwa: op.nazwa || op.stanowisko || 'Operacja',
-          kolejnosc: opKolejnosc++,
-          czas_norma: parseFloat(op.czas_norma) || 0,
-          stanowisko: op.stanowisko || '',
-          opis_czynnosci: op.opis_czynnosci || '',
-          czas_zbrojenia_min: parseFloat(op.czas_zbrojenia) || 0,
-        });
+        try {
+          await post('/api/operacje', {
+            zlecenie_id: zlecenieId,
+            nazwa: op.nazwa || op.stanowisko || 'Operacja',
+            kolejnosc: opKolejnosc++,
+            czas_norma: parseFloat(op.czas_norma) || 0,
+            stanowisko: op.stanowisko || '',
+            opis_czynnosci: op.opis_czynnosci || '',
+            czas_zbrojenia_min: parseFloat(op.czas_zbrojenia) || 0,
+          });
+        } catch(e) { console.warn('Operacja zapis:', e); }
       }
     }
 
     async function processChildren(parentWyrob_id, children) {
+      if (!parentWyrob_id) { console.error('processChildren: brak parentWyrob_id'); return; }
       for (const node of (children || [])) {
         if (node.typ === 'P') {
-          // a) Zapisz operacje węzła P
-          await saveNodeOps(node.ops);
-          // b) Utwórz wyrób P w drzewie BOM – zawsze (auto-symbol jeśli brak)
-          {
-            const pSymbol = node.symbol || (state.nzNumer + '-P' + opKolejnosc);
-            const pNazwa = node.nazwa || pSymbol;
-            let wyrob_p_id = null;
+          // a) Utwórz wyrób P w drzewie BOM – zawsze (auto-symbol jeśli brak)
+          const pSymbol = (node.symbol || '').trim() || (state.nzNumer + '-P' + pKolejnosc);
+          const pNazwa  = (node.nazwa  || '').trim() || pSymbol;
+          pKolejnosc++;
+          let wyrob_p_id = null;
+          try {
+            const wp = await post('/api/wyroby', {
+              symbol: pSymbol, typ: 'P', nazwa: pNazwa,
+              jednostka: node.jednostka || 'szt',
+            });
+            wyrob_p_id = wp.id;
+          } catch(e) {
+            // Symbol już istnieje – pobierz id
             try {
-              const wp = await post('/api/wyroby', {
-                symbol: pSymbol,
-                typ: 'P',
-                nazwa: pNazwa,
-                jednostka: node.jednostka || 'szt',
-              });
-              wyrob_p_id = wp.id;
-            } catch(e) {
               const list = await get('/api/wyroby?typ=P&q=' + encodeURIComponent(pSymbol));
               const found = list.find(w => w.symbol === pSymbol);
               if (found) wyrob_p_id = found.id;
+            } catch(_) {}
+          }
+          if (wyrob_p_id) {
+            // b) Dodaj do BOM rodzica
+            try {
+              await post(`/api/wyroby/${parentWyrob_id}/bom`, {
+                skladnik_id: wyrob_p_id,
+                typ_skladnika: 'P',
+                ilosc: parseFloat(node.ilosc) || 1,
+                jednostka: node.jednostka || 'szt',
+                pozycja: pKolejnosc - 1,
+              });
+            } catch(e) { console.warn('BOM P dodanie:', e.message); }
+            // c) Zapisz operacje węzła P
+            await saveNodeOps(node.ops);
+            // d) Rekurencja dla dzieci
+            if (node.children && node.children.length) {
+              await processChildren(wyrob_p_id, node.children);
             }
-            if (wyrob_p_id) {
-              try {
-                await post(`/api/wyroby/${parentWyrob_id}/bom`, {
-                  skladnik_id: wyrob_p_id,
-                  typ_skladnika: 'P',
-                  ilosc: parseFloat(node.ilosc) || 1,
-                  jednostka: node.jednostka || 'szt',
-                  pozycja: opKolejnosc - 1,
-                });
-              } catch(e) { console.warn('BOM P:', e); }
-              if (node.children && node.children.length) {
-                await processChildren(wyrob_p_id, node.children);
-              }
-            }
+          } else {
+            console.warn('Nie udało się utworzyć/znaleźć wyrobu P:', pSymbol);
           }
         } else if (node.typ === 'M' && node.material_indeks) {
           const zap = nzCalcZapotrzebowanie(node, state.nzIlosc || 1);
@@ -8782,14 +8800,16 @@ async function nzSave() {
               ilosc: zap.wartosc,
               jednostka: zap.jm,
               uwagi: node.material_opis || '',
-              pozycja: opKolejnosc,
+              pozycja: pKolejnosc,
             });
-          } catch(e) { console.warn('BOM M:', e); }
+          } catch(e) { console.warn('BOM M:', e.message); }
         }
       }
     }
 
-    // Zapisz operacje węzła G (głównego)
+    if (!wyrob_g_id) throw new Error('Nie można zapisać drzewa: brak wyrobu G');
+
+    // Zapisz operacje węzła G (głównego), potem przetwórz dzieci
     await saveNodeOps(tree.ops);
     await processChildren(wyrob_g_id, tree.children);
 
@@ -9374,6 +9394,24 @@ async function drzewoSaveNowy() {
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
+async function drzewoDeleteZlecenie(zid, numer) {
+  if (!confirm(`Usunąć zlecenie ${numer}?\n\nZostaną usunięte wszystkie operacje i sesje pracy. Struktura BOM (wyrób G i powiązane P) pozostanie nienaruszona.`)) return;
+  try {
+    await del('/api/zlecenia/' + zid);
+    // Odśwież: przeładuj listę zleceń G i odznacz jeśli nie ma już zlecenia
+    await loadZlecenia();
+    const [g, p, zl] = await Promise.all([
+      get('/api/wyroby?typ=G'),
+      get('/api/wyroby?typ=P'),
+      get('/api/zlecenia'),
+    ]);
+    const zlG = zl.filter(z => g.some(wg => wg.symbol === z.numer));
+    setState({drzewoWyrobyG: g, drzewoWyrobyP: p, drzewoZleceniaG: zlG});
+    // Komunikat
+    alert(`✓ Zlecenie ${numer} usunięte.`);
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
 // ─── Helpers: rozwiń / zwiń całe drzewo ───────────────────────────────────────
 function _collectNodeKeys(node, depth, acc) {
   if (!node) return;
@@ -9666,10 +9704,18 @@ function renderDrzewoGP() {
       </div>`;
     }
 
+    const deleteZlecenieBtn = zlecenieG
+      ? `<button onclick="drzewoDeleteZlecenie(${zlecenieG.id},'${(zlecenieG.numer||'').replace(/'/g,"\'")}')"
+           title="Usuń zlecenie"
+           style="margin-left:auto;background:#3a1a1a;color:#f87171;border:1px solid #f8717133;border-radius:6px;padding:5px 12px;font-size:.72rem;cursor:pointer;font-weight:600;white-space:nowrap">
+           🗑 Usuń zlecenie
+         </button>`
+      : '';
+
     rightHtml = `<div>
-      <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:20px;flex-wrap:wrap">
-        <div>
-          <div style="display:flex;align-items:center;gap:10px">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="color:#60a5fa;font-weight:700;font-size:1.1rem;font-family:monospace">${selG.symbol}</span>
             ${statusBadge}
           </div>
@@ -9677,6 +9723,7 @@ function renderDrzewoGP() {
           ${selG.numer_rysunku ? `<div style="color:#475569;font-size:.71rem;margin-top:2px">Rys. ${selG.numer_rysunku}</div>` : ''}
         </div>
         ${headerRight}
+        ${deleteZlecenieBtn}
       </div>
       <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid #ffffff10;padding-bottom:8px">
         ${tabsHtml}

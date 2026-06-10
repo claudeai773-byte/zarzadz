@@ -8494,6 +8494,7 @@ function nzGoStep2() {
     _id: nzNewId(), typ: 'G',
     symbol: numer, nazwa: nazwa,
     ilosc: ilosc, jednostka: 'szt',
+    ops: [],      // lista operacji dla węzła G
     children: [],
   };
 
@@ -8556,19 +8557,48 @@ function nzMoveNode(id, dir) {
 // ── Dodaj węzeł ──────────────────────────────────────────────────────────────
 
 function nzAddP(parentId) {
-  // Dodaj pusty węzeł P (operacja produkcyjna) jako dziecko wskazanego węzła
+  // Dodaj pusty węzeł P (półprodukt/podzespół) jako dziecko wskazanego węzła
   const root = JSON.parse(JSON.stringify(state.nzTree));
   const parent = nzFindNode(root, parentId);
   if (!parent) return;
   const newNode = {
     _id: nzNewId(), typ: 'P',
     symbol: '', nazwa: '',
-    stanowisko: '', czas_norma: 0, czas_zbrojenia: 0, opis_czynnosci: '',
     ilosc: 1, jednostka: 'szt',
+    ops: [],      // lista operacji dla tego węzła P
     children: [],
   };
   parent.children.push(newNode);
   setState({ nzTree: root, nzEditNode: newNode._id });
+}
+
+// ── Operacje (wielokrotne) na węźle G lub P ───────────────────────────────────
+function nzAddOp(nodeId) {
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const node = nzFindNode(root, nodeId);
+  if (!node) return;
+  if (!node.ops) node.ops = [];
+  const newOp = { _id: nzNewId(), nazwa: '', stanowisko: '', czas_norma: 0, czas_zbrojenia: 0, opis_czynnosci: '' };
+  node.ops.push(newOp);
+  setState({ nzTree: root });
+}
+
+function nzDeleteOp(nodeId, opId) {
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const node = nzFindNode(root, nodeId);
+  if (!node || !node.ops) return;
+  node.ops = node.ops.filter(o => o._id !== opId);
+  setState({ nzTree: root });
+}
+
+function nzUpdateOp(nodeId, opId, field, value) {
+  const root = JSON.parse(JSON.stringify(state.nzTree));
+  const node = nzFindNode(root, nodeId);
+  if (!node || !node.ops) return;
+  const op = node.ops.find(o => o._id === opId);
+  if (!op) return;
+  op[field] = value;
+  setState({ nzTree: root });
 }
 
 function nzAddM(parentId) {
@@ -8686,43 +8716,49 @@ async function nzSave() {
       else throw new Error('Nie udało się utworzyć wyrobu G: ' + e.message);
     }
 
-    // 3. Rekurencyjnie przetwórz dzieci – tworząc operacje, wyroby P, BOM
+    // 3. Rekurencyjnie przetwórz drzewo – tworząc operacje, wyroby P, BOM
     let opKolejnosc = 1;
+
+    // Zapisz listę operacji (ops[]) danego węzła do bazy jako operacje zlecenia
+    async function saveNodeOps(nodeOps) {
+      for (const op of (nodeOps || [])) {
+        if (!op.nazwa && !op.stanowisko) continue; // pomiń puste
+        await post('/api/operacje', {
+          zlecenie_id: zlecenieId,
+          nazwa: op.nazwa || op.stanowisko || 'Operacja',
+          kolejnosc: opKolejnosc++,
+          czas_norma: parseFloat(op.czas_norma) || 0,
+          stanowisko: op.stanowisko || '',
+          opis_czynnosci: op.opis_czynnosci || '',
+          czas_zbrojenia_min: parseFloat(op.czas_zbrojenia) || 0,
+        });
+      }
+    }
 
     async function processChildren(parentWyrob_id, children) {
       for (const node of (children || [])) {
         if (node.typ === 'P') {
-          // Węzeł P – to operacja produkcyjna lub półprodukt
-          // a) Dodaj operację do zlecenia
-          if (node.nazwa) {
-            await post('/api/operacje', {
-              zlecenie_id: zlecenieId,
-              nazwa: node.nazwa,
-              kolejnosc: opKolejnosc++,
-              czas_norma: parseFloat(node.czas_norma) || 0,
-              stanowisko: node.stanowisko || '',
-              opis_czynnosci: node.opis_czynnosci || '',
-              czas_zbrojenia_min: parseFloat(node.czas_zbrojenia) || 0,
-            });
-          }
-          // b) Utwórz wyrób P w drzewie BOM (jeśli podano symbol)
-          if (node.symbol) {
+          // a) Zapisz operacje węzła P
+          await saveNodeOps(node.ops);
+          // b) Utwórz wyrób P w drzewie BOM – zawsze (auto-symbol jeśli brak)
+          {
+            const pSymbol = node.symbol || (state.nzNumer + '-P' + opKolejnosc);
+            const pNazwa = node.nazwa || pSymbol;
             let wyrob_p_id = null;
             try {
               const wp = await post('/api/wyroby', {
-                symbol: node.symbol,
+                symbol: pSymbol,
                 typ: 'P',
-                nazwa: node.nazwa || node.symbol,
+                nazwa: pNazwa,
                 jednostka: node.jednostka || 'szt',
               });
               wyrob_p_id = wp.id;
             } catch(e) {
-              const list = await get('/api/wyroby?typ=P&q=' + encodeURIComponent(node.symbol));
-              const found = list.find(w => w.symbol === node.symbol);
+              const list = await get('/api/wyroby?typ=P&q=' + encodeURIComponent(pSymbol));
+              const found = list.find(w => w.symbol === pSymbol);
               if (found) wyrob_p_id = found.id;
             }
             if (wyrob_p_id) {
-              // Dodaj do BOM rodzica
               try {
                 await post(`/api/wyroby/${parentWyrob_id}/bom`, {
                   skladnik_id: wyrob_p_id,
@@ -8732,15 +8768,12 @@ async function nzSave() {
                   pozycja: opKolejnosc - 1,
                 });
               } catch(e) { console.warn('BOM P:', e); }
-              // Rekurencja
               if (node.children && node.children.length) {
                 await processChildren(wyrob_p_id, node.children);
               }
             }
           }
         } else if (node.typ === 'M' && node.material_indeks) {
-          // Węzeł M – materiał z bazy
-          // Wylicz zapotrzebowanie na podstawie trybu pomiaru
           const zap = nzCalcZapotrzebowanie(node, state.nzIlosc || 1);
           try {
             await post(`/api/wyroby/${parentWyrob_id}/bom`, {
@@ -8756,22 +8789,9 @@ async function nzSave() {
       }
     }
 
+    // Zapisz operacje węzła G (głównego)
+    await saveNodeOps(tree.ops);
     await processChildren(wyrob_g_id, tree.children);
-
-    // 3b. Jeśli węzeł G ma zdefiniowaną operację – dodaj ją do zlecenia
-    if (tree.stanowisko || tree.nazwa_operacji) {
-      try {
-        await post('/api/operacje', {
-          zlecenie_id: zlecenieId,
-          nazwa: tree.nazwa_operacji || tree.nazwa,
-          kolejnosc: opKolejnosc++,
-          czas_norma: parseFloat(tree.czas_norma) || 0,
-          stanowisko: tree.stanowisko || '',
-          opis_czynnosci: tree.opis_czynnosci || '',
-          czas_zbrojenia_min: parseFloat(tree.czas_zbrojenia) || 0,
-        });
-      } catch(e) { console.warn('Operacja G:', e); }
-    }
 
     // 4. Odśwież listę zleceń i drzewo
     await loadZlecenia();
@@ -8880,8 +8900,10 @@ function renderNzWizard() {
       const isEditing = node._id === editId;
       const borderCol = isG ? '#3b82f6' : isP ? '#8b5cf6' : '#6b7280';
       const bg = isEditing ? 'rgba(59,130,246,0.12)' : (isG ? 'rgba(59,130,246,0.06)' : isP ? 'rgba(139,92,246,0.06)' : 'rgba(107,114,128,0.05)');
-      const label = isG ? `<span style="color:#60a5fa;font-family:monospace;font-weight:700">${node.symbol}</span> <span style="color:#e2e8f0">${node.nazwa}</span>`
-                  : isP ? `<span style="color:#a78bfa;font-size:.72rem;font-family:monospace">${node.symbol||'—'}</span> <span style="color:#e2e8f0;font-size:.8rem">${node.nazwa||'(bez nazwy)'}</span>`
+      const pOpsCount = isP ? (node.ops||[]).length : 0;
+      const gOpsCount = isG ? (node.ops||[]).length : 0;
+      const label = isG ? `<span style="color:#60a5fa;font-family:monospace;font-weight:700">${node.symbol}</span> <span style="color:#e2e8f0">${node.nazwa}</span>${gOpsCount>0?` <span style="font-size:.62rem;color:#475569;background:#1e3a5f;padding:1px 5px;border-radius:3px">${gOpsCount} op.</span>`:''}`
+                  : isP ? `<span style="color:#a78bfa;font-size:.72rem;font-family:monospace">${node.symbol||'—'}</span> <span style="color:#e2e8f0;font-size:.8rem">${node.nazwa||'(bez nazwy)'}</span>${pOpsCount>0?` <span style="font-size:.62rem;color:#475569;background:#2d1f5e;padding:1px 5px;border-radius:3px">${pOpsCount} op.</span>`:''}`
                   : `<span style="color:#9ca3af;font-family:monospace;font-size:.7rem">${node.material_indeks||'—'}</span> <span style="color:#9ca3af;font-size:.78rem">${node.material_opis||''}</span>`;
       const ilocStr = (() => {
         if (isM) {
@@ -8937,126 +8959,123 @@ function renderNzWizard() {
     let editPanel = '';
     if (editNode) {
       if (editNode.typ === 'G') {
-        const stanOptionsG = (state.stawki||[]).map(s =>
-          `<option value="${s.stanowisko}" ${editNode.stanowisko===s.stanowisko?'selected':''}>${s.stanowisko}</option>`
+        const gOps = editNode.ops || [];
+        const stanOptionsForOp = (stanowisko) => (state.stawki||[]).map(s =>
+          `<option value="${s.stanowisko}" ${stanowisko===s.stanowisko?'selected':''}>${s.stanowisko}</option>`
         ).join('');
-        const hasGOp = !!(editNode.stanowisko || editNode.czas_norma || editNode.nazwa_operacji);
+        const opsHtml = gOps.map((op,i) => `
+          <div style="background:#0a1628;border:1px solid #1e3a5f44;border-radius:6px;padding:8px 10px;margin-bottom:6px">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+              <span style="color:#60a5fa;font-size:.7rem;font-weight:700">Op. ${i+1}</span>
+              <button onclick="nzDeleteOp('${editNode._id}','${op._id}')"
+                      style="margin-left:auto;background:transparent;border:none;color:#475569;cursor:pointer;font-size:.78rem" title="Usuń operację">✕</button>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <input type="text" placeholder="Nazwa operacji" value="${op.nazwa||''}"
+                     onchange="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+              <select onchange="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
+                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+                <option value="">— stanowisko —</option>
+                ${stanOptionsForOp(op.stanowisko)}
+              </select>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+                <input type="number" step="0.5" min="0" placeholder="Czas min/szt" value="${op.czas_norma||0}"
+                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_norma',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+                <input type="number" step="1" min="0" placeholder="Zbrojenie min" value="${op.czas_zbrojenia||0}"
+                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+              </div>
+              <input type="text" placeholder="Opis czynności (opcjonalnie)" value="${op.opis_czynnosci||''}"
+                     onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+            </div>
+          </div>`).join('');
         editPanel = `
-          <div style="font-size:.78rem;font-weight:700;color:#60a5fa;margin-bottom:10px">🌳 Wyrób główny G</div>
-          <div style="font-size:.75rem;color:#64748b">Symbol: <b style="color:#e2e8f0">${editNode.symbol}</b></div>
-          <div style="font-size:.75rem;color:#64748b;margin-top:2px">Nazwa: <b style="color:#e2e8f0">${editNode.nazwa}</b></div>
+          <div style="font-size:.78rem;font-weight:700;color:#60a5fa;margin-bottom:6px">🌳 Wyrób główny G</div>
+          <div style="font-size:.74rem;color:#64748b">Symbol: <b style="color:#e2e8f0">${editNode.symbol}</b> &nbsp;·&nbsp; ${editNode.nazwa}</div>
 
-          <!-- Sekcja: operacja na G -->
-          <div style="margin-top:12px;border-top:1px solid #1e293b;padding-top:12px">
-            <div style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
-              ⚙ Operacja na G (opcjonalna)
+          <!-- Operacje na G -->
+          <div style="margin-top:12px;border-top:1px solid #1e293b;padding-top:10px">
+            <div style="display:flex;align-items:center;margin-bottom:8px">
+              <span style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px">⚙ Operacje (${gOps.length})</span>
+              <button onclick="nzAddOp('${editNode._id}')"
+                      style="margin-left:auto;background:#1e3a5f;color:#60a5fa;border:1px solid #3b82f644;border-radius:5px;padding:3px 10px;font-size:.72rem;cursor:pointer;font-weight:700">+ Dodaj operację</button>
             </div>
-            <div style="background:#0a1628;border:1px solid #1e3a5f33;border-radius:6px;padding:8px 10px;font-size:.71rem;color:#475569;margin-bottom:10px">
-              Jeśli wyrób G jest obrabiany bezpośrednio (np. po kompletacji P, albo jest jedynym wyrobem) – zdefiniuj operację tutaj.
-            </div>
-            <div style="display:flex;flex-direction:column;gap:8px">
-              <div>
-                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Nazwa operacji na G</label>
-                <input type="text" placeholder="np. Montaż końcowy, Kontrola jakości"
-                       value="${editNode.nazwa_operacji||''}"
-                       onchange="nzUpdateField('${editNode._id}','nazwa_operacji',this.value)"
-                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
-              </div>
-              <div>
-                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Stanowisko / operacja</label>
-                <select onchange="nzUpdateField('${editNode._id}','stanowisko',this.value)"
-                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
-                  <option value="">— brak operacji na G —</option>
-                  ${stanOptionsG}
-                </select>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-                <div>
-                  <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Czas (min/szt)</label>
-                  <input type="number" step="0.5" min="0"
-                         value="${editNode.czas_norma||0}"
-                         onchange="nzUpdateField('${editNode._id}','czas_norma',+this.value)"
-                         style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
-                </div>
-                <div>
-                  <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Zbrojenie (min)</label>
-                  <input type="number" step="1" min="0"
-                         value="${editNode.czas_zbrojenia||0}"
-                         onchange="nzUpdateField('${editNode._id}','czas_zbrojenia',+this.value)"
-                         style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
-                </div>
-              </div>
-              <div>
-                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Opis czynności</label>
-                <textarea rows="2" onchange="nzUpdateField('${editNode._id}','opis_czynnosci',this.value)"
-                          style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical">${editNode.opis_czynnosci||''}</textarea>
-              </div>
-            </div>
+            ${gOps.length === 0
+              ? '<div style="color:#334155;font-size:.75rem;padding:6px 0">Brak operacji. Kliknij "+ Dodaj operację" aby dodać cięcie, toczenie, frezowanie itp.</div>'
+              : opsHtml}
           </div>
 
-          <!-- Sekcja: dodaj dzieci -->
-          <div style="margin-top:12px;border-top:1px solid #1e293b;padding-top:12px;display:flex;flex-direction:column;gap:6px">
-            <div style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">
-              Dodaj elementy podrzędne
-            </div>
+          <!-- Dodaj dzieci BOM -->
+          <div style="margin-top:10px;border-top:1px solid #1e293b;padding-top:10px;display:flex;gap:6px">
             <button onclick="nzAddP('${editNode._id}')"
-                    style="background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf644;border-radius:6px;padding:8px;cursor:pointer;font-size:.82rem;font-weight:600">
-              + Dodaj operację / półprodukt (P)
+                    style="flex:1;background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf644;border-radius:6px;padding:7px;cursor:pointer;font-size:.78rem;font-weight:600">
+              + Półprodukt (P)
             </button>
             <button onclick="nzAddM('${editNode._id}')"
-                    style="background:#1a1f2e;color:#6b7280;border:1px solid #6b728044;border-radius:6px;padding:8px;cursor:pointer;font-size:.82rem">
-              + Dodaj materiał (M)
+                    style="flex:1;background:#1a1f2e;color:#6b7280;border:1px solid #6b728044;border-radius:6px;padding:7px;cursor:pointer;font-size:.78rem">
+              + Materiał (M)
             </button>
           </div>`;
 
       } else if (editNode.typ === 'P') {
-        const stanOptions = (state.stawki||[]).map(s =>
-          `<option value="${s.stanowisko}" ${editNode.stanowisko===s.stanowisko?'selected':''}>${s.stanowisko}</option>`
+        const pOps = editNode.ops || [];
+        const stanOptsP = (stanowisko) => (state.stawki||[]).map(s =>
+          `<option value="${s.stanowisko}" ${stanowisko===s.stanowisko?'selected':''}>${s.stanowisko}</option>`
         ).join('');
-        editPanel = `
-          <div style="font-size:.78rem;font-weight:700;color:#a78bfa;margin-bottom:10px">⚙ Operacja / Półprodukt P</div>
-          <div style="display:flex;flex-direction:column;gap:8px">
-            <div>
-              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Symbol (opcjonalny – do drzewa BOM)</label>
-              <input type="text" placeholder="np. P-001"
-                     value="${editNode.symbol||''}"
-                     onchange="nzUpdateField('${editNode._id}','symbol',this.value)"
-                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+        const pOpsHtml = pOps.map((op,i) => `
+          <div style="background:#1a0f2e;border:1px solid #8b5cf622;border-radius:6px;padding:8px 10px;margin-bottom:6px">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+              <span style="color:#a78bfa;font-size:.7rem;font-weight:700">Op. ${i+1}</span>
+              <button onclick="nzDeleteOp('${editNode._id}','${op._id}')"
+                      style="margin-left:auto;background:transparent;border:none;color:#475569;cursor:pointer;font-size:.78rem" title="Usuń">✕</button>
             </div>
-            <div>
-              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Nazwa operacji *</label>
-              <input type="text" placeholder="np. Toczenie wału"
-                     value="${editNode.nazwa||''}"
-                     onchange="nzUpdateField('${editNode._id}','nazwa',this.value)"
-                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
-            </div>
-            <div>
-              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Stanowisko / operacja</label>
-              <select onchange="nzUpdateField('${editNode._id}','stanowisko',this.value)"
-                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
-                <option value="">— wybierz —</option>
-                ${stanOptions}
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <input type="text" placeholder="Nazwa operacji" value="${op.nazwa||''}"
+                     onchange="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+              <select onchange="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
+                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+                <option value="">— stanowisko —</option>
+                ${stanOptsP(op.stanowisko)}
               </select>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+                <input type="number" step="0.5" min="0" placeholder="Czas min/szt" value="${op.czas_norma||0}"
+                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_norma',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+                <input type="number" step="1" min="0" placeholder="Zbrojenie min" value="${op.czas_zbrojenia||0}"
+                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+              </div>
+              <input type="text" placeholder="Opis czynności (opcjonalnie)" value="${op.opis_czynnosci||''}"
+                     onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
             </div>
+          </div>`).join('');
+        editPanel = `
+          <div style="font-size:.78rem;font-weight:700;color:#a78bfa;margin-bottom:6px">⚙ Półprodukt / Podzespół P</div>
+          <div style="display:flex;flex-direction:column;gap:7px">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
               <div>
-                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Czas (min/szt)</label>
-                <input type="number" step="0.5" min="0"
-                       value="${editNode.czas_norma||0}"
-                       onchange="nzUpdateField('${editNode._id}','czas_norma',+this.value)"
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Symbol (BOM)</label>
+                <input type="text" placeholder="np. P-001"
+                       value="${editNode.symbol||''}"
+                       onchange="nzUpdateField('${editNode._id}','symbol',this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
               </div>
               <div>
-                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Zbrojenie (min)</label>
-                <input type="number" step="1" min="0"
-                       value="${editNode.czas_zbrojenia||0}"
-                       onchange="nzUpdateField('${editNode._id}','czas_zbrojenia',+this.value)"
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Nazwa</label>
+                <input type="text" placeholder="np. Wał Ø50"
+                       value="${editNode.nazwa||''}"
+                       onchange="nzUpdateField('${editNode._id}','nazwa',this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
               <div>
-                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość (do BOM)</label>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość (BOM)</label>
                 <input type="number" step="0.01" min="0.01"
                        value="${editNode.ilosc||1}"
                        onchange="nzUpdateField('${editNode._id}','ilosc',+this.value)"
@@ -9070,16 +9089,24 @@ function renderNzWizard() {
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
               </div>
             </div>
-            <div>
-              <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Opis czynności</label>
-              <textarea rows="2" onchange="nzUpdateField('${editNode._id}','opis_czynnosci',this.value)"
-                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical">${editNode.opis_czynnosci||''}</textarea>
+
+            <!-- Operacje węzła P -->
+            <div style="border-top:1px solid #1e293b;padding-top:8px">
+              <div style="display:flex;align-items:center;margin-bottom:6px">
+                <span style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px">⚙ Operacje (${pOps.length})</span>
+                <button onclick="nzAddOp('${editNode._id}')"
+                        style="margin-left:auto;background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf644;border-radius:5px;padding:3px 10px;font-size:.72rem;cursor:pointer;font-weight:700">+ Dodaj</button>
+              </div>
+              ${pOps.length === 0
+                ? '<div style="color:#334155;font-size:.75rem;padding:4px 0">Brak operacji. Dodaj toczenie, frezowanie, spawanie itp.</div>'
+                : pOpsHtml}
             </div>
-            <div style="display:flex;gap:6px;margin-top:4px">
+
+            <div style="display:flex;gap:6px">
               <button onclick="nzAddP('${editNode._id}')"
-                      style="flex:1;background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf633;border-radius:5px;padding:6px;cursor:pointer;font-size:.75rem">+ P</button>
+                      style="flex:1;background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf633;border-radius:5px;padding:6px;cursor:pointer;font-size:.75rem">+ Pod-P</button>
               <button onclick="nzAddM('${editNode._id}')"
-                      style="flex:1;background:#1a1f2e;color:#6b7280;border:1px solid #6b728033;border-radius:5px;padding:6px;cursor:pointer;font-size:.75rem">+ M</button>
+                      style="flex:1;background:#1a1f2e;color:#6b7280;border:1px solid #6b728033;border-radius:5px;padding:6px;cursor:pointer;font-size:.75rem">+ Materiał</button>
               <button onclick="nzDeleteNode('${editNode._id}')"
                       style="background:#3a1a1a;color:#f87171;border:1px solid #f8717133;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:.75rem">✕ Usuń</button>
             </div>

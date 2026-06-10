@@ -3866,7 +3866,7 @@ function renderMajsterPodsumowanie(stats) {
     ];
     const tabsHtml = zlTabs.map(t => {
       const active = zlTab === t.id;
-      return '<button onclick="setState({zlecenieModal:{...state.zlecenieModal,zlModalTab:\''+t.id+'\'}}'+        (t.id==='drzewo'&&!state.zlecenieModal.zlTree?';zlModalLoadTree()':'') + ')" '+
+      return '<button onclick="setState({zlecenieModal:{...state.zlecenieModal,zlModalTab:\''+t.id+'\'}}'+        (t.id==='drzewo'&&!state.zlecenieModal.zlTree&&!state.zlecenieModal.zlTreeLoading?';zlModalLoadTree()':'') + ')" '+
         'style="padding:7px 14px;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:'+
         (active?'700':'400')+';background:'+        (active?'var(--accent)':' transparent')+';color:'+        (active?'#1a1f2e':'var(--dim)')+'">'+t.label+'</button>';
     }).join('');
@@ -3899,10 +3899,12 @@ function renderMajsterPodsumowanie(stats) {
       } else {
         // Render drzewa
         const nodeCount = (function cnt(n){return 1+(n.children||[]).reduce((s,c)=>s+cnt(c),0);})(m.zlTree);
-        html += '<div style="display:flex;gap:6px;margin-bottom:10px;align-items:center">' +
+        html += '<div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap">' +
           '<span style="color:var(--dim);font-size:11px">' + nodeCount + ' węzłów</span>' +
           '<div style="flex:1"></div>' +
-          '<button onclick="setState({zlecenieModal:{...state.zlecenieModal,zlTree:null,zlTreeLoading:false}})" ' +
+          '<button onclick="zlModalAddPNode()" ' +
+          'style="background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf633;border-radius:5px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600">+ Dodaj podzlecenie P</button>' +
+          '<button onclick="setState({zlecenieModal:{...state.zlecenieModal,zlTree:null,zlTreeLoading:true}});zlModalLoadTree()" ' +
           'style="background:var(--entry);color:var(--dim);border:1px solid var(--border);border-radius:5px;padding:3px 10px;font-size:11px;cursor:pointer">↺ Odśwież</button>' +
           '</div>' +
           '<div style="background:var(--entry);border-radius:10px;padding:12px;overflow-x:auto">' +
@@ -4042,16 +4044,22 @@ async function openZlecenieModal(zid) {
   const z = all.find(x=>x.id===zid) || {id:zid, numer:'#'+zid, nazwa:'', cena_brutto_szt:0, ilosc_sztuk:0};
   setState({zlecenieModal:{id:zid, numer:z.numer, nazwa:z.nazwa,
     wartosc:(z.cena_brutto_szt||0)*(z.ilosc_sztuk||0), loading:true, sesje:null, koszt_total:null,
-    zlModalTab: 'sesje', zlTree: null, zlTreeLoading: false, ilosc_sztuk: z.ilosc_sztuk||1}});
-  try {
-    const data = await get('/api/zlecenia/' + zid + '/szczegoly');
+    zlModalTab: 'drzewo', zlTree: null, zlTreeLoading: true, ilosc_sztuk: z.ilosc_sztuk||1}});
+  // Załaduj sesje/koszty i drzewo równolegle
+  const [szczData] = await Promise.allSettled([
+    get('/api/zlecenia/' + zid + '/szczegoly'),
+  ]);
+  if (szczData.status === 'fulfilled') {
+    const data = szczData.value;
     setState({zlecenieModal:{...state.zlecenieModal, loading:false,
       sesje:data.sesje, koszt_total:data.koszt_total, koszt_produktow:data.koszt_produktow||0,
       koszt_zbrojenia:data.koszt_zbrojenia||0,
       produkty:data.produkty||[], wartosc:data.wartosc||state.zlecenieModal.wartosc}});
-  } catch(e) {
+  } else {
     setState({zlecenieModal:{...state.zlecenieModal, loading:false, sesje:[]}});
   }
+  // Załaduj drzewo G→P w tle
+  zlModalLoadTree();
 }
 
 async function zlModalLoadTree() {
@@ -4070,6 +4078,64 @@ async function zlModalLoadTree() {
     setState({zlecenieModal:{...state.zlecenieModal, zlTreeLoading:false, zlTree:tree, zlWyrobId:wg.id}});
   } catch(e) {
     setState({zlecenieModal:{...state.zlecenieModal, zlTreeLoading:false, zlTree:'brak'}});
+  }
+}
+
+async function zlModalAddPNode() {
+  // Dodaje nowe podzlecenie P do istniejącego zlecenia G
+  const m = state.zlecenieModal;
+  if (!m || !m.zlWyrobId) { alert('Brak wyrobu G – nie można dodać P'); return; }
+  const pSymbol = prompt('Symbol nowego podzlecenia P (np. ' + m.numer + '-P1):');
+  if (!pSymbol || !pSymbol.trim()) return;
+  const pNazwa = prompt('Nazwa podzlecenia P:', pSymbol.trim()) || pSymbol.trim();
+  const pIlosc = parseFloat(prompt('Ilość (szt):', '1') || '1') || 1;
+  try {
+    // Utwórz wyrób P
+    let wyrob_p_id = null;
+    try {
+      const wp = await post('/api/wyroby', { symbol: pSymbol.trim(), typ: 'P', nazwa: pNazwa, jednostka: 'szt' });
+      wyrob_p_id = wp.id;
+    } catch(e) {
+      const list = await get('/api/wyroby?typ=P&q=' + encodeURIComponent(pSymbol.trim()));
+      const found = list.find(w => w.symbol === pSymbol.trim());
+      if (found) wyrob_p_id = found.id;
+      else throw new Error('Nie można utworzyć wyrobu P: ' + e.message);
+    }
+    // Dodaj do BOM wyrobu G
+    await post('/api/wyroby/' + m.zlWyrobId + '/bom', {
+      skladnik_id: wyrob_p_id, typ_skladnika: 'P',
+      ilosc: pIlosc, jednostka: 'szt', pozycja: 0,
+    });
+    // Utwórz zlecenie P
+    let zlecenie_p_id = null;
+    try {
+      const zp = await post('/api/zlecenia', {
+        numer: pSymbol.trim(), nazwa: pNazwa,
+        opis: '', termin: null,
+        ilosc_sztuk: Math.max(1, Math.round(pIlosc)),
+        cena_brutto_szt: 0, material_od_klienta: 0,
+      });
+      zlecenie_p_id = zp.id;
+    } catch(e) {
+      const allZl = await get('/api/zlecenia');
+      const found = allZl.find(z => z.numer === pSymbol.trim());
+      if (found) zlecenie_p_id = found.id;
+    }
+    // Powiąż G→P
+    if (zlecenie_p_id) {
+      try {
+        await post('/api/zlecenia/' + m.id + '/zapotrzebowania', {
+          zlecenie_g_id: m.id, wyrob_p_symbol: pSymbol.trim(), ilosc_wymagana: pIlosc,
+        });
+      } catch(_) {}
+    }
+    // Odśwież drzewo
+    await loadZlecenia();
+    setState({zlecenieModal:{...state.zlecenieModal, zlTree:null, zlTreeLoading:true}});
+    zlModalLoadTree();
+    alert('✅ Podzlecenie P "' + pSymbol.trim() + '" zostało dodane!');
+  } catch(e) {
+    alert('Błąd: ' + e.message);
   }
 }
 
@@ -8748,12 +8814,13 @@ async function nzSave() {
     let pKolejnosc = 1;    // numer auto-symbolu węzłów P (niezależny od op)
 
     // Zapisz listę operacji (ops[]) danego węzła do bazy jako operacje zlecenia
-    async function saveNodeOps(nodeOps) {
+    async function saveNodeOps(nodeOps, targetZlId) {
+      const targetId = targetZlId || zlecenieId;
       for (const op of (nodeOps || [])) {
         if (!op.nazwa && !op.stanowisko) continue; // pomiń puste
         try {
           await post('/api/operacje', {
-            zlecenie_id: zlecenieId,
+            zlecenie_id: targetId,
             nazwa: op.nazwa || op.stanowisko || 'Operacja',
             kolejnosc: opKolejnosc++,
             czas_norma: parseFloat(op.czas_norma) || 0,
@@ -8799,8 +8866,38 @@ async function nzSave() {
                 pozycja: pKolejnosc - 1,
               });
             } catch(e) { console.warn('BOM P dodanie:', e.message); }
-            // c) Zapisz operacje węzła P
-            await saveNodeOps(node.ops);
+
+            // c) Utwórz zlecenie P i zapisz jego operacje pod właściwym ID
+            let zlecenie_p_id = null;
+            try {
+              const zp = await post('/api/zlecenia', {
+                numer: pSymbol, nazwa: pNazwa,
+                opis: '', termin: state.nzTermin || null,
+                ilosc_sztuk: Math.max(1, Math.round(parseFloat(node.ilosc) || 1)),
+                cena_brutto_szt: 0, material_od_klienta: 0,
+              });
+              zlecenie_p_id = zp.id;
+            } catch(e) {
+              // Zlecenie P o tym numerze już istnieje – znajdź je
+              try {
+                const allZl = await get('/api/zlecenia');
+                const found = allZl.find(z => z.numer === pSymbol);
+                if (found) zlecenie_p_id = found.id;
+              } catch(_) {}
+            }
+            await saveNodeOps(node.ops, zlecenie_p_id || zlecenieId);
+
+            // Powiąż G→P przez zapotrzebowania
+            if (zlecenie_p_id) {
+              try {
+                await post(`/api/zlecenia/${zlecenieId}/zapotrzebowania`, {
+                  zlecenie_g_id: zlecenieId,
+                  wyrob_p_symbol: pSymbol,
+                  ilosc_wymagana: parseFloat(node.ilosc) || 1,
+                });
+              } catch(_) {}
+            }
+
             // d) Rekurencja dla dzieci
             if (node.children && node.children.length) {
               await processChildren(wyrob_p_id, node.children);

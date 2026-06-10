@@ -1580,6 +1580,7 @@ class ZapotrzebowanieRequest(BaseModel):
     ilosc_wymagana: float = 1
     priorytet: Optional[int] = 0
     uwagi: Optional[str] = ""
+    zlecenie_p_id: Optional[int] = None   # od razu linkuj do zlecenia P
 
 # ── CRUD wyrobów ───────────────────────────────────────────────────────────────
 @app.get("/api/wyroby", dependencies=[Depends(verify_key)])
@@ -1881,10 +1882,10 @@ def add_zapotrzebowanie(gid: int, req: ZapotrzebowanieRequest):
             raise HTTPException(404, "Zlecenie G nie znalezione")
         cur = conn.execute(
             """INSERT INTO zapotrzebowania
-               (zlecenie_g_id, wyrob_p_symbol, ilosc_wymagana, priorytet, uwagi)
-               VALUES (?,?,?,?,?)""",
+               (zlecenie_g_id, wyrob_p_symbol, ilosc_wymagana, priorytet, uwagi, zlecenie_p_id)
+               VALUES (?,?,?,?,?,?)""",
             (gid, req.wyrob_p_symbol.strip(), req.ilosc_wymagana,
-             req.priorytet or 0, req.uwagi or "")
+             req.priorytet or 0, req.uwagi or "", req.zlecenie_p_id)
         )
         return {"id": cur.lastrowid}
 

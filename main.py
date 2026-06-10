@@ -362,8 +362,144 @@ def delete_zlecenie(zid: int):
         conn.execute("DELETE FROM produkty_zlecenia WHERE zlecenie_id=?", (zid,))
         conn.execute("DELETE FROM stawki_zlecen WHERE zlecenie_id=?", (zid,))
         conn.execute("DELETE FROM operacje WHERE zlecenie_id=?", (zid,))
+        conn.execute("DELETE FROM zlecenie_polprodukty WHERE zlecenie_id=?", (zid,))
+        conn.execute("DELETE FROM zlecenie_materialy WHERE zlecenie_id=?", (zid,))
         conn.execute("DELETE FROM zlecenia WHERE id=?", (zid,))
         return {"ok": True}
+
+# ─── Półprodukty (P) zlecenia ─────────────────────────────────────────────────
+@app.get("/api/zlecenia/{zid}/polprodukty", dependencies=[Depends(verify_key)])
+def get_polprodukty(zid: int):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM zlecenie_polprodukty WHERE zlecenie_id=? ORDER BY kolejnosc, id",
+            (zid,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+class PolproduktRequest(BaseModel):
+    symbol: str
+    nazwa: str
+    ilosc: float = 1
+    jednostka: Optional[str] = "szt"
+    uwagi: Optional[str] = ""
+    kolejnosc: Optional[int] = 0
+
+@app.post("/api/zlecenia/{zid}/polprodukty", dependencies=[Depends(verify_key)])
+def add_polprodukt(zid: int, req: PolproduktRequest):
+    with get_db() as conn:
+        zl = conn.execute("SELECT id FROM zlecenia WHERE id=?", (zid,)).fetchone()
+        if not zl:
+            raise HTTPException(404, "Zlecenie nie istnieje")
+        cur = conn.execute(
+            """INSERT INTO zlecenie_polprodukty
+               (zlecenie_id, symbol, nazwa, ilosc, jednostka, uwagi, kolejnosc)
+               VALUES (?,?,?,?,?,?,?)""",
+            (zid, req.symbol, req.nazwa, req.ilosc,
+             req.jednostka or "szt", req.uwagi or "", req.kolejnosc or 0)
+        )
+        return {"id": cur.lastrowid}
+
+@app.put("/api/zlecenia/{zid}/polprodukty/{pid}", dependencies=[Depends(verify_key)])
+def update_polprodukt(zid: int, pid: int, req: PolproduktRequest):
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE zlecenie_polprodukty
+               SET symbol=?, nazwa=?, ilosc=?, jednostka=?, uwagi=?, kolejnosc=?
+               WHERE id=? AND zlecenie_id=?""",
+            (req.symbol, req.nazwa, req.ilosc,
+             req.jednostka or "szt", req.uwagi or "", req.kolejnosc or 0,
+             pid, zid)
+        )
+        return {"ok": True}
+
+@app.delete("/api/zlecenia/{zid}/polprodukty/{pid}", dependencies=[Depends(verify_key)])
+def delete_polprodukt(zid: int, pid: int):
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM zlecenie_polprodukty WHERE id=? AND zlecenie_id=?", (pid, zid)
+        )
+        return {"ok": True}
+
+# ─── Materiały (M) zlecenia ───────────────────────────────────────────────────
+@app.get("/api/zlecenia/{zid}/materialy-zlecenia", dependencies=[Depends(verify_key)])
+def get_materialy_zlecenia(zid: int):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM zlecenie_materialy WHERE zlecenie_id=? ORDER BY kolejnosc, id",
+            (zid,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+class MaterialZlecenieRequest(BaseModel):
+    indeks: str
+    opis: str
+    ilosc: float = 1
+    jednostka: Optional[str] = "kg"
+    uwagi: Optional[str] = ""
+    kolejnosc: Optional[int] = 0
+
+@app.post("/api/zlecenia/{zid}/materialy-zlecenia", dependencies=[Depends(verify_key)])
+def add_material_zlecenia(zid: int, req: MaterialZlecenieRequest):
+    with get_db() as conn:
+        zl = conn.execute("SELECT id FROM zlecenia WHERE id=?", (zid,)).fetchone()
+        if not zl:
+            raise HTTPException(404, "Zlecenie nie istnieje")
+        cur = conn.execute(
+            """INSERT INTO zlecenie_materialy
+               (zlecenie_id, indeks, opis, ilosc, jednostka, uwagi, kolejnosc)
+               VALUES (?,?,?,?,?,?,?)""",
+            (zid, req.indeks, req.opis, req.ilosc,
+             req.jednostka or "kg", req.uwagi or "", req.kolejnosc or 0)
+        )
+        return {"id": cur.lastrowid}
+
+@app.put("/api/zlecenia/{zid}/materialy-zlecenia/{mid}", dependencies=[Depends(verify_key)])
+def update_material_zlecenia(zid: int, mid: int, req: MaterialZlecenieRequest):
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE zlecenie_materialy
+               SET indeks=?, opis=?, ilosc=?, jednostka=?, uwagi=?, kolejnosc=?
+               WHERE id=? AND zlecenie_id=?""",
+            (req.indeks, req.opis, req.ilosc,
+             req.jednostka or "kg", req.uwagi or "", req.kolejnosc or 0,
+             mid, zid)
+        )
+        return {"ok": True}
+
+@app.delete("/api/zlecenia/{zid}/materialy-zlecenia/{mid}", dependencies=[Depends(verify_key)])
+def delete_material_zlecenia(zid: int, mid: int):
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM zlecenie_materialy WHERE id=? AND zlecenie_id=?", (mid, zid)
+        )
+        return {"ok": True}
+
+# ─── Endpoint zbiorczy: zlecenie + P + M (do wyświetlenia drzewka) ────────────
+@app.get("/api/zlecenia/{zid}/drzewo", dependencies=[Depends(verify_key)])
+def get_zlecenie_drzewo(zid: int):
+    with get_db() as conn:
+        zl = conn.execute("SELECT * FROM zlecenia WHERE id=?", (zid,)).fetchone()
+        if not zl:
+            raise HTTPException(404, "Zlecenie nie istnieje")
+        polprodukty = conn.execute(
+            "SELECT * FROM zlecenie_polprodukty WHERE zlecenie_id=? ORDER BY kolejnosc, id",
+            (zid,)
+        ).fetchall()
+        materialy = conn.execute(
+            "SELECT * FROM zlecenie_materialy WHERE zlecenie_id=? ORDER BY kolejnosc, id",
+            (zid,)
+        ).fetchall()
+        operacje = conn.execute(
+            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
+            (zid,)
+        ).fetchall()
+        return {
+            "zlecenie": dict(zl),
+            "polprodukty": [dict(r) for r in polprodukty],
+            "materialy": [dict(r) for r in materialy],
+            "operacje": [dict(r) for r in operacje],
+        }
 
 @app.patch("/api/zlecenia/{zid}/status", dependencies=[Depends(verify_key)])
 def change_zlecenie_status(zid: int, body: dict):
@@ -3805,6 +3941,36 @@ def init_db_on_start():
         try: c.execute(f"ALTER TABLE zapotrzebowania ADD COLUMN {_col} {_def}")
         except: pass
 
+    # ─── Półprodukty (P) bezpośrednio pod zlecenie G ─────────────────────────
+    c.execute("""CREATE TABLE IF NOT EXISTS zlecenie_polprodukty (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        zlecenie_id INTEGER NOT NULL,          -- zlecenie G (rodzic)
+        symbol TEXT NOT NULL DEFAULT '',       -- symbol P np. P18653
+        nazwa TEXT NOT NULL DEFAULT '',
+        ilosc REAL NOT NULL DEFAULT 1,
+        jednostka TEXT DEFAULT 'szt',
+        uwagi TEXT DEFAULT '',
+        kolejnosc INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id) ON DELETE CASCADE)""")
+    try: c.execute("CREATE INDEX IF NOT EXISTS idx_zp_zlecenie ON zlecenie_polprodukty(zlecenie_id)")
+    except: pass
+
+    # ─── Materiały (M) bezpośrednio pod zlecenie G ───────────────────────────
+    c.execute("""CREATE TABLE IF NOT EXISTS zlecenie_materialy (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        zlecenie_id INTEGER NOT NULL,          -- zlecenie G (rodzic)
+        indeks TEXT NOT NULL DEFAULT '',       -- indeks materiału z magazynu
+        opis TEXT NOT NULL DEFAULT '',
+        ilosc REAL NOT NULL DEFAULT 1,
+        jednostka TEXT DEFAULT 'kg',
+        uwagi TEXT DEFAULT '',
+        kolejnosc INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (zlecenie_id) REFERENCES zlecenia(id) ON DELETE CASCADE)""")
+    try: c.execute("CREATE INDEX IF NOT EXISTS idx_zm_zlecenie ON zlecenie_materialy(zlecenie_id)")
+    except: pass
+
     # Indeks importów drzewa G/P z PDF/ERP
     c.execute("""CREATE TABLE IF NOT EXISTS import_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3837,6 +4003,8 @@ _TABLES_TO_BACKUP = [
     "zapotrzebowania",      # zapotrzebowania P dla zlecen G
     "mrp_rezerwacje",       # rezerwacje materialow MRP pod zlecenia G
     "mag_rezerwacje",       # rezerwacje materialow magazynowych (dawniej localStorage)
+    "zlecenie_polprodukty", # półprodukty P podpięte pod zlecenie G
+    "zlecenie_materialy",   # materiały M podpięte pod zlecenie G
 ]
 
 # ─── GitHub Gist helpers ────────────────────────────────────────────────────────

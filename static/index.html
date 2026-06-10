@@ -8651,7 +8651,7 @@ async function nzSave() {
   const tree = state.nzTree;
   if (!tree) { alert('Brak drzewa do zapisu'); return; }
 
-  // Walidacja – korzeń G i przynajmniej jeden węzeł P
+  // Walidacja – korzeń G musi mieć symbol i nazwę
   if (!tree.symbol || !tree.nazwa) { alert('Numer i nazwa zlecenia są wymagane'); return; }
 
   setState({ nzSaving: true });
@@ -8758,12 +8758,29 @@ async function nzSave() {
 
     await processChildren(wyrob_g_id, tree.children);
 
+    // 3b. Jeśli węzeł G ma zdefiniowaną operację – dodaj ją do zlecenia
+    if (tree.stanowisko || tree.nazwa_operacji) {
+      try {
+        await post('/api/operacje', {
+          zlecenie_id: zlecenieId,
+          nazwa: tree.nazwa_operacji || tree.nazwa,
+          kolejnosc: opKolejnosc++,
+          czas_norma: parseFloat(tree.czas_norma) || 0,
+          stanowisko: tree.stanowisko || '',
+          opis_czynnosci: tree.opis_czynnosci || '',
+          czas_zbrojenia_min: parseFloat(tree.czas_zbrojenia) || 0,
+        });
+      } catch(e) { console.warn('Operacja G:', e); }
+    }
+
     // 4. Odśwież listę zleceń i drzewo
     await loadZlecenia();
     if (state.tab === 'drzewo') loadDrzewoGP();
 
     setState({ nzModal: false, nzSaving: false });
-    alert(`✅ Zlecenie ${state.nzNumer} zostało utworzone z drzewem G→P!`);
+    const hasChildren = tree.children && tree.children.length > 0;
+    const hasGOp = !!(tree.stanowisko || tree.nazwa_operacji);
+    alert(`✅ Zlecenie ${state.nzNumer} zostało utworzone!`);
   } catch(e) {
     setState({ nzSaving: false });
     alert('Błąd zapisu: ' + e.message);
@@ -8920,14 +8937,68 @@ function renderNzWizard() {
     let editPanel = '';
     if (editNode) {
       if (editNode.typ === 'G') {
+        const stanOptionsG = (state.stawki||[]).map(s =>
+          `<option value="${s.stanowisko}" ${editNode.stanowisko===s.stanowisko?'selected':''}>${s.stanowisko}</option>`
+        ).join('');
+        const hasGOp = !!(editNode.stanowisko || editNode.czas_norma || editNode.nazwa_operacji);
         editPanel = `
           <div style="font-size:.78rem;font-weight:700;color:#60a5fa;margin-bottom:10px">🌳 Wyrób główny G</div>
           <div style="font-size:.75rem;color:#64748b">Symbol: <b style="color:#e2e8f0">${editNode.symbol}</b></div>
           <div style="font-size:.75rem;color:#64748b;margin-top:2px">Nazwa: <b style="color:#e2e8f0">${editNode.nazwa}</b></div>
-          <div style="margin-top:10px;padding:8px;background:#0f172a;border-radius:6px;font-size:.72rem;color:#475569">
-            Korzeń G pochodzi z danych zlecenia.<br>Dodaj operacje (P) i materiały (M) poniżej.
+
+          <!-- Sekcja: operacja na G -->
+          <div style="margin-top:12px;border-top:1px solid #1e293b;padding-top:12px">
+            <div style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+              ⚙ Operacja na G (opcjonalna)
+            </div>
+            <div style="background:#0a1628;border:1px solid #1e3a5f33;border-radius:6px;padding:8px 10px;font-size:.71rem;color:#475569;margin-bottom:10px">
+              Jeśli wyrób G jest obrabiany bezpośrednio (np. po kompletacji P, albo jest jedynym wyrobem) – zdefiniuj operację tutaj.
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Nazwa operacji na G</label>
+                <input type="text" placeholder="np. Montaż końcowy, Kontrola jakości"
+                       value="${editNode.nazwa_operacji||''}"
+                       onchange="nzUpdateField('${editNode._id}','nazwa_operacji',this.value)"
+                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+              </div>
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Stanowisko / operacja</label>
+                <select onchange="nzUpdateField('${editNode._id}','stanowisko',this.value)"
+                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+                  <option value="">— brak operacji na G —</option>
+                  ${stanOptionsG}
+                </select>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+                <div>
+                  <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Czas (min/szt)</label>
+                  <input type="number" step="0.5" min="0"
+                         value="${editNode.czas_norma||0}"
+                         onchange="nzUpdateField('${editNode._id}','czas_norma',+this.value)"
+                         style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+                </div>
+                <div>
+                  <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Zbrojenie (min)</label>
+                  <input type="number" step="1" min="0"
+                         value="${editNode.czas_zbrojenia||0}"
+                         onchange="nzUpdateField('${editNode._id}','czas_zbrojenia',+this.value)"
+                         style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
+                </div>
+              </div>
+              <div>
+                <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Opis czynności</label>
+                <textarea rows="2" onchange="nzUpdateField('${editNode._id}','opis_czynnosci',this.value)"
+                          style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical">${editNode.opis_czynnosci||''}</textarea>
+              </div>
+            </div>
           </div>
-          <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+
+          <!-- Sekcja: dodaj dzieci -->
+          <div style="margin-top:12px;border-top:1px solid #1e293b;padding-top:12px;display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">
+              Dodaj elementy podrzędne
+            </div>
             <button onclick="nzAddP('${editNode._id}')"
                     style="background:#2d1f5e;color:#a78bfa;border:1px solid #8b5cf644;border-radius:6px;padding:8px;cursor:pointer;font-size:.82rem;font-weight:600">
               + Dodaj operację / półprodukt (P)
@@ -9153,14 +9224,14 @@ function renderNzWizard() {
     }
 
     body = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;min-height:340px">
-        <!-- Lewa: drzewo -->
+      <div style="display:flex;flex-direction:column;gap:14px;min-height:340px">
+        <!-- Górna: drzewo -->
         <div style="display:flex;flex-direction:column;gap:8px">
           <div style="font-size:.72rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px">
             Struktura drzewa
           </div>
           <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px;
-                      flex:1;overflow-y:auto;max-height:360px;min-height:120px">
+                      overflow-y:auto;max-height:260px;min-height:80px;overflow-x:auto">
             ${treeHtml || '<div style="color:#334155;font-size:.78rem;padding:8px">Brak węzłów</div>'}
           </div>
           <div style="font-size:.7rem;color:#334155;line-height:1.6">
@@ -9169,9 +9240,9 @@ function renderNzWizard() {
             <span style="color:#6b7280">M</span> = materiał
           </div>
         </div>
-        <!-- Prawa: panel edycji -->
+        <!-- Dolna: panel edycji -->
         <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;
-                    overflow-y:auto;max-height:400px">
+                    overflow-y:auto;max-height:380px">
           ${editPanel}
         </div>
       </div>

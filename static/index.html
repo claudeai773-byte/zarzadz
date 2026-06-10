@@ -1597,7 +1597,7 @@ async function deleteZlecenie(id) {
     await del(`/api/zlecenia/${id}`);
     await loadZlecenia();
     // Odśwież drzewo jeśli aktywna zakładka
-    if (state.tab === 'drzewo') loadDrzewoGP();
+    if (state.activeTab === 'drzewo') loadDrzewoGP();
   } catch(e) {
     alert('Błąd: ' + e.message);
   }
@@ -5477,7 +5477,7 @@ function renderZlecenia() {
         </div>
         ${canEdit ? `
         <div class="btn-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
-          <button class="btn-sm btn-blue" onclick="openEditZlecenie(${JSON.stringify(z).replace(/"/g,'&quot;')})">✏ Edytuj</button>
+          <button class="btn-sm btn-blue" onclick="openEditZlecenieById(${z.id})">✏ Edytuj</button>
           <button class="btn-sm btn-accent" onclick="openOperacje(${JSON.stringify(z).replace(/"/g,'&quot;')})">🔧 Operacje</button>
           <button class="btn-sm btn-green" onclick="loadKoszty(${z.id})">💰 Koszty</button>
           <button class="btn-sm" style="background:#1a6b3a;color:#fff" onclick="generateRaportSingleZlecenie(${z.id}, '${(z.numer||"").replace(/'/g,"\'")}')">📊 Raport</button>
@@ -5879,6 +5879,23 @@ async function openEditZlecenie(z) {
   if (z && z.id) {
     await loadProduktyZlecenia(z.id);
   }
+  setState({zlecenieModal: z});
+}
+
+async function openEditZlecenieById(zid) {
+  // Bezpieczne otwarcie edytora po ID – nie polega na JSON w onclick
+  const all = state.zlecenia || [];
+  let z = all.find(x => x.id === zid);
+  if (!z) {
+    // Fallback: pobierz z API jeśli nie ma w stanie
+    try {
+      const lista = await get('/api/zlecenia');
+      setState({zlecenia: lista});
+      z = lista.find(x => x.id === zid);
+    } catch(e) { alert('Błąd: ' + e.message); return; }
+  }
+  if (!z) { alert('Nie znaleziono zlecenia #' + zid); return; }
+  await loadProduktyZlecenia(z.id);
   setState({zlecenieModal: z});
 }
 
@@ -8815,12 +8832,14 @@ async function nzSave() {
 
     // 4. Odśwież listę zleceń i drzewo
     await loadZlecenia();
-    if (state.tab === 'drzewo') loadDrzewoGP();
+    if (state.activeTab === 'drzewo') loadDrzewoGP();
 
     setState({ nzModal: false, nzSaving: false });
     const hasChildren = tree.children && tree.children.length > 0;
     const hasGOp = !!(tree.stanowisko || tree.nazwa_operacji);
     alert(`✅ Zlecenie ${state.nzNumer} zostało utworzone!`);
+    // Otwórz edytor nowo utworzonego zlecenia
+    await openEditZlecenieById(zlecenieId);
   } catch(e) {
     setState({ nzSaving: false });
     alert('Błąd zapisu: ' + e.message);

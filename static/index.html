@@ -1720,8 +1720,17 @@ async function deleteZlecenie(id) {
   if (!confirm('Usunąć zlecenie i wszystkie jego operacje?')) return;
   try {
     await del(`/api/zlecenia/${id}`);
+    // Odśwież zakładkę Zlecenia
     await loadZlecenia();
-    // Odśwież drzewo jeśli aktywna zakładka
+    // Zawsze synchronizuj stan drzewa G/P (żeby po przejściu do zakładki Drzewo zlecenie już znikło)
+    const [g, p, zl] = await Promise.all([
+      get('/api/wyroby?typ=G'),
+      get('/api/wyroby?typ=P'),
+      get('/api/zlecenia'),
+    ]);
+    const zlG = zl.filter(z => g.some(wg => wg.symbol === z.numer));
+    setState({drzewoWyrobyG: g, drzewoWyrobyP: p, drzewoZleceniaG: zlG}, true);
+    // Jeśli zakładka drzewo aktywna – przeładuj pełne drzewo
     if (state.activeTab === 'drzewo') loadDrzewoGP();
   } catch(e) {
     alert('Błąd: ' + e.message);
@@ -10542,10 +10551,11 @@ async function drzewoDeleteZlecenieP(zapId, zlecenieId, numer, selG) {
 }
 
 
+async function drzewoDeleteZlecenie(zid, numer) {
   if (!confirm(`Usunąć zlecenie ${numer}?\n\nZostaną usunięte wszystkie operacje i sesje pracy. Struktura BOM (wyrób G i powiązane P) pozostanie nienaruszona.`)) return;
   try {
     await del('/api/zlecenia/' + zid);
-    // Odśwież: przeładuj listę zleceń G i odznacz jeśli nie ma już zlecenia
+    // Odśwież zarówno zakładkę Drzewo jak i Zlecenia (synchronizacja między zakładkami)
     await loadZlecenia();
     const [g, p, zl] = await Promise.all([
       get('/api/wyroby?typ=G'),
@@ -10554,7 +10564,6 @@ async function drzewoDeleteZlecenieP(zapId, zlecenieId, numer, selG) {
     ]);
     const zlG = zl.filter(z => g.some(wg => wg.symbol === z.numer));
     setState({drzewoWyrobyG: g, drzewoWyrobyP: p, drzewoZleceniaG: zlG});
-    // Komunikat
     alert(`✓ Zlecenie ${numer} usunięte.`);
   } catch(e) { alert('Błąd: ' + e.message); }
 }

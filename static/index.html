@@ -5588,9 +5588,10 @@ function renderZlecenia() {
         if (!drzewo) {
           drzewoHtml = `<div style="padding:10px;text-align:center;color:var(--dim);font-size:12px">⏳ Ładowanie...</div>`;
         } else {
-          const polprodukty = drzewo.polprodukty || [];
-          const materialy   = drzewo.materialy   || [];
-          const operacje    = drzewo.operacje     || [];
+          const polprodukty    = drzewo.polprodukty    || [];
+          const materialy      = drzewo.materialy      || [];
+          const operacje       = drzewo.operacje       || [];
+          const zapotrzebowania = drzewo.zapotrzebowania || [];
           let treeRows = '';
 
           // Operacje
@@ -5603,6 +5604,28 @@ function renderZlecenia() {
                 <span style="font-size:12px;flex:1">${op.kolejnosc}. ${op.nazwa}</span>
                 ${op.stanowisko?`<span style="font-size:10px;color:var(--dim)">${op.stanowisko}</span>`:''}
                 ${op.czas_norma?`<span style="font-size:10px;color:var(--accent)">${op.czas_norma} min</span>`:''}
+              </div>`;
+            });
+          }
+
+          // Podzlecenia P (z wizarda – zapotrzebowania)
+          if (zapotrzebowania.length) {
+            treeRows += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;padding:6px 10px 3px">🔩 Podzlecenia P (${zapotrzebowania.length})</div>`;
+            zapotrzebowania.forEach(zap => {
+              const pStatus = zap.zlecenie_p_status || '—';
+              const stCol = pStatus==='zakonczone'?'var(--green)':pStatus==='w_toku'?'var(--accent)':'var(--dim)';
+              const opsDone = zap.op_done || 0;
+              const opsTotal = zap.op_total || 0;
+              treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 22px;border-bottom:1px solid rgba(46,53,72,0.5)">
+                <span style="font-size:11px;color:#a78bfa">◆</span>
+                <span style="font-size:12px;flex:1">
+                  <b style="color:#a78bfa">${zap.wyrob_p_symbol}</b>
+                  ${zap.wyrob_nazwa ? `<span style="color:var(--dim)"> – ${zap.wyrob_nazwa}</span>` : ''}
+                </span>
+                <span style="font-size:10px;color:var(--dim)">${zap.ilosc_wymagana} szt.</span>
+                ${opsTotal ? `<span style="font-size:10px;color:${stCol};margin-left:4px">${opsDone}/${opsTotal} op.</span>` : ''}
+                <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,92,246,0.12);color:#a78bfa;font-weight:600">${pStatus}</span>
+                ${canEdit && zap.zlecenie_p_id ? `<button onclick="openEditZlecenieById(${zap.zlecenie_p_id})" style="background:rgba(52,152,219,.12);border:1px solid var(--blue);color:var(--blue);border-radius:5px;padding:2px 7px;font-size:11px;cursor:pointer">✏ P</button>` : ''}
               </div>`;
             });
           }
@@ -5667,7 +5690,7 @@ function renderZlecenia() {
         ${drzewoHtml}
         ${canEdit ? `
         <div class="btn-row" style="margin-top:8px;flex-wrap:wrap;gap:6px">
-          <button class="btn-sm btn-blue" onclick="openEditZlecenieById(${z.id})">✏ Edytuj</button>
+          <button class="btn-sm btn-blue" onclick="nzOpenEdit(${z.id})">✏ Edytuj</button>
           <button class="btn-sm btn-accent" onclick="openOperacje(${JSON.stringify(z).replace(/"/g,'&quot;')})">🔧 Operacje</button>
           <button class="btn-sm btn-green" onclick="loadKoszty(${z.id})">💰 Koszty</button>
           <button class="btn-sm" style="background:#1a6b3a;color:#fff" onclick="generateRaportSingleZlecenie(${z.id}, '${(z.numer||'').replace(/'/g,"\\'")}')">📊 Raport</button>
@@ -8211,10 +8234,15 @@ async function toggleZlecenieExpand(zid) {
   setState({ zlecenieExpanded: { ...expanded, [zid]: true } });
   if (!drzewa[zid]) {
     try {
-      const data = await get(`/api/zlecenia/${zid}/drzewo`);
+      const [data, zapotrz] = await Promise.all([
+        get(`/api/zlecenia/${zid}/drzewo`),
+        get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+      ]);
+      // Dołącz zapotrzebowania P (podzlecenia z wizarda) do danych drzewa
+      data.zapotrzebowania = zapotrz || [];
       setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
     } catch(e) {
-      setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], error: e.message } } });
+      setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], zapotrzebowania:[], error: e.message } } });
     }
   }
 }
@@ -8923,6 +8951,7 @@ function nzOpen() {
     nzNumer: '', nzNazwa: '', nzOpis: '', nzTermin: '',
     nzIlosc: 1, nzCena: 0, nzMatKlienta: false,
     nzTree: null, nzEditNode: null,
+    nzEditId: null,   // null = nowe zlecenie
     nzMatSearch: '', nzMatResults: [], nzSaving: false,
   });
 }
@@ -8930,6 +8959,52 @@ function nzOpen() {
 function nzClose() {
   if (state.nzSaving) return;
   setState({ nzModal: false });
+}
+
+// ── Otwiera wizard w trybie EDYCJI istniejącego zlecenia ─────────────────────
+async function nzOpenEdit(zid) {
+  const all = state.zlecenia || [];
+  let z = all.find(x => x.id === zid);
+  if (!z) {
+    try {
+      const lista = await get('/api/zlecenia');
+      setState({zlecenia: lista});
+      z = lista.find(x => x.id === zid);
+    } catch(e) { alert('Błąd: ' + e.message); return; }
+  }
+  if (!z) { alert('Nie znaleziono zlecenia #' + zid); return; }
+
+  // Załaduj zapotrzebowania P żeby zbudować drzewo
+  let zapotrz = [];
+  try { zapotrz = await get(`/api/zlecenia/${zid}/zapotrzebowania`); } catch(_) {}
+
+  // Korzeń G
+  const root = {
+    _id: nzNewId(), typ: 'G',
+    symbol: z.numer, nazwa: z.nazwa,
+    ilosc: z.ilosc_sztuk || 1, jednostka: 'szt',
+    ops: [],
+    children: zapotrz.map(zap => ({
+      _id: nzNewId(), typ: 'P',
+      symbol: zap.wyrob_p_symbol || '',
+      nazwa: zap.wyrob_nazwa || zap.wyrob_p_symbol || '',
+      ilosc: zap.ilosc_wymagana || 1, jednostka: 'szt',
+      // zachowaj id zlecenia P żeby edycja mogła je aktualizować
+      _zlecenie_p_id: zap.zlecenie_p_id || null,
+      ops: [], children: [],
+    })),
+  };
+
+  setState({
+    nzModal: true, nzStep: 1,
+    nzEditId: zid,
+    nzNumer: z.numer, nzNazwa: z.nazwa,
+    nzOpis: z.opis || '', nzTermin: z.termin ? z.termin.slice(0,10) : '',
+    nzIlosc: z.ilosc_sztuk || 1, nzCena: z.cena_brutto_szt || 0,
+    nzMatKlienta: !!z.material_od_klienta,
+    nzTree: root, nzEditNode: null,
+    nzMatSearch: '', nzMatResults: [], nzSaving: false,
+  });
 }
 
 // ── Krok 1 → 2: buduj korzeń G na podstawie numeru/nazwy zlecenia ────────────
@@ -8943,20 +9018,29 @@ function nzGoStep2() {
   const matKl = document.getElementById('nz-mat')?.value === '1';
   if (!numer || !nazwa) { alert('Numer i nazwa zlecenia są wymagane'); return; }
 
-  // Korzeń G – symbol = numer zlecenia
-  const root = {
-    _id: nzNewId(), typ: 'G',
-    symbol: numer, nazwa: nazwa,
-    ilosc: ilosc, jednostka: 'szt',
-    ops: [],      // lista operacji dla węzła G
-    children: [],
-  };
+  // W trybie edycji: zaktualizuj symbol/nazwę korzenia ale zachowaj dzieci (P/M)
+  let tree = state.nzTree;
+  if (tree) {
+    tree = JSON.parse(JSON.stringify(tree));
+    tree.symbol = numer;
+    tree.nazwa  = nazwa;
+    tree.ilosc  = ilosc;
+  } else {
+    // Korzeń G – symbol = numer zlecenia
+    tree = {
+      _id: nzNewId(), typ: 'G',
+      symbol: numer, nazwa: nazwa,
+      ilosc: ilosc, jednostka: 'szt',
+      ops: [],
+      children: [],
+    };
+  }
 
   setState({
     nzStep: 2,
     nzNumer: numer, nzNazwa: nazwa, nzOpis: opis,
     nzTermin: termin, nzIlosc: ilosc, nzCena: cena, nzMatKlienta: matKl,
-    nzTree: root,
+    nzTree: tree,
     nzEditNode: null,
   });
 }
@@ -9140,7 +9224,36 @@ async function nzSave() {
 
   setState({ nzSaving: true });
   try {
-    // 1. Utwórz zlecenie główne (G)
+    const isEdit = !!state.nzEditId;
+    let zlecenieId;
+
+    if (isEdit) {
+      // TRYB EDYCJI – aktualizuj istniejące zlecenie G
+      await put(`/api/zlecenia/${state.nzEditId}`, {
+        numer: state.nzNumer,
+        nazwa: state.nzNazwa,
+        opis: state.nzOpis || '',
+        termin: state.nzTermin || null,
+        ilosc_sztuk: state.nzIlosc,
+        cena_brutto_szt: state.nzCena,
+        material_od_klienta: state.nzMatKlienta ? 1 : 0,
+      });
+      zlecenieId = state.nzEditId;
+      setState({ nzModal: false, nzSaving: false, nzEditId: null });
+      await loadZlecenia();
+      // Odśwież drzewo
+      try {
+        const [upd, zapotrz] = await Promise.all([
+          get(`/api/zlecenia/${zlecenieId}/drzewo`),
+          get(`/api/zlecenia/${zlecenieId}/zapotrzebowania`).catch(() => []),
+        ]);
+        upd.zapotrzebowania = zapotrz;
+        setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zlecenieId]: upd } });
+      } catch(_) {}
+      return;
+    }
+
+    // TRYB TWORZENIA – utwórz zlecenie główne (G)
     const zl = await post('/api/zlecenia', {
       numer: state.nzNumer,
       nazwa: state.nzNazwa,
@@ -9150,7 +9263,7 @@ async function nzSave() {
       cena_brutto_szt: state.nzCena,
       material_od_klienta: state.nzMatKlienta ? 1 : 0,
     });
-    const zlecenieId = zl.id;
+    zlecenieId = zl.id;
 
     // 2. Utwórz lub pobierz wyrób G w drzewie BOM
     let wyrob_g_id = null;
@@ -9784,7 +9897,7 @@ function renderNzWizard() {
                 style="flex:1;background:${s.nzSaving?'#1e293b':'#16a34a'};color:${s.nzSaving?'#475569':'#fff'};
                        border:none;border-radius:6px;padding:10px;cursor:${s.nzSaving?'wait':'pointer'};
                        font-weight:700;font-size:.9rem">
-          ${s.nzSaving ? '⏳ Zapisuję...' : '💾 Utwórz zlecenie'}
+          ${s.nzSaving ? '⏳ Zapisuję...' : (s.nzEditId ? '💾 Zapisz zmiany' : '💾 Utwórz zlecenie')}
         </button>
       </div>`;
   }
@@ -9793,7 +9906,7 @@ function renderNzWizard() {
     <div class="modal-overlay" onclick="if(event.target===this&&!state.nzSaving)nzClose()">
       <div class="modal" style="max-width:820px;width:95vw">
         <button class="modal-close" onclick="nzClose()">×</button>
-        <h3 style="margin-bottom:18px">🏭 Nowe zlecenie produkcyjne</h3>
+        <h3 style="margin-bottom:18px">${s.nzEditId ? '✏ Edytuj zlecenie produkcyjne' : '🏭 Nowe zlecenie produkcyjne'}</h3>
         ${stepBar}
         ${body}
       </div>

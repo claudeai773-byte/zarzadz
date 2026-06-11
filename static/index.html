@@ -10017,27 +10017,86 @@ async function nzSave() {
       // Synchronizuj materiały M bezpośrednio przypisane do G
       await syncNodeMats(tree.children || [], zlecenieId);
 
-      // Rekurencyjne synchronizowanie podzleceń P (P→P→M)
-      async function syncPNodes(pChildren) {
-        const pNodes = (pChildren || []).filter(c => c.typ === 'P' && c._zlecenie_p_id);
-        for (const pNode of pNodes) {
-          try {
-            await put(`/api/zlecenia/${pNode._zlecenie_p_id}`, {
-              numer: pNode.symbol || pNode.nazwa,
-              nazwa: pNode.nazwa || pNode.symbol,
-              ilosc_sztuk: Math.max(1, Math.round((parseFloat(pNode.ilosc) || 1) * (state.nzIlosc || 1))),
-              termin: state.nzTermin || null,
-            });
-            // Synchronizuj operacje podzlecenia P
-            await syncNodeOps(pNode.ops || [], pNode._zlecenie_p_id);
-            // Synchronizuj materiały M podzlecenia P
-            await syncNodeMats(pNode.children || [], pNode._zlecenie_p_id);
-            // Rekurencja – zagnieżdżone P pod P
-            await syncPNodes(pNode.children || []);
-          } catch(_) { /* cicho – P mogło zostać usunięte */ }
+      // Rekurencyjne synchronizowanie podzleceń P (obsługuje istniejące i nowe P)
+      let _pAutoIdx = 1;
+      async function syncPNodes(children, parentGId) {
+        for (const pNode of (children || [])) {
+          if (pNode.typ !== 'P') continue;
+
+          let pid = pNode._zlecenie_p_id || null;
+          const pSymbol = (pNode.symbol || '').trim() || (state.nzNumer + '-P' + _pAutoIdx);
+          const pNazwa  = (pNode.nazwa  || '').trim() || pSymbol;
+          _pAutoIdx++;
+
+          if (pid) {
+            // ── Istniejące zlecenie P – aktualizuj ──────────────────────────
+            try {
+              await put(`/api/zlecenia/${pid}`, {
+                numer: pSymbol,
+                nazwa: pNazwa,
+                ilosc_sztuk: Math.max(1, Math.round((parseFloat(pNode.ilosc) || 1))),
+                termin: state.nzTermin || null,
+              });
+            } catch(_) {}
+          } else {
+            // ── Nowe zlecenie P – utwórz (analogicznie do processChildren) ──
+            // a) Utwórz lub znajdź wyrób P
+            let wyrob_p_id = null;
+            try {
+              const wp = await post('/api/wyroby', {
+                symbol: pSymbol, typ: 'P', nazwa: pNazwa,
+                jednostka: pNode.jednostka || 'szt',
+              });
+              wyrob_p_id = wp.id;
+            } catch(_) {
+              try {
+                const list = await get('/api/wyroby?typ=P&q=' + encodeURIComponent(pSymbol));
+                const found = list.find(w => w.symbol === pSymbol);
+                if (found) wyrob_p_id = found.id;
+              } catch(_) {}
+            }
+
+            // b) Utwórz zlecenie P
+            try {
+              const zpRes = await post('/api/zlecenia', {
+                numer: pSymbol, nazwa: pNazwa,
+                opis: '', termin: state.nzTermin || null,
+                ilosc_sztuk: Math.max(1, Math.round(parseFloat(pNode.ilosc) || 1)),
+                cena_brutto_szt: 0, material_od_klienta: 0,
+              });
+              pid = zpRes.id;
+            } catch(_) {
+              try {
+                const allZl = await get('/api/zlecenia');
+                const found = allZl.find(z => z.numer === pSymbol);
+                if (found) pid = found.id;
+              } catch(_) {}
+            }
+
+            // c) Zapotrzebowanie G→P
+            if (pid && parentGId) {
+              try {
+                await post(`/api/zlecenia/${parentGId}/zapotrzebowania`, {
+                  zlecenie_g_id: parentGId,
+                  wyrob_p_symbol: pSymbol,
+                  ilosc_wymagana: parseFloat(pNode.ilosc) || 1,
+                  zlecenie_p_id: pid,
+                });
+              } catch(_) {}
+            }
+          }
+
+          if (!pid) continue; // nie udało się uzyskać ID – pomiń
+
+          // Synchronizuj operacje podzlecenia P
+          await syncNodeOps(pNode.ops || [], pid);
+          // Synchronizuj materiały M podzlecenia P
+          await syncNodeMats(pNode.children || [], pid);
+          // Rekurencja – zagnieżdżone P pod P (parentGId = pid dla sub-zapotrzebowań)
+          await syncPNodes(pNode.children || [], pid);
         }
       }
-      await syncPNodes(tree.children || []);
+      await syncPNodes(tree.children || [], zlecenieId);
 
       setState({ nzModal: false, nzSaving: false, nzEditId: null });
       await loadZlecenia();
@@ -10048,7 +10107,15 @@ async function nzSave() {
           get(`/api/zlecenia/${zlecenieId}/zapotrzebowania`).catch(() => []),
           get(`/api/zlecenia/${zlecenieId}/materialy-zlecenia`).catch(() => []),
         ]);
-        upd.zapotrzebowania = zapotrz;
+        // Dołącz materiały M do każdego zapotrzebowania P
+        const zapWithMats = await Promise.all((zapotrz || []).map(async zap => {
+          if (zap.zlecenie_p_id) {
+            const pMats = await get(`/api/zlecenia/${zap.zlecenie_p_id}/materialy-zlecenia`).catch(() => []);
+            return { ...zap, materialy: pMats || [] };
+          }
+          return { ...zap, materialy: [] };
+        }));
+        upd.zapotrzebowania = zapWithMats;
         if (!upd.materialy || upd.materialy.length === 0) upd.materialy = matsM || [];
         setState({
           zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zlecenieId]: upd },

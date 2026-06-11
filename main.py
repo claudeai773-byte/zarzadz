@@ -2434,8 +2434,37 @@ def get_mrp_zlecenia(gid: int):
         # Zbierz wszystkie materiały
         if wyrob_g:
             raw_materials = _collect_materials(wyrob_g["id"], ilosc_g, set())
+            # Uzupełnij też z bom_pozycje podzleceń P (zlecenia powiązane przez zapotrzebowania)
+            p_ids_from_zap = conn.execute(
+                "SELECT DISTINCT zlecenie_p_id FROM zapotrzebowania WHERE zlecenie_g_id=? AND zlecenie_p_id IS NOT NULL",
+                (gid,)
+            ).fetchall()
+            for p_row in p_ids_from_zap:
+                pid = p_row["zlecenie_p_id"]
+                zp = conn.execute("SELECT * FROM zlecenia WHERE id=?", (pid,)).fetchone()
+                if not zp:
+                    continue
+                ilosc_p = zp["ilosc_sztuk"] or 1
+                bom_p = conn.execute("""
+                    SELECT bp.*, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.indeks, m.id as m_id
+                    FROM bom_pozycje bp
+                    JOIN materialy m ON bp.material_id=m.id
+                    WHERE bp.zlecenie_id=?
+                """, (pid,)).fetchall()
+                for r in bom_p:
+                    raw_materials.append({
+                        "material_indeks": r["indeks"],
+                        "material_opis":   r["opis"],
+                        "material_jm":     r["jm"],
+                        "material_id":     r["m_id"],
+                        "material_stan":   r["do_dyspozycji"] or 0,
+                        "material_stan_rzecz": r["stan_rzeczywisty"] or 0,
+                        "ilosc_wymagana":  r["ilosc"] * ilosc_p,
+                        "jednostka":       r["jm"],
+                        "_zlecenie_p": zp["numer"],
+                    })
         else:
-            # Fallback: użyj BOM z tabeli bom_pozycje
+            # Fallback: BOM z tabeli bom_pozycje zlecenia G i wszystkich P przez zapotrzebowania
             bom_rows = conn.execute("""
                 SELECT bp.*, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.indeks, m.id as m_id
                 FROM bom_pozycje bp
@@ -2452,6 +2481,35 @@ def get_mrp_zlecenia(gid: int):
                 "ilosc_wymagana":  r["ilosc"] * ilosc_g,
                 "jednostka":       r["jm"],
             } for r in bom_rows]
+            # Dodaj materiały z podzleceń P
+            p_ids_from_zap = conn.execute(
+                "SELECT DISTINCT zlecenie_p_id FROM zapotrzebowania WHERE zlecenie_g_id=? AND zlecenie_p_id IS NOT NULL",
+                (gid,)
+            ).fetchall()
+            for p_row in p_ids_from_zap:
+                pid = p_row["zlecenie_p_id"]
+                zp = conn.execute("SELECT * FROM zlecenia WHERE id=?", (pid,)).fetchone()
+                if not zp:
+                    continue
+                ilosc_p = zp["ilosc_sztuk"] or 1
+                bom_p = conn.execute("""
+                    SELECT bp.*, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.indeks, m.id as m_id
+                    FROM bom_pozycje bp
+                    JOIN materialy m ON bp.material_id=m.id
+                    WHERE bp.zlecenie_id=?
+                """, (pid,)).fetchall()
+                for r in bom_p:
+                    raw_materials.append({
+                        "material_indeks": r["indeks"],
+                        "material_opis":   r["opis"],
+                        "material_jm":     r["jm"],
+                        "material_id":     r["m_id"],
+                        "material_stan":   r["do_dyspozycji"] or 0,
+                        "material_stan_rzecz": r["stan_rzeczywisty"] or 0,
+                        "ilosc_wymagana":  r["ilosc"] * ilosc_p,
+                        "jednostka":       r["jm"],
+                        "_zlecenie_p": zp["numer"],
+                    })
 
         # Agreguj per materiał (widok zbiorczy)
         zbiorczo: dict = {}

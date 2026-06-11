@@ -323,6 +323,14 @@ class ZlecenieRequest(BaseModel):
     material_od_klienta: Optional[int] = 0
     model_3d_url: Optional[str] = None
 
+@app.get("/api/zlecenia/{zid}", dependencies=[Depends(verify_key)])
+def get_zlecenie(zid: int):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM zlecenia WHERE id=?", (zid,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Zlecenie nie istnieje")
+        return dict(row)
+
 @app.post("/api/zlecenia", dependencies=[Depends(verify_key)])
 def create_zlecenie(req: ZlecenieRequest):
     import uuid

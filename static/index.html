@@ -2609,29 +2609,86 @@ function renderMajster() {
           </div>
           ${expanded ? `
           <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
-            ${ops === null ? '<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">⏳ Ładowanie operacji...</div>' :
-              ops.length === 0 ? '<div style="font-size:12px;color:var(--dim)">Brak operacji</div>' :
-              ops.map(op => {
-                const opProg = z.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana||0)/z.ilosc_sztuk*100) : 0;
+            ${(() => {
+              const drzewo = (state.zlecenieDrzewa || {})[z.id];
+              if (!drzewo) return '<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">⏳ Ładowanie...</div>';
+
+              const renderOpRow = (op, indent) => {
                 const stColor = op.status==='zakonczona'?'var(--green)':op.status==='w_toku'?'var(--accent)':'var(--dim)';
                 const stIcon = op.status==='zakonczona'?'✅':op.status==='w_toku'?'▶':'⏳';
-                return `<div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3)">
-                  <div style="display:flex;justify-content:space-between;align-items:center">
-                    <div style="flex:1">
-                      <div style="font-size:12px;font-weight:600">${stIcon} ${op.kolejnosc}. ${op.nazwa}</div>
-                      <div style="font-size:11px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min':''}</div>
+                const opProg = z.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana||0)/z.ilosc_sztuk*100) : 0;
+                const done = op.status==='zakonczona';
+                return `<div style="padding:5px 4px 5px ${indent}px;border-bottom:1px solid rgba(46,53,72,.3)">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="font-size:13px">${stIcon}</span>
+                    <div style="flex:1;min-width:0">
+                      <div style="font-size:12px;font-weight:600;${done?'color:var(--dim);text-decoration:line-through':''}">${op.kolejnosc}. ${op.nazwa}</div>
+                      <div style="font-size:11px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' · norma: '+op.czas_norma+' min':''}</div>
                     </div>
-                    <div style="text-align:right;margin-left:8px">
-                      <div style="font-size:12px;font-weight:700;color:${stColor}">${op.ilosc_wykonana||0}/${z.ilosc_sztuk} szt.</div>
+                    <div style="text-align:right;flex-shrink:0">
+                      <div style="font-size:12px;font-weight:700;color:${stColor}">${op.ilosc_wykonana||0}/${z.ilosc_sztuk}</div>
                       <div style="font-size:10px;color:var(--dim)">${opProg}%</div>
                     </div>
                   </div>
-                  <div class="progress-wrap" style="height:4px;margin:4px 0 0">
+                  <div class="progress-wrap" style="height:3px;margin:4px 0 0">
                     <div class="progress-bar" style="width:${Math.min(100,opProg)}%;background:${stColor}"></div>
                   </div>
                 </div>`;
-              }).join('')
-            }
+              };
+
+              let html2 = '';
+              const gOps = drzewo.operacje || [];
+              const pdzl = drzewo.podzlecenia_drzewo || [];
+
+              // Operacje G
+              if (gOps.length) {
+                html2 += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.7px;padding:3px 4px">🔧 Operacje G (${gOps.length})</div>`;
+                gOps.forEach(op => { html2 += renderOpRow(op, 4); });
+              }
+
+              // Podzlecenia P z ich operacjami i sub-podzleceniami
+              pdzl.forEach(pd => {
+                const zap = pd.zap || {};
+                const pNumer = zap.zp_numer || zap.zlecenie_p_numer || '';
+                const pNazwa = zap.zp_nazwa || zap.wyrob_nazwa || zap.wyrob_p_symbol || '';
+                const pStatus = zap.zp_status || zap.zlecenie_p_status || '—';
+                const stCol = pStatus==='zakonczone'?'var(--green)':pStatus==='w_toku'?'var(--accent)':'var(--dim)';
+                const pOps = pd.operacje || [];
+                const pSubs = pd.podzlecenia || [];
+                const pOpsDone = pOps.filter(o=>o.status==='zakonczona').length;
+
+                html2 += `<div style="display:flex;align-items:center;gap:6px;padding:6px 4px 4px;border-top:1px solid rgba(139,92,246,0.2);margin-top:4px;background:rgba(139,92,246,0.05)">
+                  <span style="font-size:12px">◆</span>
+                  <span style="font-size:12px;font-weight:700;color:#a78bfa;flex:1">${pNumer||zap.wyrob_p_symbol||'P'}${pNazwa?` <span style="color:var(--dim);font-weight:400;font-size:11px">– ${pNazwa}</span>`:''}</span>
+                  <span style="font-size:10px;color:var(--dim)">${pOpsDone}/${pOps.length} op.</span>
+                  <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,92,246,0.15);color:${stCol};font-weight:700">${pStatus}</span>
+                </div>`;
+
+                pOps.forEach(op => { html2 += renderOpRow(op, 16); });
+
+                // Sub-podzlecenia
+                pSubs.forEach(sub => {
+                  const szap = sub.zap || {};
+                  const sNumer = szap.zp_numer || szap.zlecenie_p_numer || '';
+                  const sNazwa = szap.zp_nazwa || szap.wyrob_nazwa || szap.wyrob_p_symbol || '';
+                  const sStatus = szap.zp_status || szap.zlecenie_p_status || '—';
+                  const sCol = sStatus==='zakonczone'?'var(--green)':sStatus==='w_toku'?'var(--accent)':'var(--dim)';
+                  const sOps = sub.operacje || [];
+                  const sOpsDone = sOps.filter(o=>o.status==='zakonczona').length;
+
+                  html2 += `<div style="display:flex;align-items:center;gap:6px;padding:4px 4px 4px 20px;border-top:1px solid rgba(139,92,246,0.12);background:rgba(139,92,246,0.03)">
+                    <span style="font-size:11px;color:#7c68c8">◆</span>
+                    <span style="font-size:11px;font-weight:700;color:#9b8be8;flex:1">${sNumer||szap.wyrob_p_symbol||'P'}${sNazwa?` <span style="color:var(--dim);font-weight:400">– ${sNazwa}</span>`:''}</span>
+                    <span style="font-size:10px;color:var(--dim)">${sOpsDone}/${sOps.length} op.</span>
+                    <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(139,92,246,0.1);color:${sCol};font-weight:700">${sStatus}</span>
+                  </div>`;
+                  sOps.forEach(op => { html2 += renderOpRow(op, 28); });
+                });
+              });
+
+              if (!html2) return '<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">Brak operacji</div>';
+              return html2;
+            })()}
           </div>` : ''}
         </div>`;
       });
@@ -3300,17 +3357,21 @@ async function toggleMajsterZlecenie(zid) {
     return;
   }
   setState({majsterExpandedZlecenie: zid});
-  // Jeśli brak w cache – załaduj (zawsze przeładuj przy rozwijaniu dla aktualnych danych)
-  const cache = state.majsterOpsCache || {};
-  if (cache[zid] === undefined) {
-    try {
-      const ops = await get('/api/zlecenia/' + zid + '/operacje');
-      const newCache = {...(state.majsterOpsCache || {}), [zid]: ops};
-      setState({majsterOpsCache: newCache});
-    } catch(e) {
-      const newCache = {...(state.majsterOpsCache || {}), [zid]: []};
-      setState({majsterOpsCache: newCache});
-    }
+  // Zawsze przeładuj przy rozwijaniu dla aktualnych danych
+  try {
+    const [drzewo, matsM] = await Promise.all([
+      get(`/api/zlecenia/${zid}/drzewo`),
+      get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
+    ]);
+    if (!drzewo.materialy || drzewo.materialy.length === 0) drzewo.materialy = matsM || [];
+    const newCache = {...(state.majsterOpsCache || {}), [zid]: drzewo.operacje || []};
+    setState({
+      majsterOpsCache: newCache,
+      zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: drzewo },
+    });
+  } catch(e) {
+    const newCache = {...(state.majsterOpsCache || {}), [zid]: []};
+    setState({majsterOpsCache: newCache});
   }
 }
 
@@ -5769,10 +5830,6 @@ function renderZlecenia() {
 
           drzewoHtml = `<div style="background:var(--entry);border-radius:0 0 8px 8px;border-top:1px solid var(--border);margin-top:4px">
             ${treeRows}
-            ${canEdit ? `<div style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);flex-wrap:wrap">
-              <button class="btn-sm" style="background:rgba(167,139,250,0.15);color:#a78bfa;border:1px solid rgba(167,139,250,0.3)" onclick="openAddPolprodukt(${z.id})">+ Półprodukt P</button>
-              <button class="btn-sm" style="background:rgba(243,156,18,0.12);color:var(--orange);border:1px solid rgba(243,156,18,0.3)" onclick="openAddMaterial(${z.id})">+ Materiał M</button>
-            </div>` : ''}
           </div>`;
         }
       }

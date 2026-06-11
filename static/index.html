@@ -8839,18 +8839,23 @@ async function openPodZlecenieOperacje(zid, numer, nazwa) {
 async function openPodZlecenieModal(zid) {
   setState({ podZlecenieModal: { loading: true, zid } });
   try {
-    const [zlecenie, operacje, drzewo, zapotrz] = await Promise.all([
+    const [zlecenie, operacje, drzewo, zapotrz, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}`),
       get(`/api/zlecenia/${zid}/operacje`),
       get(`/api/zlecenia/${zid}/drzewo`).catch(() => ({ polprodukty: [], materialy: [], operacje: [] })),
       get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+      get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
+    // Użyj materiałów z /drzewo; jeśli puste – fallback do /materialy-zlecenia
+    const materialy = (drzewo.materialy && drzewo.materialy.length)
+      ? drzewo.materialy
+      : (matsM || []);
     setState({
       podZlecenieModal: {
         loading: false, zid,
         zlecenie,
         operacje: operacje || [],
-        materialy: drzewo.materialy || [],
+        materialy,
         polprodukty: drzewo.polprodukty || [],
         zapotrzebowania: zapotrz || [],
       }
@@ -9913,8 +9918,34 @@ async function nzSave() {
         }
       }
 
+      // Pomocnik: synchronizuje materiały M węzła z API (pełny replace)
+      async function syncNodeMats(nzChildren, targetZlId) {
+        // Usuń stare materiały
+        try {
+          const existingMats = await get(`/api/zlecenia/${targetZlId}/materialy-zlecenia`).catch(() => []);
+          for (const m of (existingMats || [])) {
+            try { await del(`/api/zlecenia/${targetZlId}/materialy-zlecenia/${m.id}`); } catch(_) {}
+          }
+        } catch(_) {}
+        // Zapisz nowe (tylko węzły M)
+        for (const node of (nzChildren || [])) {
+          if (node.typ === 'M' && node.material_indeks) {
+            try {
+              await post(`/api/zlecenia/${targetZlId}/materialy-zlecenia`, {
+                indeks: node.material_indeks,
+                opis: node.material_opis || '',
+                ilosc: parseFloat(node.mat_ilosc_szt) || 1,
+                jednostka: node.material_jm || 'kg',
+              });
+            } catch(e) { console.warn('syncNodeMats:', e.message); }
+          }
+        }
+      }
+
       // Synchronizuj operacje G
       await syncNodeOps(tree.ops || [], zlecenieId);
+      // Synchronizuj materiały M bezpośrednio przypisane do G
+      await syncNodeMats(tree.children || [], zlecenieId);
 
       // Aktualizuj istniejące podzlecenia P i synchronizuj ich operacje
       const pNodes = (tree.children || []).filter(c => c.typ === 'P' && c._zlecenie_p_id);
@@ -9928,6 +9959,8 @@ async function nzSave() {
           });
           // Synchronizuj operacje podzlecenia P
           await syncNodeOps(pNode.ops || [], pNode._zlecenie_p_id);
+          // Synchronizuj materiały M podzlecenia P
+          await syncNodeMats(pNode.children || [], pNode._zlecenie_p_id);
         } catch(_) { /* cicho – P mogło zostać usuniete */ }
       }
 
@@ -10004,7 +10037,7 @@ async function nzSave() {
       }
     }
 
-    async function processChildren(parentWyrob_id, children) {
+    async function processChildren(parentWyrob_id, children, parentZlId) {
       if (!parentWyrob_id) { console.error('processChildren: brak parentWyrob_id'); return; }
       for (const node of (children || [])) {
         if (node.typ === 'P') {
@@ -10061,6 +10094,22 @@ async function nzSave() {
             // Operacje P-węzła trafiają do zlecenia P
             await saveNodeOps(node.ops, zlecenie_p_id || zlecenieId);
 
+            // Zapisz materiały M dzieci P do materialy-zlecenia zlecenia P
+            if (zlecenie_p_id) {
+              for (const child of (node.children || [])) {
+                if (child.typ === 'M' && child.material_indeks) {
+                  try {
+                    await post(`/api/zlecenia/${zlecenie_p_id}/materialy-zlecenia`, {
+                      indeks: child.material_indeks,
+                      opis: child.material_opis || '',
+                      ilosc: parseFloat(child.mat_ilosc_szt) || 1,
+                      jednostka: child.material_jm || 'kg',
+                    });
+                  } catch(e) { console.warn('Mat P zapis:', e.message); }
+                }
+              }
+            }
+
             // Utwórz zapotrzebowanie G→P i od razu zlinkuj do zlecenia P
             if (zlecenie_p_id) {
               try {
@@ -10073,9 +10122,10 @@ async function nzSave() {
               } catch(_) {}
             }
 
-            // d) Rekurencja dla dzieci węzła P
-            if (node.children && node.children.length) {
-              await processChildren(wyrob_p_id, node.children);
+            // d) Rekurencja dla zagnieżdżonych P (pomiń M – już zapisane wyżej)
+            const pChildrenOnly = (node.children || []).filter(c => c.typ === 'P');
+            if (pChildrenOnly.length) {
+              await processChildren(wyrob_p_id, pChildrenOnly, zlecenie_p_id);
             }
           } else {
             console.warn('Nie udało się utworzyć/znaleźć wyrobu P:', pSymbol);
@@ -10092,6 +10142,17 @@ async function nzSave() {
               pozycja: pKolejnosc,
             });
           } catch(e) { console.warn('BOM M:', e.message); }
+          // Zapisz też do materialy-zlecenia rodzica (zlecenie G lub P)
+          if (parentZlId) {
+            try {
+              await post(`/api/zlecenia/${parentZlId}/materialy-zlecenia`, {
+                indeks: node.material_indeks,
+                opis: node.material_opis || '',
+                ilosc: parseFloat(node.mat_ilosc_szt) || 1,
+                jednostka: node.material_jm || 'kg',
+              });
+            } catch(e) { console.warn('Mat zapis do zlecenia:', e.message); }
+          }
         }
       }
     }
@@ -10100,7 +10161,7 @@ async function nzSave() {
 
     // Zapisz operacje węzła G (głównego), potem przetwórz dzieci
     await saveNodeOps(tree.ops);
-    await processChildren(wyrob_g_id, tree.children);
+    await processChildren(wyrob_g_id, tree.children, zlecenieId);
 
     // 4. Odśwież listę zleceń i drzewo
     await loadZlecenia();

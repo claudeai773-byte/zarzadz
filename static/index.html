@@ -9955,9 +9955,16 @@ async function nzSave() {
       zlecenieId = state.nzEditId;
 
       // Pomocnik: synchronizuje operacje węzła z API
-      // nzOps = lista ops z wizarda; targetZlId = ID zlecenia
       async function syncNodeOps(nzOps, targetZlId) {
         const apiOps = await get(`/api/zlecenia/${targetZlId}/operacje`).catch(() => []);
+        
+        // BEZPIECZEŃSTWO: jeśli wizard nie załadował żadnych operacji z _existingId,
+        // a w API są operacje – nie kasuj (prawdopodobnie błąd ładowania drzewa)
+        const hasExistingIds = (nzOps || []).some(o => o._existingId);
+        if (!hasExistingIds && apiOps.length > 0 && (nzOps || []).length === 0) {
+          return; // nie nadpisuj – brak danych w wizardzie nie znaczy "usuń wszystko"
+        }
+
         const existingIds = new Set(apiOps.map(o => o.id));
         const wizardExistingIds = new Set((nzOps || []).filter(o => o._existingId).map(o => o._existingId));
 
@@ -9989,16 +9996,23 @@ async function nzSave() {
       }
 
       // Pomocnik: synchronizuje materiały M węzła z API (pełny replace)
-      async function syncNodeMats(nzChildren, targetZlId) {
+      async function syncNodeMats(nzMNodes, targetZlId) {
+        // nzMNodes – już przefiltrowane węzły M (bez P)
+        const existingMats = await get(`/api/zlecenia/${targetZlId}/materialy-zlecenia`).catch(() => []);
+
+        // BEZPIECZEŃSTWO: jeśli wizard nie ma żadnych M z _existingMatId
+        // a w API są materiały – nie kasuj (ochrona przed błędem ładowania)
+        const hasExistingMatIds = (nzMNodes || []).some(m => m._existingMatId);
+        if (!hasExistingMatIds && (existingMats || []).length > 0 && (nzMNodes || []).length === 0) {
+          return;
+        }
+
         // Usuń stare materiały
-        try {
-          const existingMats = await get(`/api/zlecenia/${targetZlId}/materialy-zlecenia`).catch(() => []);
-          for (const m of (existingMats || [])) {
-            try { await del(`/api/zlecenia/${targetZlId}/materialy-zlecenia/${m.id}`); } catch(_) {}
-          }
-        } catch(_) {}
-        // Zapisz nowe (tylko węzły M)
-        for (const node of (nzChildren || [])) {
+        for (const m of (existingMats || [])) {
+          try { await del(`/api/zlecenia/${targetZlId}/materialy-zlecenia/${m.id}`); } catch(_) {}
+        }
+        // Zapisz nowe
+        for (const node of (nzMNodes || [])) {
           if (node.typ === 'M' && node.material_indeks) {
             try {
               await post(`/api/zlecenia/${targetZlId}/materialy-zlecenia`, {
@@ -10014,88 +10028,91 @@ async function nzSave() {
 
       // Synchronizuj operacje G
       await syncNodeOps(tree.ops || [], zlecenieId);
-      // Synchronizuj materiały M bezpośrednio przypisane do G
-      await syncNodeMats(tree.children || [], zlecenieId);
+      // Synchronizuj materiały M bezpośrednio przypisane do G (tylko węzły M, nie P)
+      const gMOnly = (tree.children || []).filter(c => c.typ === 'M');
+      await syncNodeMats(gMOnly, zlecenieId);
 
-      // Rekurencyjne synchronizowanie podzleceń P (obsługuje istniejące i nowe P)
+      // ── Rekurencyjne synchronizowanie podzleceń P ────────────────────────────
+      // Obsługuje istniejące P (_zlecenie_p_id) i nowe P (bez ID).
+      // Nie duplikuje: istniejące P są aktualizowane po ID, nowe są tworzone
+      // tylko jeśli zapotrzebowanie o tym symbolu jeszcze nie istnieje.
       let _pAutoIdx = 1;
+
       async function syncPNodes(children, parentGId) {
         for (const pNode of (children || [])) {
           if (pNode.typ !== 'P') continue;
 
-          let pid = pNode._zlecenie_p_id || null;
           const pSymbol = (pNode.symbol || '').trim() || (state.nzNumer + '-P' + _pAutoIdx);
           const pNazwa  = (pNode.nazwa  || '').trim() || pSymbol;
           _pAutoIdx++;
 
+          let pid = pNode._zlecenie_p_id || null;
+
           if (pid) {
-            // ── Istniejące zlecenie P – aktualizuj ──────────────────────────
+            // ── Istniejące zlecenie P – tylko aktualizuj, nigdy nie twórz nowego ──
             try {
               await put(`/api/zlecenia/${pid}`, {
                 numer: pSymbol,
                 nazwa: pNazwa,
-                ilosc_sztuk: Math.max(1, Math.round((parseFloat(pNode.ilosc) || 1))),
+                ilosc_sztuk: Math.max(1, Math.round(parseFloat(pNode.ilosc) || 1)),
                 termin: state.nzTermin || null,
               });
             } catch(_) {}
           } else {
-            // ── Nowe zlecenie P – utwórz (analogicznie do processChildren) ──
-            // a) Utwórz lub znajdź wyrób P
-            let wyrob_p_id = null;
+            // ── Nowe P – sprawdź czy zlecenie o tym numerze już istnieje ──────────
+            // (zabezpieczenie przed duplikacją przy wielokrotnym zapisie)
             try {
-              const wp = await post('/api/wyroby', {
-                symbol: pSymbol, typ: 'P', nazwa: pNazwa,
-                jednostka: pNode.jednostka || 'szt',
-              });
-              wyrob_p_id = wp.id;
-            } catch(_) {
+              const existing = await get('/api/zlecenia').catch(() => []);
+              const found = (existing || []).find(z => z.numer === pSymbol);
+              if (found) {
+                pid = found.id;
+              } else {
+                const zpRes = await post('/api/zlecenia', {
+                  numer: pSymbol, nazwa: pNazwa,
+                  opis: '', termin: state.nzTermin || null,
+                  ilosc_sztuk: Math.max(1, Math.round(parseFloat(pNode.ilosc) || 1)),
+                  cena_brutto_szt: 0, material_od_klienta: 0,
+                });
+                pid = zpRes.id;
+              }
+            } catch(_) {}
+
+            // Dodaj wyrób P do BOM (ignoruj błąd jeśli już istnieje)
+            if (pid) {
               try {
-                const list = await get('/api/wyroby?typ=P&q=' + encodeURIComponent(pSymbol));
-                const found = list.find(w => w.symbol === pSymbol);
-                if (found) wyrob_p_id = found.id;
+                await post('/api/wyroby', { symbol: pSymbol, typ: 'P', nazwa: pNazwa, jednostka: pNode.jednostka || 'szt' });
               } catch(_) {}
             }
 
-            // b) Utwórz zlecenie P
-            try {
-              const zpRes = await post('/api/zlecenia', {
-                numer: pSymbol, nazwa: pNazwa,
-                opis: '', termin: state.nzTermin || null,
-                ilosc_sztuk: Math.max(1, Math.round(parseFloat(pNode.ilosc) || 1)),
-                cena_brutto_szt: 0, material_od_klienta: 0,
-              });
-              pid = zpRes.id;
-            } catch(_) {
-              try {
-                const allZl = await get('/api/zlecenia');
-                const found = allZl.find(z => z.numer === pSymbol);
-                if (found) pid = found.id;
-              } catch(_) {}
-            }
-
-            // c) Zapotrzebowanie G→P
+            // Utwórz zapotrzebowanie G→P tylko jeśli jeszcze nie istnieje
             if (pid && parentGId) {
               try {
-                await post(`/api/zlecenia/${parentGId}/zapotrzebowania`, {
-                  zlecenie_g_id: parentGId,
-                  wyrob_p_symbol: pSymbol,
-                  ilosc_wymagana: parseFloat(pNode.ilosc) || 1,
-                  zlecenie_p_id: pid,
-                });
+                const zapExisting = await get(`/api/zlecenia/${parentGId}/zapotrzebowania`).catch(() => []);
+                const zapFound = (zapExisting || []).find(z => z.zlecenie_p_id === pid || z.wyrob_p_symbol === pSymbol);
+                if (!zapFound) {
+                  await post(`/api/zlecenia/${parentGId}/zapotrzebowania`, {
+                    zlecenie_g_id: parentGId,
+                    wyrob_p_symbol: pSymbol,
+                    ilosc_wymagana: parseFloat(pNode.ilosc) || 1,
+                    zlecenie_p_id: pid,
+                  });
+                }
               } catch(_) {}
             }
           }
 
-          if (!pid) continue; // nie udało się uzyskać ID – pomiń
+          if (!pid) continue;
 
-          // Synchronizuj operacje podzlecenia P
+          // Synchronizuj operacje P
           await syncNodeOps(pNode.ops || [], pid);
-          // Synchronizuj materiały M podzlecenia P
-          await syncNodeMats(pNode.children || [], pid);
-          // Rekurencja – zagnieżdżone P pod P (parentGId = pid dla sub-zapotrzebowań)
+          // Synchronizuj materiały M dzieci P (tylko węzły M)
+          const pMOnly = (pNode.children || []).filter(c => c.typ === 'M');
+          await syncNodeMats(pMOnly, pid);
+          // Rekurencja dla zagnieżdżonych P pod P
           await syncPNodes(pNode.children || [], pid);
         }
       }
+
       await syncPNodes(tree.children || [], zlecenieId);
 
       setState({ nzModal: false, nzSaving: false, nzEditId: null });

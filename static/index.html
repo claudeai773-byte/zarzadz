@@ -497,6 +497,7 @@ let state = {
   // Drzewko P/M zleceń (inline expand)
   zlecenieExpanded: {},   // {zid: bool}
   zlecenieDrzewa: {},     // {zid: {polprodukty, materialy, operacje}}
+  podzlecenieIds: new Set(), // ID zleceń które są podzleceniami P (ukryte z głównej listy)
   pmModal: null,          // {typ:'polprodukt'|'material', zid, item}
   podZlecenieModal: null, // {loading, zid, zlecenie, operacje, materialy}
 
@@ -659,7 +660,19 @@ async function loadZlecenia() {
   setState({loading:true, error:null});
   try {
     const zl = await get('/api/zlecenia');
-    setState({zlecenia:zl, loading:false});
+    // Zbierz ID wszystkich podzleceń P równolegle (tylko aktywne zlecenia – nie zakończone/anulowane)
+    // żeby odfiltrować je z głównej listy
+    const aktywne = (zl || []).filter(z => z.status !== 'zakonczone' && z.status !== 'anulowane');
+    const zapResults = await Promise.all(
+      aktywne.map(z => get(`/api/zlecenia/${z.id}/zapotrzebowania`).catch(() => []))
+    );
+    const podzlecenieIds = new Set(state.podzlecenieIds || []);
+    zapResults.forEach(zapotrz => {
+      (zapotrz || []).forEach(zap => {
+        if (zap.zlecenie_p_id) podzlecenieIds.add(zap.zlecenie_p_id);
+      });
+    });
+    setState({zlecenia: zl, podzlecenieIds, loading: false});
   } catch(e) {
     setState({loading:false, error:e.message});
   }
@@ -5596,10 +5609,13 @@ function renderZlecenia() {
   }
 
   const zl = state.zlecenia || [];
-  if (!zl.length) {
+  // Filtruj podzlecenia P – pokazuj tylko zlecenia główne G
+  const podzlecenieIds = state.podzlecenieIds instanceof Set ? state.podzlecenieIds : new Set(state.podzlecenieIds || []);
+  const zlGlowne = zl.filter(z => !podzlecenieIds.has(z.id));
+  if (!zlGlowne.length) {
     html += `<div class="empty">Brak zleceń</div>`;
   } else {
-    zl.forEach(z => {
+    zlGlowne.forEach(z => {
       const przeterminowane = z.termin && new Date(z.termin) < new Date() && z.status !== 'zakonczone';
       const expanded = (state.zlecenieExpanded || {})[z.id];
       const drzewo = (state.zlecenieDrzewa || {})[z.id];
@@ -8636,8 +8652,24 @@ async function toggleZlecenieExpand(zid) {
       get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
       get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
+
+    // POPRAWKA: deduplikacja zapotrzebowań po zlecenie_p_id i wyrob_p_symbol
+    const seenPIds = new Set();
+    const seenPSymbols = new Set();
+    const zapDedup = (zapotrz || []).filter(zap => {
+      if (zap.zlecenie_p_id) {
+        if (seenPIds.has(zap.zlecenie_p_id)) return false;
+        seenPIds.add(zap.zlecenie_p_id);
+        return true;
+      }
+      const sym = zap.wyrob_p_symbol || '';
+      if (seenPSymbols.has(sym)) return false;
+      seenPSymbols.add(sym);
+      return true;
+    });
+
     // Dołącz materiały M do każdego zapotrzebowania P
-    const zapWithMats = await Promise.all((zapotrz || []).map(async zap => {
+    const zapWithMats = await Promise.all(zapDedup.map(async zap => {
       if (zap.zlecenie_p_id) {
         try {
           const pMats = await get(`/api/zlecenia/${zap.zlecenie_p_id}/materialy-zlecenia`).catch(() => []);
@@ -8652,7 +8684,10 @@ async function toggleZlecenieExpand(zid) {
     if (!data.materialy || data.materialy.length === 0) {
       data.materialy = matsM || [];
     }
-    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
+    // Zaktualizuj podzlecenieIds – ukryj nowo poznane podzlecenia P z głównej listy
+    const updatedPodzlecenieIds = new Set(state.podzlecenieIds || []);
+    zapDedup.forEach(zap => { if (zap.zlecenie_p_id) updatedPodzlecenieIds.add(zap.zlecenie_p_id); });
+    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data }, podzlecenieIds: updatedPodzlecenieIds });
   } catch(e) {
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], zapotrzebowania:[], error: e.message } } });
   }
@@ -8666,8 +8701,24 @@ async function refreshZlecenieDrzewo(zid) {
       get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
       get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
+
+    // POPRAWKA: deduplikacja zapotrzebowań po zlecenie_p_id i wyrob_p_symbol
+    const seenPIds2 = new Set();
+    const seenPSymbols2 = new Set();
+    const zapDedup2 = (zapotrz || []).filter(zap => {
+      if (zap.zlecenie_p_id) {
+        if (seenPIds2.has(zap.zlecenie_p_id)) return false;
+        seenPIds2.add(zap.zlecenie_p_id);
+        return true;
+      }
+      const sym = zap.wyrob_p_symbol || '';
+      if (seenPSymbols2.has(sym)) return false;
+      seenPSymbols2.add(sym);
+      return true;
+    });
+
     // Dołącz materiały M do każdego zapotrzebowania P
-    const zapWithMats = await Promise.all((zapotrz || []).map(async zap => {
+    const zapWithMats = await Promise.all(zapDedup2.map(async zap => {
       if (zap.zlecenie_p_id) {
         try {
           const pMats = await get(`/api/zlecenia/${zap.zlecenie_p_id}/materialy-zlecenia`).catch(() => []);
@@ -10165,6 +10216,27 @@ async function nzSave() {
       }
 
       await syncPNodes(tree.children || [], zlecenieId);
+
+      // POPRAWKA: wyczyść zduplikowane zapotrzebowania z bazy
+      // (mogły powstać przy wcześniejszych wielokrotnych zapisach)
+      try {
+        const allZap = await get(`/api/zlecenia/${zlecenieId}/zapotrzebowania`).catch(() => []);
+        const seenPIdsClean = new Set();
+        const seenSymbolsClean = new Set();
+        for (const zap of (allZap || [])) {
+          const key = zap.zlecenie_p_id || zap.wyrob_p_symbol;
+          const alreadySeen = zap.zlecenie_p_id
+            ? seenPIdsClean.has(zap.zlecenie_p_id)
+            : seenSymbolsClean.has(zap.wyrob_p_symbol || '');
+          if (alreadySeen) {
+            // Usuń duplikat
+            try { await del(`/api/zapotrzebowania/${zap.id}`); } catch(_) {}
+          } else {
+            if (zap.zlecenie_p_id) seenPIdsClean.add(zap.zlecenie_p_id);
+            else seenSymbolsClean.add(zap.wyrob_p_symbol || '');
+          }
+        }
+      } catch(_) {}
 
       setState({ nzModal: false, nzSaving: false, nzEditId: null });
       await loadZlecenia();

@@ -5827,13 +5827,14 @@ function renderZlecenia() {
         </div>
         <div class="field">
           <label>Materiał od klienta</label>
-          <select id="zl-mat" onchange="render()">
+          <select id="zl-mat" onchange="toggleBomSection(this.value)">
             <option value="0" ${!z.material_od_klienta?'selected':''}>Nie – definiuję materiał (BOM)</option>
             <option value="1" ${z.material_od_klienta?'selected':''}>Tak – klient dostarcza materiał</option>
           </select>
         </div>
-        ${z.id && !z.material_od_klienta ? renderBomSection(z.id) : ''}
-        ${!z.id && !z.material_od_klienta ? '<div style="background:var(--entry);border:1px dashed var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">📦 <b>BOM</b> – Zapisz zlecenie, aby zdefiniować materiały</div>' : ''}
+        <div id="zl-bom-section" style="display:${z.material_od_klienta ? 'none' : 'block'}">
+          ${z.id ? renderBomSection(z.id) : '<div style="background:var(--entry);border:1px dashed var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">📦 <b>BOM</b> – Zapisz zlecenie, aby zdefiniować materiały</div>'}
+        </div>
 
         <!-- Sekcja Półprodukty P -->
         <div style="margin-bottom:14px">
@@ -6130,6 +6131,14 @@ async function deleteProduktZlecenia(zid, pid) {
 }
 
 
+function toggleBomSection(val) {
+  // Przełącz widoczność sekcji BOM bez re-renderowania całego modalu
+  const bomSection = document.getElementById('zl-bom-section');
+  if (bomSection) {
+    bomSection.style.display = (val === '1') ? 'none' : 'block';
+  }
+}
+
 function saveZlecenieForm(id) {
   const data = {
     numer: document.getElementById('zl-numer').value.trim(),
@@ -6151,13 +6160,19 @@ async function openEditZlecenie(z) {
     await loadProduktyZlecenia(z.id);
     // Załaduj drzewo P/M/operacje – bez tego renderPolproduktList i renderMaterialList są puste
     try {
-      const [drzewo, zapotrz] = await Promise.all([
+      const [drzewo, zapotrz, matsM] = await Promise.all([
         get(`/api/zlecenia/${z.id}/drzewo`),
         get(`/api/zlecenia/${z.id}/zapotrzebowania`).catch(() => []),
+        get(`/api/zlecenia/${z.id}/materialy-zlecenia`).catch(() => []),
       ]);
       drzewo.zapotrzebowania = zapotrz || [];
+      if (!drzewo.materialy || drzewo.materialy.length === 0) {
+        drzewo.materialy = matsM || [];
+      }
       setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [z.id]: drzewo } }, true);
     } catch(_) {}
+    // Przeładuj BOM jeśli był w cache
+    loadBom(z.id);
   }
   setState({zlecenieModal: z});
 }
@@ -6177,13 +6192,18 @@ async function openEditZlecenieById(zid) {
   if (!z) { alert('Nie znaleziono zlecenia #' + zid); return; }
   await loadProduktyZlecenia(z.id);
   try {
-    const [drzewo, zapotrz] = await Promise.all([
+    const [drzewo, zapotrz, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}/drzewo`),
       get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+      get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
     drzewo.zapotrzebowania = zapotrz || [];
+    if (!drzewo.materialy || drzewo.materialy.length === 0) {
+      drzewo.materialy = matsM || [];
+    }
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: drzewo } }, true);
   } catch(_) {}
+  loadBom(z.id);
   setState({zlecenieModal: z});
 }
 
@@ -6407,19 +6427,29 @@ async function openKartaModal(z) {
       operacje: opsG,
       materialy: [],
     }];
+    // Ładuj tylko podzlecenia P które są osobnymi zleceniami (nie półprodukty wbudowane w strukturę G)
+    const processedIds = new Set();
     for (const zap of (zapotrz || [])) {
       if (!zap.zlecenie_p_id) continue;
+      if (processedIds.has(zap.zlecenie_p_id)) continue;
       const zp = allZl.find(x => x.id === zap.zlecenie_p_id);
       if (!zp) continue;
+      // Pomiń jeśli to zlecenie P nie ma żadnych operacji (jest tylko kartą materiałową/półproduktem)
       let opsP = [];
       try { opsP = await get('/api/zlecenia/' + zp.id + '/operacje'); } catch(e){}
       let matsP = [];
       try { matsP = await get('/api/zlecenia/' + zp.id + '/bom'); } catch(e){}
+      // Pobierz też materiały M przypisane bezpośrednio do zlecenia P
+      let matsM = [];
+      try { matsM = await get('/api/zlecenia/' + zp.id + '/materialy-zlecenia'); } catch(e){}
+      processedIds.add(zap.zlecenie_p_id);
       subList.push({
         id: zp.id, numer: zp.numer, nazwa: zp.nazwa, ilosc_sztuk: zp.ilosc_sztuk,
         status: zp.status, qr_code: zp.qr_code, typ: 'P',
         operacje: opsP,
-        materialy: matsP,
+        materialy: matsP.length ? matsP : matsM,
+        // Flaga: P bez operacji = karta materiałowa (półprodukt z materiałem)
+        kartaMaterialowa: opsP.length === 0 && (matsP.length > 0 || matsM.length > 0),
       });
     }
     setState({kartaSubZlecenia: subList, kartaSubLoading: false});
@@ -6607,9 +6637,32 @@ function _buildKartaHtml(subs, mode) {
   let html = '';
   subs.forEach((s, idx) => {
     if (idx > 0) html += `<div style="page-break-before:always;margin-top:24px"></div>`;
+    const isMaterialCard = s.kartaMaterialowa; // P bez operacji, tylko z materiałem
+    const hasOps = (s.operacje || []).length > 0;
+    const hasMats = (s.materialy || []).length > 0;
+
+    // Sekcja materiałów (dla kart obróbkowych P z materiałem lub kart materiałowych)
+    let matsSection = '';
+    if (hasMats) {
+      const matsRows = (s.materialy || []).map((m, i) => `<tr style="background:${i%2===0?'#fff':'#fafafa'}">
+        <td style="padding:5px 8px;border:1px solid #ddd;font-family:Consolas;font-size:11px">${m.material_indeks||m.indeks||''}</td>
+        <td style="padding:5px 8px;border:1px solid #ddd">${m.material_opis||m.opis||''}</td>
+        <td style="padding:5px 8px;border:1px solid #ddd;text-align:right;font-weight:700">${m.ilosc||''}</td>
+        <td style="padding:5px 8px;border:1px solid #ddd;color:#555">${m.material_jm||m.jm||m.jednostka||''}</td>
+      </tr>`).join('');
+      matsSection = `<div style="font-weight:800;font-size:13px;margin-bottom:8px;margin-top:16px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #000;padding-bottom:4px">Materiały (${(s.materialy||[]).length})</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">
+        <thead><tr style="background:#f0f0f0">
+          <th style="padding:5px 8px;text-align:left;border:1px solid #ddd">Indeks</th>
+          <th style="padding:5px 8px;text-align:left;border:1px solid #ddd">Opis</th>
+          <th style="padding:5px 8px;text-align:right;border:1px solid #ddd">Ilość</th>
+          <th style="padding:5px 8px;text-align:left;border:1px solid #ddd">JM</th>
+        </tr></thead><tbody>${matsRows}</tbody></table>`;
+    }
+
     html += `<div>
       <div style="text-align:center;border-bottom:3px solid #000;padding-bottom:12px;margin-bottom:16px">
-        <div style="font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#555">Karta Zlecenia Produkcyjnego${s.typ==='P'?' – Podzlecenie P':''}</div>
+        <div style="font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#555">${isMaterialCard ? 'Karta Materiałowa – Półprodukt P' : ('Karta Zlecenia Produkcyjnego' + (s.typ==='P' ? ' – Podzlecenie P' : ''))}</div>
         <div style="font-size:28px;font-weight:900;font-family:Consolas,monospace;margin:4px 0">${s.numer}</div>
         <div style="font-size:16px;font-weight:600">${s.nazwa}</div>
       </div>
@@ -6618,14 +6671,17 @@ function _buildKartaHtml(subs, mode) {
           <td style="padding:7px 10px;border:1px solid #ccc;font-size:20px;font-weight:900">${s.ilosc_sztuk} szt.</td></tr>
         <tr><td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Status</td>
           <td style="padding:7px 10px;border:1px solid #ccc;text-transform:uppercase">${s.status||'—'}</td></tr>
+        ${isMaterialCard ? `<tr><td style="padding:7px 10px;font-weight:700;border:1px solid #ccc">Typ karty</td>
+          <td style="padding:7px 10px;border:1px solid #ccc;color:#7c3aed;font-weight:700">📦 Karta materiałowa (bez operacji obróbkowych)</td></tr>` : ''}
       </table>
-      <div style="font-weight:800;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #000;padding-bottom:4px">
+      ${!isMaterialCard ? `<div style="font-weight:800;font-size:13px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #000;padding-bottom:4px">
         Operacje produkcyjne (${(s.operacje||[]).length})
       </div>
-      ${buildOpsTable(s.operacje)}
+      ${buildOpsTable(s.operacje)}` : ''}
+      ${matsSection}
       <div style="display:flex;justify-content:space-between;align-items:flex-end;border-top:2px solid #000;padding-top:12px;margin-top:8px">
         <div>
-          ${s.qr_code ? `<div style="margin-bottom:6px">
+          ${s.qr_code && !isMaterialCard ? `<div style="margin-bottom:6px">
             <div style="font-size:10px;font-weight:700;letter-spacing:1px;margin-bottom:4px">KOD QR ZLECENIA</div>
             <canvas id="karta-qr-canvas-${s.id}" style="display:block;border:1px solid #ccc;padding:4px"></canvas>
             <div style="font-family:Consolas;font-size:9px;margin-top:2px;color:#555">${s.qr_code}</div>
@@ -8565,12 +8621,17 @@ async function toggleZlecenieExpand(zid) {
   // Rozwiń i zawsze przeładuj dane (żeby pokazać zmiany po edycji)
   setState({ zlecenieExpanded: { ...expanded, [zid]: true } });
   try {
-    const [data, zapotrz] = await Promise.all([
+    const [data, zapotrz, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}/drzewo`),
       get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+      get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
     // Dołącz zapotrzebowania P (podzlecenia z wizarda) do danych drzewa
     data.zapotrzebowania = zapotrz || [];
+    // Uzupełnij materiały M jeśli /drzewo ich nie zwraca
+    if (!data.materialy || data.materialy.length === 0) {
+      data.materialy = matsM || [];
+    }
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
   } catch(e) {
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], zapotrzebowania:[], error: e.message } } });
@@ -8580,11 +8641,16 @@ async function toggleZlecenieExpand(zid) {
 // Odśwież dane drzewka dla jednego zlecenia
 async function refreshZlecenieDrzewo(zid) {
   try {
-    const [data, zapotrz] = await Promise.all([
+    const [data, zapotrz, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}/drzewo`),
       get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+      get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
     data.zapotrzebowania = zapotrz || [];
+    // Jeśli backend nie zwraca materialy w /drzewo – uzupełnij z dedykowanego endpointu
+    if (!data.materialy || data.materialy.length === 0) {
+      data.materialy = matsM || [];
+    }
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
   } catch(e) { /* cicho */ }
 }

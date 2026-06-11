@@ -8260,7 +8260,11 @@ async function toggleZlecenieExpand(zid) {
 // Odśwież dane drzewka dla jednego zlecenia
 async function refreshZlecenieDrzewo(zid) {
   try {
-    const data = await get(`/api/zlecenia/${zid}/drzewo`);
+    const [data, zapotrz] = await Promise.all([
+      get(`/api/zlecenia/${zid}/drzewo`),
+      get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+    ]);
+    data.zapotrzebowania = zapotrz || [];
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
   } catch(e) { /* cicho */ }
 }

@@ -6292,6 +6292,10 @@ async function addOperacja(zlecenieId) {
       opis_czynnosci: document.getElementById('op-opis').value,
       czas_zbrojenia_min: parseFloat(document.getElementById('op-zbrojenie')?.value)||0,
     });
+    // Unieważnij cache drzewa żeby rozwinięty widok zlecenia się odświeżył
+    const drzewa = {...(state.zlecenieDrzewa || {})};
+    delete drzewa[zlecenieId];
+    setState({ zlecenieDrzewa: drzewa }, true);
     await openOperacje(state.operacjeModal.zlecenie);
   } catch(e) { alert('Błąd: '+e.message); }
 }
@@ -6300,6 +6304,10 @@ async function deleteOp(opId, zlecenieId) {
   if (!confirm('Usunąć operację?')) return;
   try {
     await del(`/api/operacje/${opId}`);
+    // Unieważnij cache drzewa
+    const drzewa = {...(state.zlecenieDrzewa || {})};
+    delete drzewa[zlecenieId];
+    setState({ zlecenieDrzewa: drzewa }, true);
     await openOperacje(state.operacjeModal.zlecenie);
   } catch(e) { alert('Błąd: '+e.message); }
 }
@@ -6585,6 +6593,10 @@ async function updateOperacja(opId, zlecenieId) {
       opis_czynnosci: document.getElementById('op-opis')?.value||'',
       czas_zbrojenia_min: parseFloat(document.getElementById('op-zbrojenie')?.value)||0,
     });
+    // Unieważnij cache drzewa
+    const drzewa = {...(state.zlecenieDrzewa || {})};
+    delete drzewa[zlecenieId];
+    setState({ zlecenieDrzewa: drzewa }, true);
     await openOperacje(state.operacjeModal.zlecenie);
   } catch(e) { alert('Błąd: '+e.message); }
 }
@@ -8250,7 +8262,11 @@ async function toggleZlecenieExpand(zid) {
 // Odśwież dane drzewka dla jednego zlecenia
 async function refreshZlecenieDrzewo(zid) {
   try {
-    const data = await get(`/api/zlecenia/${zid}/drzewo`);
+    const [data, zapotrz] = await Promise.all([
+      get(`/api/zlecenia/${zid}/drzewo`),
+      get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+    ]);
+    data.zapotrzebowania = zapotrz || [];
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
   } catch(e) { /* cicho */ }
 }
@@ -8340,7 +8356,7 @@ async function savePolprodukt(zid, pid) {
     } else {
       await post(`/api/zlecenia/${zid}/polprodukty`, { symbol, nazwa, ilosc, jednostka: jm, uwagi });
     }
-    setState({ pmModal: null });
+    setState({ pmModal: null, zlecenieExpanded: { ...(state.zlecenieExpanded || {}), [zid]: true } });
     await refreshZlecenieDrzewo(zid);
   } catch(e) { alert('Błąd: ' + e.message); }
 }
@@ -8349,6 +8365,7 @@ async function deletePolprodukt(zid, pid) {
   if (!confirm('Usunąć ten półprodukt?')) return;
   try {
     await del(`/api/zlecenia/${zid}/polprodukty/${pid}`);
+    setState({ zlecenieExpanded: { ...(state.zlecenieExpanded || {}), [zid]: true } }, true);
     await refreshZlecenieDrzewo(zid);
   } catch(e) { alert('Błąd: ' + e.message); }
 }
@@ -8408,7 +8425,7 @@ async function saveMaterialZlecenia(zid, mid) {
     } else {
       await post(`/api/zlecenia/${zid}/materialy-zlecenia`, { indeks, opis, ilosc, jednostka: jm, uwagi });
     }
-    setState({ pmModal: null });
+    setState({ pmModal: null, zlecenieExpanded: { ...(state.zlecenieExpanded || {}), [zid]: true } });
     await refreshZlecenieDrzewo(zid);
   } catch(e) { alert('Błąd: ' + e.message); }
 }
@@ -8417,6 +8434,7 @@ async function deleteMaterialZlecenia(zid, mid) {
   if (!confirm('Usunąć ten materiał?')) return;
   try {
     await del(`/api/zlecenia/${zid}/materialy-zlecenia/${mid}`);
+    setState({ zlecenieExpanded: { ...(state.zlecenieExpanded || {}), [zid]: true } }, true);
     await refreshZlecenieDrzewo(zid);
   } catch(e) { alert('Błąd: ' + e.message); }
 }
@@ -10263,9 +10281,10 @@ function renderDrzewoGP() {
         panelContent = '<div style="display:flex;align-items:center;gap:12px;color:#475569;padding:24px"><div class="spinner" style="border:2px solid #fff2;border-top:2px solid #3b82f6;border-radius:50%;width:20px;height:20px;animation:spin .8s linear infinite"></div><span style="font-size:.79rem">Ładowanie drzewa…</span></div>';
       } else if (tree) {
         const nodeCount = (function cnt(n){return 1 + (n.children||[]).reduce((s,c)=>s+cnt(c),0);})(tree);
-        const treeToolbar = `<div style="display:flex;gap:6px;margin-bottom:10px;align-items:center">
+        const treeToolbar = `<div style="display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap">
           <span style="color:#475569;font-size:.72rem">${nodeCount} węzłów</span>
           <div style="flex:1"></div>
+          <button onclick="drzewoSelectG(${JSON.stringify(selG).replace(/"/g,'&quot;')})" title="Odśwież drzewo" style="background:#ffffff0a;color:#60a5fa;border:1px solid #3b82f633;border-radius:5px;padding:3px 10px;font-size:.71rem;cursor:pointer">🔄 Odśwież</button>
           <button onclick="drzewoExpandAll()" style="background:#ffffff0a;color:#94a3b8;border:1px solid #ffffff15;border-radius:5px;padding:3px 10px;font-size:.71rem;cursor:pointer">⊕ Rozwiń wszystko</button>
           <button onclick="drzewoCollapseAll()" style="background:#ffffff0a;color:#94a3b8;border:1px solid #ffffff15;border-radius:5px;padding:3px 10px;font-size:.71rem;cursor:pointer">⊖ Zwiń wszystko</button>
         </div>`;

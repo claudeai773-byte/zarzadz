@@ -499,14 +499,103 @@ def get_zlecenie_drzewo(zid: int):
             (zid,)
         ).fetchall()
         operacje = conn.execute(
-            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
+            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min, opis_czynnosci FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
             (zid,)
         ).fetchall()
+
+        # Pobierz podzlecenia P powiązane przez zapotrzebowania
+        zapotrz_rows = conn.execute("""
+            SELECT z.*,
+                   zp.id as zp_id, zp.numer as zp_numer, zp.nazwa as zp_nazwa,
+                   zp.status as zp_status, zp.ilosc_sztuk as zp_ilosc,
+                   w.nazwa as wyrob_nazwa
+            FROM zapotrzebowania z
+            LEFT JOIN zlecenia zp ON z.zlecenie_p_id = zp.id
+            LEFT JOIN wyroby w ON w.symbol = z.wyrob_p_symbol
+            WHERE z.zlecenie_g_id=?
+            ORDER BY z.priorytet DESC, z.id
+        """, (zid,)).fetchall()
+
+        # Dla każdego podzlecenia P załaduj jego operacje, materiały i sub-podzlecenia
+        seen_p_ids = set()
+        podzlecenia_drzewo = []
+        for zap in zapotrz_rows:
+            zap_d = dict(zap)
+            p_id = zap_d.get("zlecenie_p_id") or zap_d.get("zp_id")
+            if p_id and p_id not in seen_p_ids:
+                seen_p_ids.add(p_id)
+                p_ops = conn.execute(
+                    "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min, opis_czynnosci FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
+                    (p_id,)
+                ).fetchall()
+                p_mats = conn.execute(
+                    "SELECT * FROM zlecenie_materialy WHERE zlecenie_id=? ORDER BY kolejnosc, id",
+                    (p_id,)
+                ).fetchall()
+                p_pols = conn.execute(
+                    "SELECT * FROM zlecenie_polprodukty WHERE zlecenie_id=? ORDER BY kolejnosc, id",
+                    (p_id,)
+                ).fetchall()
+                # Zagnieżdżone podzlecenia P (dla struktury wielopoziomowej)
+                sub_zapotrz = conn.execute("""
+                    SELECT z.*,
+                           zp.id as zp_id, zp.numer as zp_numer, zp.nazwa as zp_nazwa,
+                           zp.status as zp_status, zp.ilosc_sztuk as zp_ilosc,
+                           w.nazwa as wyrob_nazwa
+                    FROM zapotrzebowania z
+                    LEFT JOIN zlecenia zp ON z.zlecenie_p_id = zp.id
+                    LEFT JOIN wyroby w ON w.symbol = z.wyrob_p_symbol
+                    WHERE z.zlecenie_g_id=?
+                    ORDER BY z.priorytet DESC, z.id
+                """, (p_id,)).fetchall()
+                sub_p_list = []
+                seen_sub = set()
+                for sub in sub_zapotrz:
+                    sub_d = dict(sub)
+                    sub_pid = sub_d.get("zlecenie_p_id") or sub_d.get("zp_id")
+                    if sub_pid and sub_pid not in seen_sub:
+                        seen_sub.add(sub_pid)
+                        sub_ops = conn.execute(
+                            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
+                            (sub_pid,)
+                        ).fetchall()
+                        sub_mats = conn.execute(
+                            "SELECT * FROM zlecenie_materialy WHERE zlecenie_id=? ORDER BY kolejnosc, id",
+                            (sub_pid,)
+                        ).fetchall()
+                        sub_p_list.append({
+                            "zap": sub_d,
+                            "operacje": [dict(r) for r in sub_ops],
+                            "materialy": [dict(r) for r in sub_mats],
+                        })
+                    elif not sub_pid:
+                        sub_p_list.append({"zap": sub_d, "operacje": [], "materialy": []})
+
+                podzlecenia_drzewo.append({
+                    "zap": zap_d,
+                    "zlecenie_p_id": p_id,
+                    "operacje": [dict(r) for r in p_ops],
+                    "materialy": [dict(r) for r in p_mats],
+                    "polprodukty": [dict(r) for r in p_pols],
+                    "podzlecenia": sub_p_list,
+                })
+            elif not p_id:
+                # Zapotrzebowanie bez powiązanego zlecenia P
+                podzlecenia_drzewo.append({
+                    "zap": zap_d,
+                    "zlecenie_p_id": None,
+                    "operacje": [],
+                    "materialy": [],
+                    "polprodukty": [],
+                    "podzlecenia": [],
+                })
+
         return {
             "zlecenie": dict(zl),
             "polprodukty": [dict(r) for r in polprodukty],
             "materialy": [dict(r) for r in materialy],
             "operacje": [dict(r) for r in operacje],
+            "podzlecenia_drzewo": podzlecenia_drzewo,
         }
 
 @app.patch("/api/zlecenia/{zid}/status", dependencies=[Depends(verify_key)])

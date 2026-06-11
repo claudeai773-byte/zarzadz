@@ -1672,6 +1672,10 @@ async function saveZlecenie(data) {
       await put(`/api/zlecenia/${data.id}`, data);
       setState({zlecenieModal:null});
       await loadZlecenia();
+      // Wyczyść cache drzewa dla tego zlecenia – dane odświeżą się przy kolejnym otwarciu
+      const updDrzewa = {...(state.zlecenieDrzewa || {})};
+      delete updDrzewa[data.id];
+      setState({zlecenieDrzewa: updDrzewa}, true);
     } else {
       const result = await post('/api/zlecenia', data);
       const newId = result.id;
@@ -6145,6 +6149,15 @@ function saveZlecenieForm(id) {
 async function openEditZlecenie(z) {
   if (z && z.id) {
     await loadProduktyZlecenia(z.id);
+    // Załaduj drzewo P/M/operacje – bez tego renderPolproduktList i renderMaterialList są puste
+    try {
+      const [drzewo, zapotrz] = await Promise.all([
+        get(`/api/zlecenia/${z.id}/drzewo`),
+        get(`/api/zlecenia/${z.id}/zapotrzebowania`).catch(() => []),
+      ]);
+      drzewo.zapotrzebowania = zapotrz || [];
+      setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [z.id]: drzewo } }, true);
+    } catch(_) {}
   }
   setState({zlecenieModal: z});
 }
@@ -8549,20 +8562,18 @@ async function toggleZlecenieExpand(zid) {
     return;
   }
 
-  // Rozwiń i załaduj jeśli brak danych
+  // Rozwiń i zawsze przeładuj dane (żeby pokazać zmiany po edycji)
   setState({ zlecenieExpanded: { ...expanded, [zid]: true } });
-  if (!drzewa[zid]) {
-    try {
-      const [data, zapotrz] = await Promise.all([
-        get(`/api/zlecenia/${zid}/drzewo`),
-        get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
-      ]);
-      // Dołącz zapotrzebowania P (podzlecenia z wizarda) do danych drzewa
-      data.zapotrzebowania = zapotrz || [];
-      setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
-    } catch(e) {
-      setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], zapotrzebowania:[], error: e.message } } });
-    }
+  try {
+    const [data, zapotrz] = await Promise.all([
+      get(`/api/zlecenia/${zid}/drzewo`),
+      get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
+    ]);
+    // Dołącz zapotrzebowania P (podzlecenia z wizarda) do danych drzewa
+    data.zapotrzebowania = zapotrz || [];
+    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
+  } catch(e) {
+    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], zapotrzebowania:[], error: e.message } } });
   }
 }
 

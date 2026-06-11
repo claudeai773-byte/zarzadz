@@ -9666,9 +9666,15 @@ async function nzOpenEdit(zid) {
   }
 
   // Wczytaj operacje i materiały każdego podzlecenia P (z rekurencją)
+  // POPRAWKA: deduplikacja po zlecenie_p_id i wyrob_p_symbol – zapobiega duplikatom
   const pNodes = [];
+  const seenPIds = new Set();
+  const seenPSymbols = new Set();
   for (const zap of (zapotrz || [])) {
     if (zap.zlecenie_p_id) {
+      // Pomiń duplikat tego samego podzlecenia P
+      if (seenPIds.has(zap.zlecenie_p_id)) continue;
+      seenPIds.add(zap.zlecenie_p_id);
       const pNode = await buildPNode(
         zap.zlecenie_p_id,
         zap.wyrob_p_symbol || '',
@@ -9678,10 +9684,13 @@ async function nzOpenEdit(zid) {
       pNodes.push(pNode);
     } else {
       // P bez zlecenia (tylko zapotrzebowanie, brak zlecenia P)
+      const sym = zap.wyrob_p_symbol || '';
+      if (seenPSymbols.has(sym)) continue; // pomiń duplikat symbolu
+      seenPSymbols.add(sym);
       pNodes.push({
         _id: nzNewId(), typ: 'P',
-        symbol: zap.wyrob_p_symbol || '',
-        nazwa: zap.wyrob_nazwa || zap.wyrob_p_symbol || '',
+        symbol: sym,
+        nazwa: zap.wyrob_nazwa || sym,
         ilosc: zap.ilosc_wymagana || 1, jednostka: 'szt',
         _zlecenie_p_id: null,
         ops: [],
@@ -9961,8 +9970,31 @@ async function nzSave() {
         // BEZPIECZEŃSTWO: jeśli wizard nie załadował żadnych operacji z _existingId,
         // a w API są operacje – nie kasuj (prawdopodobnie błąd ładowania drzewa)
         const hasExistingIds = (nzOps || []).some(o => o._existingId);
-        if (!hasExistingIds && apiOps.length > 0 && (nzOps || []).length === 0) {
+        // POPRAWKA: chroń też gdy nzOps ma elementy ale żaden nie ma _existingId
+        // a w API są operacje – to znaczy że wizard nie załadował istniejących
+        if (!hasExistingIds && apiOps.length > 0) {
+          // Jeśli wizard nie ma ŻADNYCH referencji do istniejących operacji,
+          // a API ma operacje – nie kasuj, tylko dodaj nowe (bez ID)
+          let kolejnosc = (apiOps.length > 0 ? Math.max(...apiOps.map(o => o.kolejnosc || 0)) : 0) + 1;
+          for (const op of (nzOps || [])) {
+            if (!op.nazwa && !op.stanowisko) continue;
+            // Sprawdź czy nie istnieje już operacja o tej samej nazwie i stanowisku
+            const dup = apiOps.find(a => a.nazwa === (op.nazwa||op.stanowisko||'Operacja') && a.stanowisko === (op.stanowisko||''));
+            if (dup) continue; // nie duplikuj
+            try { await post('/api/operacje', {
+              zlecenie_id: targetZlId,
+              nazwa: op.nazwa || op.stanowisko || 'Operacja',
+              kolejnosc: kolejnosc++,
+              czas_norma: parseFloat(op.czas_norma) || 0,
+              stanowisko: op.stanowisko || '',
+              opis_czynnosci: op.opis_czynnosci || '',
+              czas_zbrojenia_min: parseFloat(op.czas_zbrojenia) || 0,
+            }); } catch(_) {}
+          }
           return; // nie nadpisuj – brak danych w wizardzie nie znaczy "usuń wszystko"
+        }
+        if (!hasExistingIds && (nzOps || []).length === 0) {
+          return; // całkowicie pusta lista – nic nie rób
         }
 
         const existingIds = new Set(apiOps.map(o => o.id));
@@ -10003,8 +10035,27 @@ async function nzSave() {
         // BEZPIECZEŃSTWO: jeśli wizard nie ma żadnych M z _existingMatId
         // a w API są materiały – nie kasuj (ochrona przed błędem ładowania)
         const hasExistingMatIds = (nzMNodes || []).some(m => m._existingMatId);
-        if (!hasExistingMatIds && (existingMats || []).length > 0 && (nzMNodes || []).length === 0) {
-          return;
+        // POPRAWKA: chroń też gdy nzMNodes ma elementy ale żaden nie ma _existingMatId
+        if (!hasExistingMatIds && (existingMats || []).length > 0) {
+          // Dodaj tylko nowe materiały (bez kasowania istniejących) – unikaj duplikatów
+          for (const node of (nzMNodes || [])) {
+            if (node.typ === 'M' && node.material_indeks) {
+              const dup = (existingMats || []).find(m => m.indeks === node.material_indeks);
+              if (dup) continue; // nie duplikuj
+              try {
+                await post(`/api/zlecenia/${targetZlId}/materialy-zlecenia`, {
+                  indeks: node.material_indeks,
+                  opis: node.material_opis || '',
+                  ilosc: parseFloat(node.mat_ilosc_szt) || 1,
+                  jednostka: node.material_jm || 'kg',
+                });
+              } catch(e) { console.warn('syncNodeMats (safe add):', e.message); }
+            }
+          }
+          return; // nie kasuj istniejących
+        }
+        if (!hasExistingMatIds && (nzMNodes || []).length === 0) {
+          return; // całkowicie pusta lista – nic nie rób
         }
 
         // Usuń stare materiały

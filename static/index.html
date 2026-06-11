@@ -5620,72 +5620,124 @@ function renderZlecenia() {
       const expanded = (state.zlecenieExpanded || {})[z.id];
       const drzewo = (state.zlecenieDrzewa || {})[z.id];
 
-      // ── Drzewko P/M inline ──────────────────────────────────────────────────
+      // ── Drzewko G→P inline (hierarchiczne) ──────────────────────────────────
       let drzewoHtml = '';
       if (expanded) {
         if (!drzewo) {
           drzewoHtml = `<div style="padding:10px;text-align:center;color:var(--dim);font-size:12px">⏳ Ładowanie...</div>`;
         } else {
-          const polprodukty    = drzewo.polprodukty    || [];
-          const materialy      = drzewo.materialy      || [];
           const operacje       = drzewo.operacje       || [];
-          const zapotrzebowania = drzewo.zapotrzebowania || [];
+          const materialy      = drzewo.materialy      || [];
+          const polprodukty    = drzewo.polprodukty    || [];
+          const podzlecenia    = drzewo.podzlecenia_drzewo || [];
+
+          // Pomocnik: wiersz operacji
+          const renderOp = (op, indent) => {
+            const stColor = op.status==='zakonczona'?'var(--green)':op.status==='oczekuje'?'var(--dim)':'var(--accent)';
+            const done = op.status==='zakonczona';
+            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px ${indent}px;border-bottom:1px solid rgba(46,53,72,0.4);${done?'opacity:.6':''}">
+              <span style="color:${stColor};font-size:10px">●</span>
+              <span style="font-size:12px;flex:1;${done?'text-decoration:line-through':''}">${op.kolejnosc}. ${op.nazwa}</span>
+              ${op.stanowisko?`<span style="font-size:10px;color:var(--blue);background:rgba(52,152,219,.1);border-radius:3px;padding:1px 5px">${op.stanowisko}</span>`:''}
+              ${op.czas_norma?`<span style="font-size:10px;color:var(--accent)">⏱${op.czas_norma}min</span>`:''}
+              ${(op.czas_zbrojenia_min>0)?`<span style="font-size:10px;color:var(--orange)">⚙${op.czas_zbrojenia_min}min</span>`:''}
+            </div>`;
+          };
+
+          // Pomocnik: wiersz materiału
+          const renderMat = (m, indent) => `<div style="display:flex;align-items:center;gap:8px;padding:3px 10px 3px ${indent}px;border-bottom:1px solid rgba(46,53,72,0.3);background:rgba(243,156,18,0.03)">
+            <span style="font-size:10px;color:var(--orange)">■</span>
+            <span style="font-size:11px;font-weight:600;color:var(--orange);min-width:60px">${m.indeks||''}</span>
+            <span style="font-size:11px;flex:1">${m.opis||''}</span>
+            <span style="font-size:10px;color:var(--dim)">${m.ilosc} ${m.jednostka||''}</span>
+          </div>`;
+
+          // Pomocnik: nagłówek sekcji
+          const hdr = (icon, label, indent, color) => `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:${color||'var(--dim)'};letter-spacing:.7px;padding:5px 10px 2px ${indent}px;background:rgba(0,0,0,.12)">${icon} ${label}</div>`;
+
           let treeRows = '';
 
-          // Operacje
+          // ── OPERACJE ZLECENIA GŁÓWNEGO G ─────────────────────────────────────
           if (operacje.length) {
-            treeRows += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;padding:6px 10px 3px">🔧 Operacje (${operacje.length})</div>`;
-            operacje.forEach(op => {
-              const stColor = op.status==='zakonczona'?'var(--green)':op.status==='oczekuje'?'var(--dim)':'var(--accent)';
-              treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px 22px;border-bottom:1px solid rgba(46,53,72,0.5)">
-                <span style="color:${stColor};font-size:11px">●</span>
-                <span style="font-size:12px;flex:1">${op.kolejnosc}. ${op.nazwa}</span>
-                ${op.stanowisko?`<span style="font-size:10px;color:var(--dim)">${op.stanowisko}</span>`:''}
-                ${op.czas_norma?`<span style="font-size:10px;color:var(--accent)">${op.czas_norma} min</span>`:''}
-              </div>`;
-            });
+            treeRows += hdr('🔧', `Operacje G (${operacje.length})`, 10, 'var(--dim)');
+            operacje.forEach(op => { treeRows += renderOp(op, 22); });
           }
 
-          // Podzlecenia P (z wizarda – zapotrzebowania)
-          if (zapotrzebowania.length) {
-            treeRows += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;padding:6px 10px 3px">🔩 Podzlecenia P (${zapotrzebowania.length})</div>`;
-            zapotrzebowania.forEach(zap => {
-              const pStatus = zap.zlecenie_p_status || '—';
-              const stCol = pStatus==='zakonczone'?'var(--green)':pStatus==='w_toku'?'var(--accent)':'var(--dim)';
-              const opsDone = zap.op_done || 0;
-              const opsTotal = zap.op_total || 0;
-              const clickable = zap.zlecenie_p_id ? `cursor:pointer` : '';
-              const clickHandler = zap.zlecenie_p_id ? `onclick="openPodZlecenieModal(${zap.zlecenie_p_id})"` : '';
-              // Materiały M podpięte pod to podzlecenie P
-              const pMats = zap.materialy || [];
-              const pMatsHtml = pMats.map(m => `
-                <div style="display:flex;align-items:center;gap:6px;padding:3px 10px 3px 44px;border-bottom:1px solid rgba(46,53,72,0.3);background:rgba(243,156,18,0.04)">
-                  <span style="font-size:10px;color:var(--orange)">■</span>
-                  <span style="font-size:11px;font-weight:600;color:var(--orange);min-width:54px">${m.indeks}</span>
-                  <span style="font-size:11px;flex:1;color:var(--text)">${m.opis}</span>
-                  <span style="font-size:10px;color:var(--dim)">${m.ilosc} ${m.jednostka}</span>
-                </div>`).join('');
-              treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 22px;border-bottom:1px solid rgba(46,53,72,0.5);${clickable}" ${clickHandler}
-                onmouseover="if(${!!zap.zlecenie_p_id})this.style.background='rgba(139,92,246,0.08)'"
-                onmouseout="this.style.background=''"
-              >
-                <span style="font-size:11px;color:#a78bfa">◆</span>
-                <span style="font-size:12px;flex:1">
-                  <b style="color:#a78bfa">${zap.wyrob_p_symbol}</b>
-                  ${zap.wyrob_nazwa ? `<span style="color:var(--dim)"> – ${zap.wyrob_nazwa}</span>` : ''}
+          // ── PODZLECENIA P (z zapotrzebowań wizarda) ──────────────────────────
+          podzlecenia.forEach(pd => {
+            const zap = pd.zap || {};
+            const pid = pd.zlecenie_p_id;
+            const pNumer = zap.zp_numer || zap.zlecenie_p_numer || '';
+            const pNazwa = zap.zp_nazwa || zap.wyrob_nazwa || zap.wyrob_p_symbol || '';
+            const pStatus = zap.zp_status || zap.zlecenie_p_status || '—';
+            const pIlosc = zap.ilosc_wymagana || '';
+            const pSymbol = zap.wyrob_p_symbol || pNumer;
+            const stCol = pStatus==='zakonczone'?'var(--green)':pStatus==='w_toku'?'var(--accent)':'var(--dim)';
+            const pOps = pd.operacje || [];
+            const pMats = pd.materialy || [];
+            const pSubs = pd.podzlecenia || [];
+
+            // ── Nagłówek podzlecenia P ──
+            treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px 6px 14px;border-bottom:1px solid rgba(139,92,246,0.2);border-top:1px solid rgba(139,92,246,0.15);background:rgba(139,92,246,0.06);margin-top:2px">
+              <span style="font-size:13px">◆</span>
+              <span style="font-size:13px;font-weight:700;color:#a78bfa;flex:1">
+                ${pNumer ? `<span style="color:#a78bfa">${pNumer}</span>` : `<span style="color:#a78bfa">${pSymbol}</span>`}
+                ${pNazwa ? `<span style="color:var(--dim);font-weight:400;font-size:12px"> – ${pNazwa}</span>` : ''}
+              </span>
+              ${pIlosc ? `<span style="font-size:10px;color:var(--dim)">${pIlosc} szt.</span>` : ''}
+              <span style="font-size:10px;padding:1px 7px;border-radius:4px;background:rgba(139,92,246,0.15);color:${stCol};font-weight:700">${pStatus}</span>
+            </div>`;
+
+            // Operacje podzlecenia P
+            if (pOps.length) {
+              treeRows += hdr('🔧', `Operacje (${pOps.length})`, 28, '#8b7fd0');
+              pOps.forEach(op => { treeRows += renderOp(op, 36); });
+            }
+
+            // Zagnieżdżone sub-podzlecenia P
+            pSubs.forEach(sub => {
+              const szap = sub.zap || {};
+              const sNumer = szap.zp_numer || szap.zlecenie_p_numer || '';
+              const sNazwa = szap.zp_nazwa || szap.wyrob_nazwa || szap.wyrob_p_symbol || '';
+              const sStatus = szap.zp_status || szap.zlecenie_p_status || '—';
+              const sSymbol = szap.wyrob_p_symbol || sNumer;
+              const sCol = sStatus==='zakonczone'?'var(--green)':sStatus==='w_toku'?'var(--accent)':'var(--dim)';
+              const sOps = sub.operacje || [];
+              const sMats = sub.materialy || [];
+
+              // Nagłówek sub-podzlecenia
+              treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 28px;border-bottom:1px solid rgba(139,92,246,0.12);background:rgba(139,92,246,0.03)">
+                <span style="font-size:11px;color:#7c68c8">◆</span>
+                <span style="font-size:12px;font-weight:700;color:#9b8be8;flex:1">
+                  ${sNumer ? sNumer : sSymbol}
+                  ${sNazwa ? `<span style="color:var(--dim);font-weight:400;font-size:11px"> – ${sNazwa}</span>` : ''}
                 </span>
-                <span style="font-size:10px;color:var(--dim)">${zap.ilosc_wymagana} szt.</span>
-                ${opsTotal ? `<span style="font-size:10px;color:${stCol};margin-left:4px">${opsDone}/${opsTotal} op.</span>` : ''}
-                <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,92,246,0.12);color:#a78bfa;font-weight:600">${pStatus}</span>
-                ${zap.zlecenie_p_id ? `<span style="font-size:10px;color:var(--dim)">▶</span>` : ''}
-              </div>
-              ${pMatsHtml}`;
-            });
-          }
+                <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,92,246,0.1);color:${sCol};font-weight:700">${sStatus}</span>
+              </div>`;
 
-          // Półprodukty P
+              // Operacje sub-podzlecenia
+              if (sOps.length) {
+                treeRows += hdr('🔧', `Operacje (${sOps.length})`, 42, '#6b5fa0');
+                sOps.forEach(op => { treeRows += renderOp(op, 50); });
+              }
+
+              // Materiały sub-podzlecenia
+              if (sMats.length) {
+                treeRows += hdr('📦', `Materiały (${sMats.length})`, 42, '#6b5fa0');
+                sMats.forEach(m => { treeRows += renderMat(m, 50); });
+              }
+            });
+
+            // Materiały podzlecenia P
+            if (pMats.length) {
+              treeRows += hdr('📦', `Materiały (${pMats.length})`, 28, '#8b7fd0');
+              pMats.forEach(m => { treeRows += renderMat(m, 36); });
+            }
+          });
+
+          // ── PÓŁPRODUKTY P (stare – z tablicy zlecenie_polprodukty, bez powiązanego zlecenia) ──
           if (polprodukty.length) {
-            treeRows += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;padding:6px 10px 3px">🔩 Półprodukty P (${polprodukty.length})</div>`;
+            treeRows += hdr('🔩', `Półprodukty P (${polprodukty.length})`, 10, 'var(--dim)');
             polprodukty.forEach(p => {
               treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px 22px;border-bottom:1px solid rgba(46,53,72,0.5)">
                 <span style="font-size:11px;color:#a78bfa">◆</span>
@@ -5697,9 +5749,9 @@ function renderZlecenia() {
             });
           }
 
-          // Materiały M
+          // ── MATERIAŁY BEZPOŚREDNIO DLA G ─────────────────────────────────────
           if (materialy.length) {
-            treeRows += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;padding:6px 10px 3px">📦 Materiały M (${materialy.length})</div>`;
+            treeRows += hdr('📦', `Materiały G (${materialy.length})`, 10, 'var(--dim)');
             materialy.forEach(m => {
               treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px 22px;border-bottom:1px solid rgba(46,53,72,0.5)">
                 <span style="font-size:11px;color:var(--orange)">■</span>
@@ -5711,8 +5763,8 @@ function renderZlecenia() {
             });
           }
 
-          if (!operacje.length && !polprodukty.length && !materialy.length) {
-            treeRows = `<div style="text-align:center;padding:12px;color:var(--dim);font-size:12px">Brak operacji, półproduktów ani materiałów.</div>`;
+          if (!treeRows) {
+            treeRows = `<div style="text-align:center;padding:12px;color:var(--dim);font-size:12px">Brak operacji, podzleceń ani materiałów.</div>`;
           }
 
           drzewoHtml = `<div style="background:var(--entry);border-radius:0 0 8px 8px;border-top:1px solid var(--border);margin-top:4px">
@@ -6186,12 +6238,10 @@ async function openEditZlecenie(z) {
     await loadProduktyZlecenia(z.id);
     // Załaduj drzewo P/M/operacje – bez tego renderPolproduktList i renderMaterialList są puste
     try {
-      const [drzewo, zapotrz, matsM] = await Promise.all([
+      const [drzewo, matsM] = await Promise.all([
         get(`/api/zlecenia/${z.id}/drzewo`),
-        get(`/api/zlecenia/${z.id}/zapotrzebowania`).catch(() => []),
         get(`/api/zlecenia/${z.id}/materialy-zlecenia`).catch(() => []),
       ]);
-      drzewo.zapotrzebowania = zapotrz || [];
       if (!drzewo.materialy || drzewo.materialy.length === 0) {
         drzewo.materialy = matsM || [];
       }
@@ -6218,12 +6268,10 @@ async function openEditZlecenieById(zid) {
   if (!z) { alert('Nie znaleziono zlecenia #' + zid); return; }
   await loadProduktyZlecenia(z.id);
   try {
-    const [drzewo, zapotrz, matsM] = await Promise.all([
+    const [drzewo, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}/drzewo`),
-      get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
       get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
-    drzewo.zapotrzebowania = zapotrz || [];
     if (!drzewo.materialy || drzewo.materialy.length === 0) {
       drzewo.materialy = matsM || [];
     }
@@ -8635,11 +8683,9 @@ function renderFakturaPreview() {
 // Rozwiń/zwiń drzewko zlecenia inline
 async function toggleZlecenieExpand(zid) {
   const expanded = state.zlecenieExpanded || {};
-  const drzewa   = state.zlecenieDrzewa   || {};
   const isOpen   = !!expanded[zid];
 
   if (isOpen) {
-    // Zwiń
     setState({ zlecenieExpanded: { ...expanded, [zid]: false } });
     return;
   }
@@ -8647,92 +8693,52 @@ async function toggleZlecenieExpand(zid) {
   // Rozwiń i zawsze przeładuj dane (żeby pokazać zmiany po edycji)
   setState({ zlecenieExpanded: { ...expanded, [zid]: true } });
   try {
-    const [data, zapotrz, matsM] = await Promise.all([
+    const [data, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}/drzewo`),
-      get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
       get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
 
-    // POPRAWKA: deduplikacja zapotrzebowań po zlecenie_p_id i wyrob_p_symbol
-    const seenPIds = new Set();
-    const seenPSymbols = new Set();
-    const zapDedup = (zapotrz || []).filter(zap => {
-      if (zap.zlecenie_p_id) {
-        if (seenPIds.has(zap.zlecenie_p_id)) return false;
-        seenPIds.add(zap.zlecenie_p_id);
-        return true;
-      }
-      const sym = zap.wyrob_p_symbol || '';
-      if (seenPSymbols.has(sym)) return false;
-      seenPSymbols.add(sym);
-      return true;
-    });
-
-    // Dołącz materiały M do każdego zapotrzebowania P
-    const zapWithMats = await Promise.all(zapDedup.map(async zap => {
-      if (zap.zlecenie_p_id) {
-        try {
-          const pMats = await get(`/api/zlecenia/${zap.zlecenie_p_id}/materialy-zlecenia`).catch(() => []);
-          return { ...zap, materialy: pMats || [] };
-        } catch(_) {}
-      }
-      return { ...zap, materialy: [] };
-    }));
-    // Dołącz zapotrzebowania P (podzlecenia z wizarda) do danych drzewa
-    data.zapotrzebowania = zapWithMats;
     // Uzupełnij materiały M jeśli /drzewo ich nie zwraca
     if (!data.materialy || data.materialy.length === 0) {
       data.materialy = matsM || [];
     }
-    // Zaktualizuj podzlecenieIds – ukryj nowo poznane podzlecenia P z głównej listy
+
+    // Zaktualizuj podzlecenieIds – ukryj podzlecenia P z głównej listy
     const updatedPodzlecenieIds = new Set(state.podzlecenieIds || []);
-    zapDedup.forEach(zap => { if (zap.zlecenie_p_id) updatedPodzlecenieIds.add(zap.zlecenie_p_id); });
+    (data.podzlecenia_drzewo || []).forEach(pd => {
+      if (pd.zlecenie_p_id) updatedPodzlecenieIds.add(pd.zlecenie_p_id);
+      (pd.podzlecenia || []).forEach(sub => {
+        const subId = sub.zap?.zlecenie_p_id || sub.zap?.zp_id;
+        if (subId) updatedPodzlecenieIds.add(subId);
+      });
+    });
+
     setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data }, podzlecenieIds: updatedPodzlecenieIds });
   } catch(e) {
-    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], zapotrzebowania:[], error: e.message } } });
+    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: { polprodukty:[], materialy:[], operacje:[], podzlecenia_drzewo:[], error: e.message } } });
   }
 }
 
 // Odśwież dane drzewka dla jednego zlecenia
 async function refreshZlecenieDrzewo(zid) {
   try {
-    const [data, zapotrz, matsM] = await Promise.all([
+    const [data, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}/drzewo`),
-      get(`/api/zlecenia/${zid}/zapotrzebowania`).catch(() => []),
       get(`/api/zlecenia/${zid}/materialy-zlecenia`).catch(() => []),
     ]);
-
-    // POPRAWKA: deduplikacja zapotrzebowań po zlecenie_p_id i wyrob_p_symbol
-    const seenPIds2 = new Set();
-    const seenPSymbols2 = new Set();
-    const zapDedup2 = (zapotrz || []).filter(zap => {
-      if (zap.zlecenie_p_id) {
-        if (seenPIds2.has(zap.zlecenie_p_id)) return false;
-        seenPIds2.add(zap.zlecenie_p_id);
-        return true;
-      }
-      const sym = zap.wyrob_p_symbol || '';
-      if (seenPSymbols2.has(sym)) return false;
-      seenPSymbols2.add(sym);
-      return true;
-    });
-
-    // Dołącz materiały M do każdego zapotrzebowania P
-    const zapWithMats = await Promise.all(zapDedup2.map(async zap => {
-      if (zap.zlecenie_p_id) {
-        try {
-          const pMats = await get(`/api/zlecenia/${zap.zlecenie_p_id}/materialy-zlecenia`).catch(() => []);
-          return { ...zap, materialy: pMats || [] };
-        } catch(_) {}
-      }
-      return { ...zap, materialy: [] };
-    }));
-    data.zapotrzebowania = zapWithMats;
-    // Jeśli backend nie zwraca materialy w /drzewo – uzupełnij z dedykowanego endpointu
     if (!data.materialy || data.materialy.length === 0) {
       data.materialy = matsM || [];
     }
-    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data } });
+    // Zaktualizuj podzlecenieIds
+    const updatedPodzlecenieIds = new Set(state.podzlecenieIds || []);
+    (data.podzlecenia_drzewo || []).forEach(pd => {
+      if (pd.zlecenie_p_id) updatedPodzlecenieIds.add(pd.zlecenie_p_id);
+      (pd.podzlecenia || []).forEach(sub => {
+        const subId = sub.zap?.zlecenie_p_id || sub.zap?.zp_id;
+        if (subId) updatedPodzlecenieIds.add(subId);
+      });
+    });
+    setState({ zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: data }, podzlecenieIds: updatedPodzlecenieIds });
   } catch(e) { /* cicho */ }
 }
 
@@ -10242,24 +10248,23 @@ async function nzSave() {
       await loadZlecenia();
       // Odswiezz drzewo i zachowaj rozwiniety widok
       try {
-        const [upd, zapotrz, matsM] = await Promise.all([
+        const [upd, matsM] = await Promise.all([
           get(`/api/zlecenia/${zlecenieId}/drzewo`),
-          get(`/api/zlecenia/${zlecenieId}/zapotrzebowania`).catch(() => []),
           get(`/api/zlecenia/${zlecenieId}/materialy-zlecenia`).catch(() => []),
         ]);
-        // Dołącz materiały M do każdego zapotrzebowania P
-        const zapWithMats = await Promise.all((zapotrz || []).map(async zap => {
-          if (zap.zlecenie_p_id) {
-            const pMats = await get(`/api/zlecenia/${zap.zlecenie_p_id}/materialy-zlecenia`).catch(() => []);
-            return { ...zap, materialy: pMats || [] };
-          }
-          return { ...zap, materialy: [] };
-        }));
-        upd.zapotrzebowania = zapWithMats;
         if (!upd.materialy || upd.materialy.length === 0) upd.materialy = matsM || [];
+        const updPIds2 = new Set(state.podzlecenieIds || []);
+        (upd.podzlecenia_drzewo || []).forEach(pd => {
+          if (pd.zlecenie_p_id) updPIds2.add(pd.zlecenie_p_id);
+          (pd.podzlecenia || []).forEach(sub => {
+            const sid = sub.zap?.zlecenie_p_id || sub.zap?.zp_id;
+            if (sid) updPIds2.add(sid);
+          });
+        });
         setState({
           zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zlecenieId]: upd },
           zlecenieExpanded: { ...(state.zlecenieExpanded || {}), [zlecenieId]: true },
+          podzlecenieIds: updPIds2,
         });
       } catch(_) {}
       return;

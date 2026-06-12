@@ -185,12 +185,12 @@ class LoginRequest(BaseModel):
 def login(req: LoginRequest):
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, username, full_name, role FROM users WHERE username=? AND password=?",
+            "SELECT id, username, full_name, role, COALESCE(is_kj,0) as is_kj FROM users WHERE username=? AND password=?",
             (req.username, _hash(req.password))
         ).fetchone()
         if not row:
             raise HTTPException(401, "Nieprawidłowy login lub hasło")
-        return {"id": row[0], "username": row[1], "full_name": row[2], "role": row[3]}
+        return {"id": row[0], "username": row[1], "full_name": row[2], "role": row[3], "is_kj": row[4]}
 
 @app.get("/api/status/produkcja", dependencies=[Depends(verify_key)])
 def status_produkcja():
@@ -668,6 +668,8 @@ def delete_operacja(oid: int):
 class KJRequest(BaseModel):
     wynik: str  # 'zgodny' | 'niezgodny'
     uwagi: Optional[str] = ""
+    user_id: Optional[int] = None
+    user_name: Optional[str] = None
 
 @app.patch("/api/operacje/{oid}/kj", dependencies=[Depends(verify_key)])
 def zapisz_wynik_kj(oid: int, req: KJRequest):
@@ -679,8 +681,8 @@ def zapisz_wynik_kj(oid: int, req: KJRequest):
             raise HTTPException(404, "Operacja nie istnieje")
         nowy_status = "zakonczona" if req.wynik == "zgodny" else "niezgodna_kj"
         conn.execute(
-            "UPDATE operacje SET kj_wynik=?, status=?, opis_czynnosci=CASE WHEN ?!='' THEN opis_czynnosci||'\n[KJ '||datetime('now')||']: '||? ELSE opis_czynnosci END WHERE id=?",
-            (req.wynik, nowy_status, req.uwagi, req.uwagi, oid)
+            "UPDATE operacje SET kj_wynik=?, status=?, kj_user_id=?, kj_user_name=?, kj_data=datetime('now'), opis_czynnosci=CASE WHEN ?!='' THEN opis_czynnosci||'\n[KJ '||datetime('now')||']: '||? ELSE opis_czynnosci END WHERE id=?",
+            (req.wynik, nowy_status, req.user_id, req.user_name, req.uwagi, req.uwagi, oid)
         )
         if req.wynik == "niezgodny":
             conn.execute(
@@ -1613,7 +1615,7 @@ def delete_stawka_zlecenia(zid: int, sid: int):
 def get_users():
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT id, username, full_name, role FROM users ORDER BY full_name"
+            "SELECT id, username, full_name, role, COALESCE(is_kj,0) as is_kj FROM users ORDER BY full_name"
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1622,14 +1624,15 @@ class NewUserRequest(BaseModel):
     password: str
     full_name: str
     role: str
+    is_kj: Optional[int] = 0
 
 @app.post("/api/users", dependencies=[Depends(verify_key)])
 def create_user(req: NewUserRequest):
     with get_db() as conn:
         try:
             cur = conn.execute(
-                "INSERT INTO users (username, password, full_name, role) VALUES (?,?,?,?)",
-                (req.username, _hash(req.password), req.full_name, req.role)
+                "INSERT INTO users (username, password, full_name, role, is_kj) VALUES (?,?,?,?,?)",
+                (req.username, _hash(req.password), req.full_name, req.role, req.is_kj or 0)
             )
             return {"id": cur.lastrowid}
         except sqlite3.IntegrityError:
@@ -1639,19 +1642,20 @@ class EditUserRequest(BaseModel):
     full_name: str
     role: str
     password: Optional[str] = None
+    is_kj: Optional[int] = 0
 
 @app.put("/api/users/{uid}", dependencies=[Depends(verify_key)])
 def update_user(uid: int, req: EditUserRequest):
     with get_db() as conn:
         if req.password:
             conn.execute(
-                "UPDATE users SET full_name=?,role=?,password=? WHERE id=?",
-                (req.full_name, req.role, _hash(req.password), uid)
+                "UPDATE users SET full_name=?,role=?,password=?,is_kj=? WHERE id=?",
+                (req.full_name, req.role, _hash(req.password), req.is_kj or 0, uid)
             )
         else:
             conn.execute(
-                "UPDATE users SET full_name=?,role=? WHERE id=?",
-                (req.full_name, req.role, uid)
+                "UPDATE users SET full_name=?,role=?,is_kj=? WHERE id=?",
+                (req.full_name, req.role, req.is_kj or 0, uid)
             )
         return {"ok": True}
 
@@ -2523,13 +2527,36 @@ def get_mrp_zlecenia(gid: int):
         # Zbierz wszystkie materiały
         if wyrob_g:
             raw_materials = _collect_materials(wyrob_g["id"], ilosc_g, set())
+            # Uzupełnij też z bom_pozycje zlecenia G (materiały wpisane bezpośrednio do zlecenia)
+            bom_g = conn.execute("""
+                SELECT bp.*, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.indeks, m.id as m_id
+                FROM bom_pozycje bp
+                JOIN materialy m ON bp.material_id=m.id
+                WHERE bp.zlecenie_id=?
+            """, (gid,)).fetchall()
+            for r in bom_g:
+                raw_materials.append({
+                    "material_indeks": r["indeks"],
+                    "material_opis":   r["opis"],
+                    "material_jm":     r["jm"],
+                    "material_id":     r["m_id"],
+                    "material_stan":   r["do_dyspozycji"] or 0,
+                    "material_stan_rzecz": r["stan_rzeczywisty"] or 0,
+                    "ilosc_wymagana":  r["ilosc"] * ilosc_g,
+                    "jednostka":       r["jm"],
+                    "_zlecenie_g": zl_g["numer"],
+                })
             # Uzupełnij też z bom_pozycje podzleceń P (zlecenia powiązane przez zapotrzebowania)
             p_ids_from_zap = conn.execute(
                 "SELECT DISTINCT zlecenie_p_id FROM zapotrzebowania WHERE zlecenie_g_id=? AND zlecenie_p_id IS NOT NULL",
                 (gid,)
             ).fetchall()
+            p_ids_seen = set()
             for p_row in p_ids_from_zap:
                 pid = p_row["zlecenie_p_id"]
+                if pid in p_ids_seen:
+                    continue
+                p_ids_seen.add(pid)
                 zp = conn.execute("SELECT * FROM zlecenia WHERE id=?", (pid,)).fetchone()
                 if not zp:
                     continue
@@ -2552,6 +2579,45 @@ def get_mrp_zlecenia(gid: int):
                         "jednostka":       r["jm"],
                         "_zlecenie_p": zp["numer"],
                     })
+            # Zbierz też wszystkie zlecenia P powiązane przez strukturę wyrobów (numer P → id zlecenia P)
+            all_p_symbols_bom = set()
+            def _collect_p_syms_for_bom(wyrob_id: int, vis: set):
+                if wyrob_id in vis: return
+                vis.add(wyrob_id)
+                rows = conn.execute("SELECT typ_skladnika, skladnik_id FROM wyroby_bom WHERE wyrob_id=?", (wyrob_id,)).fetchall()
+                for sr in rows:
+                    if sr["typ_skladnika"] == "P" and sr["skladnik_id"]:
+                        sw = conn.execute("SELECT symbol FROM wyroby WHERE id=?", (sr["skladnik_id"],)).fetchone()
+                        if sw:
+                            all_p_symbols_bom.add(sw["symbol"])
+                            _collect_p_syms_for_bom(sr["skladnik_id"], vis)
+            _collect_p_syms_for_bom(wyrob_g["id"], set())
+            for p_sym in all_p_symbols_bom:
+                zp_rows = conn.execute("SELECT * FROM zlecenia WHERE numer=?", (p_sym,)).fetchall()
+                for zp in zp_rows:
+                    pid = zp["id"]
+                    if pid in p_ids_seen:
+                        continue
+                    p_ids_seen.add(pid)
+                    ilosc_p = zp["ilosc_sztuk"] or 1
+                    bom_p = conn.execute("""
+                        SELECT bp.*, m.opis, m.jm, m.do_dyspozycji, m.stan_rzeczywisty, m.indeks, m.id as m_id
+                        FROM bom_pozycje bp
+                        JOIN materialy m ON bp.material_id=m.id
+                        WHERE bp.zlecenie_id=?
+                    """, (pid,)).fetchall()
+                    for r in bom_p:
+                        raw_materials.append({
+                            "material_indeks": r["indeks"],
+                            "material_opis":   r["opis"],
+                            "material_jm":     r["jm"],
+                            "material_id":     r["m_id"],
+                            "material_stan":   r["do_dyspozycji"] or 0,
+                            "material_stan_rzecz": r["stan_rzeczywisty"] or 0,
+                            "ilosc_wymagana":  r["ilosc"] * ilosc_p,
+                            "jednostka":       r["jm"],
+                            "_zlecenie_p": zp["numer"],
+                        })
         else:
             # Fallback: BOM z tabeli bom_pozycje zlecenia G i wszystkich P przez zapotrzebowania
             bom_rows = conn.execute("""
@@ -3599,7 +3665,8 @@ def raport_zlecenia(data_od: str = "", data_do: str = "", zlecenie_id: Optional[
                        COALESCE(o.stanowisko, '') as stanowisko,
                        COALESCE(o.czas_norma, 0) as czas_norma,
                        COALESCE(st_zl.stawka_godz, st.stawka_godz, 0) as stawka_godz,
-                       COALESCE(st_zl.zbrojenie_stawka_godz, st.zbrojenie_stawka_godz, 0) as zbrojenie_stawka_godz
+                       COALESCE(st_zl.zbrojenie_stawka_godz, st.zbrojenie_stawka_godz, 0) as zbrojenie_stawka_godz,
+                       o.kj_wynik, o.kj_user_name, o.kj_data, o.typ_operacji
                 FROM sesje_pracy s
                 JOIN users u ON s.user_id=u.id
                 LEFT JOIN operacje o ON s.operacja_id=o.id
@@ -3636,6 +3703,37 @@ def raport_zlecenia(data_od: str = "", data_do: str = "", zlecenie_id: Optional[
                     "czas_norma": s["czas_norma"] or 0,
                     "koszt": koszt,
                     "uwagi": s["uwagi"] or "",
+                    "kj_wynik": s["kj_wynik"] or None,
+                    "kj_user_name": s["kj_user_name"] or None,
+                    "kj_data": (s["kj_data"] or "")[:16].replace("T", "  ") if s["kj_data"] else None,
+                })
+
+            # Dodaj wpisy KJ dla operacji sprawdzonych przez KJ (bez sesji roboczej)
+            kj_ops = conn.execute("""
+                SELECT o.id, o.nazwa, o.kolejnosc, o.stanowisko, o.kj_wynik, o.kj_user_name, o.kj_data, o.typ_operacji
+                FROM operacje o
+                WHERE o.zlecenie_id=? AND o.kj_wynik IS NOT NULL
+            """, (zid,)).fetchall()
+            kj_op_ids_in_sesje = set()
+            for s in sesje:
+                # collect operacja ids already represented
+                pass
+            for kop in kj_ops:
+                sesje_list.append({
+                    "pracownik": kop["kj_user_name"] or "KJ",
+                    "operacja": kop["nazwa"] or "—",
+                    "kolejnosc": kop["kolejnosc"] or 999,
+                    "typ": "kj",
+                    "data": (kop["kj_data"] or "")[:16].replace("T", "  ") if kop["kj_data"] else "—",
+                    "czas_min": 0,
+                    "ilosc_sztuk": 0,
+                    "czas_norma": 0,
+                    "koszt": 0,
+                    "uwagi": "",
+                    "kj_wynik": kop["kj_wynik"],
+                    "kj_user_name": kop["kj_user_name"] or None,
+                    "kj_data": (kop["kj_data"] or "")[:16].replace("T", "  ") if kop["kj_data"] else None,
+                    "_kj_only": True,
                 })
 
             produkty = conn.execute(
@@ -3674,6 +3772,8 @@ def init_db_on_start():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL, password TEXT NOT NULL,
         full_name TEXT NOT NULL, role TEXT NOT NULL)""")
+    try: c.execute("ALTER TABLE users ADD COLUMN is_kj INTEGER DEFAULT 0")
+    except: pass
 
     c.execute("""CREATE TABLE IF NOT EXISTS zlecenia (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3701,6 +3801,12 @@ def init_db_on_start():
     try: c.execute("ALTER TABLE operacje ADD COLUMN parametry_kj TEXT DEFAULT NULL")
     except: pass
     try: c.execute("ALTER TABLE operacje ADD COLUMN kj_wynik TEXT DEFAULT NULL")
+    except: pass
+    try: c.execute("ALTER TABLE operacje ADD COLUMN kj_user_id INTEGER DEFAULT NULL")
+    except: pass
+    try: c.execute("ALTER TABLE operacje ADD COLUMN kj_data TIMESTAMP DEFAULT NULL")
+    except: pass
+    try: c.execute("ALTER TABLE operacje ADD COLUMN kj_user_name TEXT DEFAULT NULL")
     except: pass
     try: c.execute("ALTER TABLE operacje ADD COLUMN czas_tpz_min REAL DEFAULT 0.0")
     except: pass

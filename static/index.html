@@ -1257,12 +1257,14 @@ function renderQRZleceniePickerModal() {
       allOps.forEach(op => {
         const kjDone = op.kj_wynik === 'zgodny' || op.kj_wynik === 'niezgodny';
         const kjColor = op.kj_wynik === 'zgodny' ? 'var(--green)' : op.kj_wynik === 'niezgodny' ? 'var(--red)' : 'var(--dim)';
-        const kjLabel = op.kj_wynik === 'zgodny' ? '✅ ZGODNY' : op.kj_wynik === 'niezgodny' ? '❌ NIEZGODNY' : '';
+        const kjIcon = op.kj_wynik === 'zgodny' ? '✅' : op.kj_wynik === 'niezgodny' ? '❌' : '';
         kjHtml += `
         <div class="card" style="padding:12px;margin-bottom:10px;border-color:${kjDone ? kjColor : 'var(--border)'}">
-          <div style="font-weight:700;font-size:15px;margin-bottom:4px">${op.kolejnosc}. ${op.nazwa}</div>
+          <div style="font-weight:700;font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+            <span>${op.kolejnosc}. ${op.nazwa}</span>
+            ${kjDone ? `<span title="Sprawdzone${op.kj_data?' ('+op.kj_data.substring(0,16)+')':''}">${kjIcon}</span>` : ''}
+          </div>
           <div style="font-size:12px;color:var(--dim);margin-bottom:8px">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min/szt':''}</div>
-          ${kjDone ? `<div style="font-size:12px;font-weight:700;color:${kjColor};margin-bottom:8px">${kjLabel}${op.kj_data?` <span style="font-weight:400;color:var(--dim);font-size:11px">(${op.kj_data.substring(0,16)})</span>`:''}</div>` : ''}
           <div style="display:flex;gap:8px">
             <button class="btn btn-green" style="flex:1;font-size:14px;padding:10px"
               onclick="kjOcenOperacje(${op.id},'zgodny','${(op.nazwa||'').replace(/'/g,"\\'")}')">
@@ -1417,11 +1419,11 @@ function renderQRZleceniePickerModal() {
           const kjDone = kjWynikPrev === 'zgodny' || kjWynikPrev === 'niezgodny';
           html += `
           <div style="background:rgba(52,152,219,0.08);border:1px solid #3498db;border-radius:8px;padding:10px 12px;margin-bottom:8px">
-            <div style="font-size:12px;color:#2980b9;font-weight:700;margin-bottom:4px">🔍 KONTROLA JAKOŚCI</div>
+            <div style="font-size:12px;color:#2980b9;font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:6px">
+              <span>🔍 KONTROLA JAKOŚCI</span>
+              ${kjDone ? `<span title="Sprawdzone${op.kj_data?' ('+op.kj_data.substring(0,16)+')':''}">${kjWynikPrev==='zgodny'?'✅':'❌'}</span>` : ''}
+            </div>
             ${op.parametry_kj ? renderKjParams(op.parametry_kj, 'font-size:11px;color:var(--dim)') : ''}
-            ${kjDone ? `<div style="margin-top:6px;font-size:12px;color:${kjWynikPrev==='zgodny'?'var(--green)':'var(--red)'}">
-              ${kjWynikPrev==='zgodny'?'✅ Zatwierdzono jako ZGODNY':'❌ Zatwierdzono jako NIEZGODNY'}
-            </div>` : ''}
           </div>
           <div style="display:flex;gap:8px">
             <button class="btn btn-green" style="flex:1" onclick="setState({kjModal:{op:${JSON.stringify(op).replace(/"/g,'&quot;')},wynik:'zgodny'}})">
@@ -6060,7 +6062,7 @@ function renderZlecenia() {
               <button type="button" class="btn-sm" onclick="stepModelRemove()">🗑 Usuń</button>
             </div>
             <div id="zl-model3d-upload-area" style="${z.model_3d_url ? 'display:none' : ''}">
-              <input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP"
+              <input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*"
                      style="font-size:13px;width:100%"
                      onchange="uploadStepFile(this)">
             </div>
@@ -9523,7 +9525,7 @@ function stepModelRemove() {
   const info = document.getElementById('zl-model3d-info');
   if (info) info.style.display = 'none';
   const area = document.getElementById('zl-model3d-upload-area');
-  if (area) { area.style.display = ''; area.innerHTML = '<input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP" style="font-size:13px;width:100%" onchange="uploadStepFile(this)">'; }
+  if (area) { area.style.display = ''; area.innerHTML = '<input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*" style="font-size:13px;width:100%" onchange="uploadStepFile(this)">'; }
   const status = document.getElementById('zl-model3d-status');
   if (status) { status.textContent = ''; }
 }
@@ -9592,7 +9594,7 @@ function drzewoOpenStepNode(btn) {
 async function uploadStepForZlecenie(zlecenieId) {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.step,.stp,.STEP,.STP';
+  input.accept = '.step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*';
   input.style.display = 'none';
   document.body.appendChild(input);
   input.onchange = async function() {
@@ -9627,6 +9629,75 @@ async function uploadStepForZlecenie(zlecenieId) {
       });
       if (result.ok && result.url) {
         await patch('/api/zlecenia/' + zlecenieId + '/model3d', {model_3d_url: result.url});
+        toast.style.background = '#1a3a1a';
+        toast.style.borderColor = '#4ade80';
+        toast.textContent = '✅ Wgrano: ' + file.name;
+        setTimeout(() => toast.remove(), 3000);
+        // Odśwież drzewo
+        if (state.drzewoSelectedG) {
+          try {
+            const tree = await get('/api/wyroby/' + state.drzewoSelectedG.id + '/drzewo');
+            setState({drzewoTree: tree});
+          } catch(_) {}
+        }
+        // Odśwież modal zlecenia jeśli otwarty
+        if (state.zlecenieModal?.zlTree && state.zlecenieModal?.zlWyrobId) {
+          try {
+            const tree2 = await get('/api/wyroby/' + state.zlecenieModal.zlWyrobId + '/drzewo');
+            setState({zlecenieModal: {...state.zlecenieModal, zlTree: tree2}});
+          } catch(_) {}
+        }
+      } else {
+        throw new Error(result.error || 'Nieznany błąd');
+      }
+    } catch(e) {
+      toast.style.background = '#3a1a1a';
+      toast.style.borderColor = '#f87171';
+      toast.textContent = '✗ Błąd: ' + e.message;
+      setTimeout(() => toast.remove(), 4000);
+    }
+  };
+  input.click();
+}
+
+// ── Upload STEP dla wyrobu G/P (niezależnie od zlecenia) ──────────────────────
+async function uploadStepForWyrob(wyrobId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.onchange = async function() {
+    const file = this.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    const MAX = 100 * 1024 * 1024;
+    if (file.size > MAX) { alert('Plik za duży (maks. 100 MB)'); return; }
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:10000;background:#1e3a5f;border:1px solid #3b82f6;color:#e8eaf0;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 4px 12px #0008;min-width:220px';
+    toast.textContent = '⏳ Wgrywanie STEP... 0%';
+    document.body.appendChild(toast);
+    try {
+      const buf = await file.arrayBuffer();
+      const result = await new Promise((res, rej) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', SERVER_URL.replace(/\/$/, '') + '/api/step-upload');
+        xhr.setRequestHeader('x-api-key', API_KEY);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('x-filename', encodeURIComponent(file.name));
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable)
+            toast.textContent = '⏳ Wgrywanie STEP... ' + Math.round(e.loaded/e.total*100) + '%';
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) res(JSON.parse(xhr.responseText));
+          else rej(new Error(xhr.responseText || 'HTTP ' + xhr.status));
+        };
+        xhr.onerror = () => rej(new Error('Błąd sieci'));
+        xhr.send(buf);
+      });
+      if (result.ok && result.url) {
+        await patch('/api/wyroby/' + wyrobId + '/model3d', {model_3d_url: result.url});
         toast.style.background = '#1a3a1a';
         toast.style.borderColor = '#4ade80';
         toast.textContent = '✅ Wgrano: ' + file.name;
@@ -11503,7 +11574,14 @@ function renderDrzewoNode(node, depth, ilocZlecona, parentWyrobId) {
       ${noZlHtml}
       ${countBadge}
       ${(!isG && node._bom_id && parentWyrobId) ? `<button onclick="event.stopPropagation();drzewoDeleteBomNode(${node._bom_id},${parentWyrobId})" title="Usuń z drzewa" style="background:transparent;border:none;color:#475569;cursor:pointer;font-size:.8rem;padding:0 2px;flex-shrink:0" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#475569'">✕</button>` : ''}
-      ${!isG && !isM && zlecenie ? `${zlecenie.model_3d_url ? `<button onclick="event.stopPropagation();drzewoOpenStepNode(this)" data-url="${(zlecenie.model_3d_url||'').replace(/"/g,'&quot;')}" title="Podgląd STEP" style="background:rgba(59,130,246,0.15);border:1px solid #3b82f640;color:#60a5fa;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer;white-space:nowrap;flex-shrink:0">🧊</button>` : ''}<button onclick="event.stopPropagation();uploadStepForZlecenie(${zlecenie.id})" title="${zlecenie.model_3d_url ? 'Zmień plik STEP' : 'Wgraj plik STEP'}" style="background:rgba(139,92,246,0.12);border:1px solid #8b5cf640;color:#a78bfa;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer;white-space:nowrap;flex-shrink:0">${zlecenie.model_3d_url ? '📎' : '📎 STEP'}</button>` : ''}
+      ${!isM ? (() => {
+        const stepUrl = node.model_3d_url || zlecenie?.model_3d_url || '';
+        const previewBtn = stepUrl
+          ? `<button onclick="event.stopPropagation();drzewoOpenStepNode(this)" data-url="${stepUrl.replace(/"/g,'&quot;')}" title="Podgląd STEP" style="background:rgba(59,130,246,0.15);border:1px solid #3b82f640;color:#60a5fa;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer;white-space:nowrap;flex-shrink:0">🧊</button>`
+          : '';
+        const uploadBtn = `<button onclick="event.stopPropagation();uploadStepForWyrob(${node.id})" title="${stepUrl ? 'Zmień plik STEP' : 'Wgraj plik STEP'}" style="background:rgba(139,92,246,0.12);border:1px solid #8b5cf640;color:#a78bfa;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer;white-space:nowrap;flex-shrink:0">${stepUrl ? '📎' : '📎 STEP'}</button>`;
+        return previewBtn + uploadBtn;
+      })() : ''}
     </div>
     ${childrenHtml}
   </div>`;

@@ -2524,6 +2524,38 @@ def get_mrp_zlecenia(gid: int):
                     results.extend(sub)
             return results
 
+        # ── Helper: czyta materiały z zlecenie_materialy (zakładka Zlecenia) ──────
+        def _add_from_zlecenie_materialy(conn, zlecenie_id: int, ilosc_szt: float,
+                                          raw_materials: list, existing_keys: set,
+                                          zlecenie_numer: str = None):
+            zm_rows = conn.execute("""
+                SELECT zm.*, m.do_dyspozycji, m.stan_rzeczywisty, m.id as m_id, m.jm as m_jm_mag
+                FROM zlecenie_materialy zm
+                LEFT JOIN materialy m ON m.indeks = zm.indeks
+                WHERE zm.zlecenie_id=?
+                ORDER BY zm.kolejnosc, zm.id
+            """, (zlecenie_id,)).fetchall()
+            for r in zm_rows:
+                rd = dict(r)
+                indeks = rd.get("indeks") or ""
+                dup_key = (indeks, zlecenie_id)
+                if dup_key in existing_keys:
+                    continue
+                existing_keys.add(dup_key)
+                entry = {
+                    "material_indeks": indeks,
+                    "material_opis":   rd.get("opis") or indeks,
+                    "material_jm":     rd.get("jednostka") or rd.get("m_jm_mag") or "szt",
+                    "material_id":     rd.get("m_id"),
+                    "material_stan":   rd.get("do_dyspozycji") or 0,
+                    "material_stan_rzecz": rd.get("stan_rzeczywisty") or 0,
+                    "ilosc_wymagana":  (rd.get("ilosc") or 1) * ilosc_szt,
+                    "jednostka":       rd.get("jednostka") or rd.get("m_jm_mag") or "szt",
+                }
+                if zlecenie_numer:
+                    entry["_zlecenie_p"] = zlecenie_numer
+                raw_materials.append(entry)
+
         # Zbierz wszystkie materiały
         if wyrob_g:
             raw_materials = _collect_materials(wyrob_g["id"], ilosc_g, set())
@@ -2665,6 +2697,23 @@ def get_mrp_zlecenia(gid: int):
                         "jednostka":       r["jm"],
                         "_zlecenie_p": zp["numer"],
                     })
+
+        # ── Uzupełnij z zlecenie_materialy (zakładka Zlecenia) ──────────────────
+        existing_zm_keys = set()
+        _add_from_zlecenie_materialy(conn, gid, ilosc_g, raw_materials, existing_zm_keys)
+
+        # Dodaj zlecenie_materialy dla podzleceń P przez zapotrzebowania
+        all_p_ids_for_zm = conn.execute(
+            "SELECT DISTINCT zlecenie_p_id FROM zapotrzebowania WHERE zlecenie_g_id=? AND zlecenie_p_id IS NOT NULL",
+            (gid,)
+        ).fetchall()
+        for p_row in all_p_ids_for_zm:
+            pid = p_row["zlecenie_p_id"]
+            zp = conn.execute("SELECT * FROM zlecenia WHERE id=?", (pid,)).fetchone()
+            if not zp:
+                continue
+            ilosc_p = zp["ilosc_sztuk"] or 1
+            _add_from_zlecenie_materialy(conn, pid, ilosc_p, raw_materials, existing_zm_keys, zp["numer"])
 
         # Agreguj per materiał (widok zbiorczy)
         zbiorczo: dict = {}

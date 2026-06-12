@@ -244,7 +244,8 @@ def scan_qr(qr: str):
     """Szuka operacji lub zlecenia po QR kodzie"""
     with get_db() as conn:
         op = conn.execute("""
-            SELECT o.*, z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk
+            SELECT o.*, z.numer as zl_numer, z.nazwa as zl_nazwa, z.ilosc_sztuk,
+                   z.model_3d_url as zl_model3d_url
             FROM operacje o
             JOIN zlecenia z ON o.zlecenie_id = z.id
             WHERE o.qr_code=?
@@ -597,6 +598,15 @@ def get_zlecenie_drzewo(zid: int):
             "operacje": [dict(r) for r in operacje],
             "podzlecenia_drzewo": podzlecenia_drzewo,
         }
+
+@app.patch("/api/zlecenia/{zid}/model3d", dependencies=[Depends(verify_key)])
+def patch_model3d(zid: int, body: dict = Body(...)):
+    """Aktualizuje URL modelu 3D (.STEP) zlecenia."""
+    url = body.get("model_3d_url")
+    with get_db() as conn:
+        conn.execute("UPDATE zlecenia SET model_3d_url=? WHERE id=?", (url, zid))
+        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        return {"ok": True}
 
 @app.patch("/api/zlecenia/{zid}/status", dependencies=[Depends(verify_key)])
 def change_zlecenie_status(zid: int, body: dict):
@@ -2005,7 +2015,7 @@ def get_wyrob_drzewo(wid: int, max_depth: int = 10):
         if p_symbols:
             placeholders = ",".join("?" * len(p_symbols))
             for z in conn.execute(f"""
-                SELECT z.id, z.numer, z.status, z.ilosc_sztuk,
+                SELECT z.id, z.numer, z.status, z.ilosc_sztuk, z.model_3d_url,
                        COUNT(o.id)  as op_total,
                        SUM(CASE WHEN o.status='zakonczona' THEN 1 ELSE 0 END) as op_done
                 FROM zlecenia z

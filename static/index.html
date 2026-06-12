@@ -1186,6 +1186,35 @@ async function scanQR(kod) {
   }
 }
 
+async function kjOcenOperacje(opId, wynik, opNazwa) {
+  const label = wynik === 'zgodny' ? 'ZGODNY ✅' : 'NIEZGODNY ❌';
+  if (!confirm(`Oznaczyć operację "${opNazwa}" jako ${label}?`)) return;
+  try {
+    await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/operacje/' + opId + '/kj', {
+      method: 'PATCH',
+      headers: {'Content-Type':'application/json','x-api-key': API_KEY},
+      body: JSON.stringify({
+        wynik,
+        uwagi: '',
+        user_id: state.user?.id,
+        user_name: state.user?.full_name,
+      })
+    });
+    // Odśwież operacje w modalu
+    const m = state.qrZleceniePickerModal;
+    if (m?.zlecenie?.id) {
+      try {
+        const fresh = await get('/api/scan/' + encodeURIComponent(m.zlecenie.numer));
+        if (fresh?.operacje) {
+          setState({qrZleceniePickerModal: {...m, operacje: fresh.operacje}});
+        }
+      } catch(e) { /* ignoruj */ }
+    }
+    render();
+  } catch(e) { alert('Błąd zapisu KJ: ' + e.message); }
+}
+
+
 function showQRResult(res) {
   if (res.type === 'operacja') {
     const op = res.data;
@@ -1203,6 +1232,59 @@ function renderQRZleceniePickerModal() {
   if (!m) return '';
   const z = m.zlecenie;
   const ops = m.operacje || [];
+
+  // ── TRYB KJ: użytkownik z flagą is_kj widzi inny widok ─────────────────
+  const isKJ = !!(state.user?.is_kj);
+  if (isKJ) {
+    const allOps = ops.filter(o => o.typ_operacji !== 'zbrojenie');
+    let kjHtml = `
+    <div class="modal-overlay">
+      <div class="modal">
+        <button class="modal-close" onclick="setState({qrZleceniePickerModal:null,kjModal:null})">×</button>
+        <div style="background:rgba(52,152,219,0.12);border:1px solid #3498db55;border-radius:8px;padding:8px 14px;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+          <span style="font-size:18px">🔍</span>
+          <div>
+            <div style="font-size:12px;font-weight:700;color:#3498db">TRYB KONTROLI JAKOŚCI</div>
+            <div style="font-size:11px;color:var(--dim)">${state.user.full_name}</div>
+          </div>
+        </div>
+        <h3>📋 ${z.numer}</h3>
+        <div style="color:var(--dim);font-size:13px;margin-bottom:14px">${z.nazwa||''}</div>`;
+    if (!allOps.length) {
+      kjHtml += `<div class="empty">Brak operacji w tym zleceniu</div>`;
+    } else {
+      kjHtml += `<div style="color:var(--dim);font-size:12px;margin-bottom:10px">Wybierz operację do oceny jakości:</div>`;
+      allOps.forEach(op => {
+        const kjDone = op.kj_wynik === 'zgodny' || op.kj_wynik === 'niezgodny';
+        const kjColor = op.kj_wynik === 'zgodny' ? 'var(--green)' : op.kj_wynik === 'niezgodny' ? 'var(--red)' : 'var(--dim)';
+        const kjLabel = op.kj_wynik === 'zgodny' ? '✅ ZGODNY' : op.kj_wynik === 'niezgodny' ? '❌ NIEZGODNY' : '';
+        kjHtml += `
+        <div class="card" style="padding:12px;margin-bottom:10px;border-color:${kjDone ? kjColor : 'var(--border)'}">
+          <div style="font-weight:700;font-size:15px;margin-bottom:4px">${op.kolejnosc}. ${op.nazwa}</div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:8px">${op.stanowisko||'—'}${op.czas_norma?' | norma: '+op.czas_norma+' min/szt':''}</div>
+          ${kjDone ? `<div style="font-size:12px;font-weight:700;color:${kjColor};margin-bottom:8px">${kjLabel}${op.kj_data?` <span style="font-weight:400;color:var(--dim);font-size:11px">(${op.kj_data.substring(0,16)})</span>`:''}</div>` : ''}
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-green" style="flex:1;font-size:14px;padding:10px"
+              onclick="kjOcenOperacje(${op.id},'zgodny','${(op.nazwa||'').replace(/'/g,"\\'")}')">
+              ✅ ZGODNY
+            </button>
+            <button class="btn btn-red" style="flex:1;font-size:14px;padding:10px"
+              onclick="kjOcenOperacje(${op.id},'niezgodny','${(op.nazwa||'').replace(/'/g,"\\'")}')">
+              ❌ NIEZGODNY
+            </button>
+          </div>
+        </div>`;
+      });
+    }
+    kjHtml += `
+        <button class="btn btn-outline" style="margin-top:8px"
+                onclick="setState({qrZleceniePickerModal:null})">Zamknij</button>
+      </div>
+    </div>`;
+    return kjHtml;
+  }
+  // ── KONIEC TRYBU KJ ──────────────────────────────────────────────────────
+
   // Operacje typ='zbrojenie' są obsługiwane jako przycisk przy operacji produkcji
   const dostepne = ops.filter(o =>
     o.status !== 'zakonczone' && o.status !== 'anulowane' && o.typ_operacji !== 'zbrojenie'
@@ -3468,19 +3550,22 @@ function printRaportZlecenia(data, od, doDt, pojedynczeNumer) {
             <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Czas/szt.</th>
             <th style="padding:4px 8px;text-align:center;border:1px solid #eee">Szt.</th>
             <th style="padding:4px 8px;text-align:right;border:1px solid #eee">Koszt</th>
+            <th style="padding:4px 8px;text-align:center;border:1px solid #eee">KJ</th>
             <th style="padding:4px 8px;text-align:left;border:1px solid #eee">Uwagi</th>
           </tr></thead><tbody>`;
       (z.sesje||[]).forEach(s => {
         const isNieprod = s.typ === 'nieprodukcyjna';
         const isInne = s.typ === 'inne_zlecenie';
         const isZbr = s.typ === 'zbrojenie';
+        const isKJOnly = s._kj_only;
         // Sprawdź czy w normie: czas_norma × ilosc_sztuk vs czas_min (czas_norma w min/szt)
-        const normaCalk = (!isNieprod && !isInne) ? (s.czas_norma||0) * (s.ilosc_sztuk||1) : 0;
+        const normaCalk = (!isNieprod && !isInne && !isKJOnly) ? (s.czas_norma||0) * (s.ilosc_sztuk||1) : 0;
         const wNormie = normaCalk > 0 && s.czas_min <= normaCalk;
         const przekroczone = normaCalk > 0 && s.czas_min > normaCalk;
         let rowBg = przekroczone ? 'background:#fff3f3' : wNormie ? 'background:#f3fff6' : '';
         if (isNieprod) rowBg = 'background:#f9f5ff';
         if (isInne) rowBg = 'background:#f0f7ff';
+        if (isKJOnly) rowBg = s.kj_wynik === 'zgodny' ? 'background:#f0fff4' : 'background:#fff0f0';
         const normaBadge = normaCalk > 0
           ? (wNormie
               ? `<span style="color:#1e8a4c;font-weight:700;font-size:10px">✓ OK</span>`
@@ -3492,22 +3577,32 @@ function printRaportZlecenia(data, od, doDt, pojedynczeNumer) {
           ? `<span style="font-size:9px;background:#2980b9;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">INNE ZLECENIE</span>`
           : isZbr
           ? `<span style="font-size:9px;background:#e67e00;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">ZBROJENIE</span>`
+          : isKJOnly
+          ? `<span style="font-size:9px;background:#3498db;color:#fff;padding:1px 5px;border-radius:3px;margin-left:4px">KJ</span>`
           : '';
         const opNazwa = s.operacja || (isNieprod ? '⏸ Praca nieprodukcyjna' : isInne ? '🔧 Inne zlecenie' : '—');
         const sztuk = s.ilosc_sztuk || 1;
-        const avgMinVal = (!isNieprod && sztuk > 0) ? s.czas_min / sztuk : s.czas_min;
-        const totalHMS = fmtHMS(s.czas_min);
+        const avgMinVal = (!isNieprod && !isKJOnly && sztuk > 0) ? s.czas_min / sztuk : s.czas_min;
+        const totalHMS = isKJOnly ? '—' : fmtHMS(s.czas_min);
         const normaTotalHMS = normaCalk > 0 ? fmtHMS(normaCalk) : null;
-        const avgHMS = fmtHMS(avgMinVal);
+        const avgHMS = isKJOnly ? '—' : fmtHMS(avgMinVal);
         const normaPieceFmt = normaCalk > 0 ? fmtHMS(s.czas_norma||0) : null;
+        // KJ badge w kolumnie KJ
+        let kjCellHtml = '—';
+        if (s.kj_wynik === 'zgodny') {
+          kjCellHtml = `<span style="color:#1e8a4c;font-weight:700;font-size:10px">✅ ZGODNY</span>${s.kj_user_name?`<br><span style="color:#888;font-size:9px">${s.kj_user_name}</span>`:''}${s.kj_data?`<br><span style="color:#888;font-size:9px">${s.kj_data}</span>`:''}`;
+        } else if (s.kj_wynik === 'niezgodny') {
+          kjCellHtml = `<span style="color:#c0392b;font-weight:700;font-size:10px">❌ NIEZGODNY</span>${s.kj_user_name?`<br><span style="color:#888;font-size:9px">${s.kj_user_name}</span>`:''}${s.kj_data?`<br><span style="color:#888;font-size:9px">${s.kj_data}</span>`:''}`;
+        }
         zlHtml += `<tr style="${rowBg}">
           <td style="padding:3px 8px;border:1px solid #eee">${opNazwa}${typBadge} ${normaBadge}</td>
-          <td style="padding:3px 8px;border:1px solid #eee">${s.pracownik||'—'}</td>
-          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${s.data||'—'}</td>
+          <td style="padding:3px 8px;border:1px solid #eee">${isKJOnly ? (s.kj_user_name||'KJ') : (s.pracownik||'—')}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isKJOnly ? (s.kj_data||'—') : (s.data||'—')}</td>
           <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:${przekroczone?'#c0392b':wNormie?'#1e8a4c':'inherit'};font-weight:${przekroczone||wNormie?'700':'400'}">${totalHMS}${normaTotalHMS?' / norma: '+normaTotalHMS:''}</td>
-          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#555">${isNieprod ? '—' : avgHMS}${normaPieceFmt&&!isNieprod?' <span style="color:#aaa;font-size:9px">/ '+normaPieceFmt+'</span>':''}</td>
-          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod ? '—' : (s.ilosc_sztuk||0)}</td>
-          <td style="padding:3px 8px;border:1px solid #eee;text-align:right">${fmtPLNr(s.koszt)}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;font-family:monospace;color:#555">${isNieprod || isKJOnly ? '—' : avgHMS}${normaPieceFmt&&!isNieprod&&!isKJOnly?' <span style="color:#aaa;font-size:9px">/ '+normaPieceFmt+'</span>':''}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center">${isNieprod || isKJOnly ? '—' : (s.ilosc_sztuk||0)}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:right">${isKJOnly ? '—' : fmtPLNr(s.koszt)}</td>
+          <td style="padding:3px 8px;border:1px solid #eee;text-align:center;line-height:1.4">${kjCellHtml}</td>
           <td style="padding:3px 8px;border:1px solid #eee;color:#555;font-style:italic">${s.uwagi||'—'}</td>
         </tr>`;
       });
@@ -7216,7 +7311,7 @@ function renderAdmin() {
         <div class="card-header">
           <div>
             <div class="card-title">👤 ${u.full_name}</div>
-            <div class="card-sub">@${u.username} | ${roleName(u.role)}</div>
+            <div class="card-sub">@${u.username} | ${roleName(u.role)}${u.is_kj?` | <span style="color:#3498db;font-weight:700">🔍 KJ</span>`:''}</div>
           </div>
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             <button class="btn-sm btn-blue" onclick="setState({userModal:${JSON.stringify(u).replace(/"/g,'&quot;')}})">✏</button>
@@ -7242,6 +7337,13 @@ function renderAdmin() {
               ${['pracownik','majster','technolog','magazynier','admin'].map(r =>
                 `<option value="${r}" ${u.role===r?'selected':''}>${roleName(r)}</option>`).join('')}
             </select>
+          </div>
+          <div class="field" style="display:flex;align-items:center;gap:10px;background:rgba(52,152,219,0.08);border:1px solid #3498db55;border-radius:8px;padding:10px 14px">
+            <input type="checkbox" id="u-is-kj" style="width:18px;height:18px;cursor:pointer" ${u.is_kj?'checked':''}>
+            <div>
+              <label for="u-is-kj" style="cursor:pointer;font-weight:600;color:#3498db">🔍 Kontrola Jakości (KJ)</label>
+              <div style="font-size:11px;color:var(--dim);margin-top:2px">Po zeskanowaniu QR użytkownik widzi operacje i może ocenić: ZGODNY / NIEZGODNY</div>
+            </div>
           </div>
           <div class="field"><label>${u.id?'Nowe hasło (puste = bez zmiany)':'Hasło'}</label><input id="u-pass" type="password"></div>
           <button class="btn btn-accent" onclick="saveUserForm(${u.id||0})">💾 Zapisz</button>
@@ -7563,6 +7665,7 @@ function saveUserForm(id) {
     full_name: document.getElementById('u-name')?.value?.trim(),
     role: document.getElementById('u-role')?.value,
     password: document.getElementById('u-pass')?.value || undefined,
+    is_kj: document.getElementById('u-is-kj')?.checked ? 1 : 0,
   };
   if (!data.full_name) { alert('Podaj imię i nazwisko'); return; }
   if (id) { data.id = id; }
@@ -7821,7 +7924,7 @@ async function kjWynik(opId, wynik) {
     await fetch((SERVER_URL.replace(/\/$/,'')) + '/api/operacje/' + opId + '/kj', {
       method: 'PATCH',
       headers: {'Content-Type':'application/json', 'x-api-key': API_KEY},
-      body: JSON.stringify({wynik, uwagi}),
+      body: JSON.stringify({wynik, uwagi, user_id: state.user?.id, user_name: state.user?.full_name}),
     });
     setState({kjModal: null, qrZleceniePickerModal: null});
     await loadPracownik();

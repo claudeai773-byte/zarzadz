@@ -5738,8 +5738,9 @@ function renderZlecenia() {
             const pMats = pd.materialy || [];
             const pSubs = pd.podzlecenia || [];
 
-            // ── Nagłówek podzlecenia P ──
-            treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px 6px 14px;border-bottom:1px solid rgba(139,92,246,0.2);border-top:1px solid rgba(139,92,246,0.15);background:rgba(139,92,246,0.06);margin-top:2px">
+            // ── Nagłówek podzlecenia P (klikalny → modal szczegółów) ──
+            const pClickAttr = pid ? `onclick="openPodZlecenieModal(${pid},${z.id})" style="display:flex;align-items:center;gap:8px;padding:6px 10px 6px 14px;border-bottom:1px solid rgba(139,92,246,0.2);border-top:1px solid rgba(139,92,246,0.15);background:rgba(139,92,246,0.08);margin-top:2px;cursor:pointer"` : `style="display:flex;align-items:center;gap:8px;padding:6px 10px 6px 14px;border-bottom:1px solid rgba(139,92,246,0.2);border-top:1px solid rgba(139,92,246,0.15);background:rgba(139,92,246,0.06);margin-top:2px"`;
+            treeRows += `<div ${pClickAttr}>
               <span style="font-size:13px">◆</span>
               <span style="font-size:13px;font-weight:700;color:#a78bfa;flex:1">
                 ${pNumer ? `<span style="color:#a78bfa">${pNumer}</span>` : `<span style="color:#a78bfa">${pSymbol}</span>`}
@@ -5747,12 +5748,23 @@ function renderZlecenia() {
               </span>
               ${pIlosc ? `<span style="font-size:10px;color:var(--dim)">${pIlosc} szt.</span>` : ''}
               <span style="font-size:10px;padding:1px 7px;border-radius:4px;background:rgba(139,92,246,0.15);color:${stCol};font-weight:700">${pStatus}</span>
+              ${pid ? `<span style="font-size:10px;color:#a78bfa;margin-left:2px">▶</span>` : ''}
             </div>`;
 
             // Operacje podzlecenia P
             if (pOps.length) {
               treeRows += hdr('🔧', `Operacje (${pOps.length})`, 28, '#8b7fd0');
               pOps.forEach(op => { treeRows += renderOp(op, 36); });
+            } else if (pid) {
+              treeRows += `<div style="padding:4px 10px 4px 28px;font-size:11px;color:var(--dim);font-style:italic">Brak operacji – <span style="color:#a78bfa;cursor:pointer" onclick="openPodZlecenieModal(${pid},${z.id})">kliknij ◆ by edytować</span></div>`;
+            }
+
+            // Materiały podzlecenia P
+            if (pMats.length) {
+              treeRows += hdr('📦', `Materiały (${pMats.length})`, 28, '#8b7fd0');
+              pMats.forEach(m => { treeRows += renderMat(m, 36); });
+            } else if (pid) {
+              treeRows += `<div style="padding:2px 10px 4px 28px;font-size:11px;color:var(--dim);font-style:italic">Brak materiałów</div>`;
             }
 
             // Zagnieżdżone sub-podzlecenia P
@@ -5765,35 +5777,36 @@ function renderZlecenia() {
               const sCol = sStatus==='zakonczone'?'var(--green)':sStatus==='w_toku'?'var(--accent)':'var(--dim)';
               const sOps = sub.operacje || [];
               const sMats = sub.materialy || [];
+              const subPid = szap.zlecenie_p_id || szap.zp_id || sub.zlecenie_p_id;
 
-              // Nagłówek sub-podzlecenia
-              treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 28px;border-bottom:1px solid rgba(139,92,246,0.12);background:rgba(139,92,246,0.03)">
+              // Nagłówek sub-podzlecenia (klikalny)
+              const sClickAttr = subPid ? `onclick="openPodZlecenieModal(${subPid},${z.id})" style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 28px;border-bottom:1px solid rgba(139,92,246,0.12);background:rgba(139,92,246,0.04);cursor:pointer"` : `style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 28px;border-bottom:1px solid rgba(139,92,246,0.12);background:rgba(139,92,246,0.03)"`;
+              treeRows += `<div ${sClickAttr}>
                 <span style="font-size:11px;color:#7c68c8">◆</span>
                 <span style="font-size:12px;font-weight:700;color:#9b8be8;flex:1">
                   ${sNumer ? sNumer : sSymbol}
                   ${sNazwa ? `<span style="color:var(--dim);font-weight:400;font-size:11px"> – ${sNazwa}</span>` : ''}
                 </span>
                 <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,92,246,0.1);color:${sCol};font-weight:700">${sStatus}</span>
+                ${subPid ? `<span style="font-size:10px;color:#9b8be8;margin-left:2px">▶</span>` : ''}
               </div>`;
 
               // Operacje sub-podzlecenia
               if (sOps.length) {
                 treeRows += hdr('🔧', `Operacje (${sOps.length})`, 42, '#6b5fa0');
                 sOps.forEach(op => { treeRows += renderOp(op, 50); });
+              } else if (subPid) {
+                treeRows += `<div style="padding:3px 10px 3px 42px;font-size:11px;color:var(--dim);font-style:italic">Brak operacji</div>`;
               }
 
               // Materiały sub-podzlecenia
               if (sMats.length) {
                 treeRows += hdr('📦', `Materiały (${sMats.length})`, 42, '#6b5fa0');
                 sMats.forEach(m => { treeRows += renderMat(m, 50); });
+              } else if (subPid) {
+                treeRows += `<div style="padding:2px 10px 3px 42px;font-size:11px;color:var(--dim);font-style:italic">Brak materiałów</div>`;
               }
             });
-
-            // Materiały podzlecenia P
-            if (pMats.length) {
-              treeRows += hdr('📦', `Materiały (${pMats.length})`, 28, '#8b7fd0');
-              pMats.forEach(m => { treeRows += renderMat(m, 36); });
-            }
           });
 
           // ── PÓŁPRODUKTY P (stare – z tablicy zlecenie_polprodukty, bez powiązanego zlecenia) ──
@@ -6484,6 +6497,10 @@ async function addOperacja(zlecenieId) {
       czas_zbrojenia_min: parseFloat(document.getElementById('op-zbrojenie')?.value)||0,
     });
     await openOperacje(state.operacjeModal.zlecenie);
+    // Odśwież drzewo G jeśli edytujemy podzlecenie P
+    const pdm = state.podZlecenieModal;
+    if (pdm && pdm.parentGid) refreshZlecenieDrzewo(pdm.parentGid);
+    else refreshZlecenieDrzewo(zlecenieId);
   } catch(e) { alert('Błąd: '+e.message); }
 }
 
@@ -6492,6 +6509,10 @@ async function deleteOp(opId, zlecenieId) {
   try {
     await del(`/api/operacje/${opId}`);
     await openOperacje(state.operacjeModal.zlecenie);
+    // Odśwież drzewo G jeśli edytujemy podzlecenie P
+    const pdm = state.podZlecenieModal;
+    if (pdm && pdm.parentGid) refreshZlecenieDrzewo(pdm.parentGid);
+    else refreshZlecenieDrzewo(zlecenieId);
   } catch(e) { alert('Błąd: '+e.message); }
 }
 
@@ -8885,7 +8906,14 @@ async function savePolprodukt(zid, pid) {
       await post(`/api/zlecenia/${zid}/polprodukty`, { symbol, nazwa, ilosc, jednostka: jm, uwagi });
     }
     setState({ pmModal: null });
-    await refreshZlecenieDrzewo(zid);
+    const pdm = state.podZlecenieModal;
+    if (pdm && !pdm.loading && pdm.zid === zid) {
+      const gid = pdm.parentGid;
+      await openPodZlecenieModal(zid, gid);
+      if (gid) await refreshZlecenieDrzewo(gid);
+    } else {
+      await refreshZlecenieDrzewo(zid);
+    }
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
@@ -8893,7 +8921,14 @@ async function deletePolprodukt(zid, pid) {
   if (!confirm('Usunąć ten półprodukt?')) return;
   try {
     await del(`/api/zlecenia/${zid}/polprodukty/${pid}`);
-    await refreshZlecenieDrzewo(zid);
+    const pdm = state.podZlecenieModal;
+    if (pdm && !pdm.loading && pdm.zid === zid) {
+      const gid = pdm.parentGid;
+      await openPodZlecenieModal(zid, gid);
+      if (gid) await refreshZlecenieDrzewo(gid);
+    } else {
+      await refreshZlecenieDrzewo(zid);
+    }
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
@@ -8953,7 +8988,15 @@ async function saveMaterialZlecenia(zid, mid) {
       await post(`/api/zlecenia/${zid}/materialy-zlecenia`, { indeks, opis, ilosc, jednostka: jm, uwagi });
     }
     setState({ pmModal: null });
-    await refreshZlecenieDrzewo(zid);
+    // Jeśli modal podzlecenia był otwarty dla tego zid – odśwież go ORAZ drzewo zlecenia G
+    const pdm = state.podZlecenieModal;
+    if (pdm && !pdm.loading && pdm.zid === zid) {
+      const gid = pdm.parentGid;
+      await openPodZlecenieModal(zid, gid);
+      if (gid) await refreshZlecenieDrzewo(gid);
+    } else {
+      await refreshZlecenieDrzewo(zid);
+    }
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
@@ -8961,7 +9004,14 @@ async function deleteMaterialZlecenia(zid, mid) {
   if (!confirm('Usunąć ten materiał?')) return;
   try {
     await del(`/api/zlecenia/${zid}/materialy-zlecenia/${mid}`);
-    await refreshZlecenieDrzewo(zid);
+    const pdm = state.podZlecenieModal;
+    if (pdm && !pdm.loading && pdm.zid === zid) {
+      const gid = pdm.parentGid;
+      await openPodZlecenieModal(zid, gid);
+      if (gid) await refreshZlecenieDrzewo(gid);
+    } else {
+      await refreshZlecenieDrzewo(zid);
+    }
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
@@ -8980,8 +9030,10 @@ async function openPodZlecenieOperacje(zid, numer, nazwa) {
   } catch(e) { alert(e.message); }
 }
 
-async function openPodZlecenieModal(zid) {
-  setState({ podZlecenieModal: { loading: true, zid } });
+async function openPodZlecenieModal(zid, parentGid) {
+  // Zachowaj parentGid z poprzedniego stanu jeśli nie przekazano nowego
+  const prevGid = parentGid || (state.podZlecenieModal && state.podZlecenieModal.parentGid) || null;
+  setState({ podZlecenieModal: { loading: true, zid, parentGid: prevGid } });
   try {
     const [zlecenie, operacje, drzewo, zapotrz, matsM] = await Promise.all([
       get(`/api/zlecenia/${zid}`),
@@ -8997,6 +9049,7 @@ async function openPodZlecenieModal(zid) {
     setState({
       podZlecenieModal: {
         loading: false, zid,
+        parentGid: prevGid,
         zlecenie,
         operacje: operacje || [],
         materialy,
@@ -9129,9 +9182,14 @@ function renderPodZlecenieModal() {
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;margin-bottom:6px">🔧 Operacje (${ops.length})</div>
         <div style="margin-bottom:16px">${opsHtml}</div>
 
-        ${mats.length ? `
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;margin-bottom:6px">📦 Materialy M (${mats.length})</div>
-        <div style="margin-bottom:16px">${matsHtml}</div>` : ''}
+        <!-- Materiały M -->
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;flex:1">📦 Materiały M (${mats.length})</div>
+          ${canEdit ? `<button onclick="setState({pmModal:{typ:'material',zid:${z.id},item:null}})" style="background:rgba(243,156,18,0.15);color:var(--orange);border:1px solid rgba(243,156,18,0.3);border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;font-weight:600">+ Dodaj</button>` : ''}
+        </div>
+        <div style="margin-bottom:16px">
+          ${mats.length ? matsHtml : `<div style="color:var(--dim);font-size:12px;padding:6px 0;font-style:italic">Brak materiałów</div>`}
+        </div>
 
         ${pols.length ? `
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.8px;margin-bottom:6px">🔩 Polprodukty P (${pols.length})</div>

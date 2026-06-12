@@ -6103,6 +6103,22 @@ function renderZlecenia() {
           </div>` : `<div style="background:var(--entry);border:1px dashed rgba(243,156,18,0.4);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim)">Zapisz zlecenie, aby dodać materiały M</div>`}
         </div>
 
+        <!-- Sekcja Struktura G→P (pliki STEP) -->
+        <div style="margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#60a5fa;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+            🌳 Struktura G→P (pliki STEP)
+            ${z.id && z.zlTree && z.zlTree !== 'brak' ? `<button class="btn-sm" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);margin-left:auto" onclick="setState({zlecenieModal:{...state.zlecenieModal,zlTree:null,zlTreeLoading:false}})">↺ Odśwież</button>` : ''}
+          </div>
+          ${!z.id ? `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim)">Zapisz zlecenie, aby zobaczyć strukturę G→P i dołączyć pliki STEP</div>`
+            : z.zlTreeLoading ? `<div style="text-align:center;padding:16px;color:var(--dim);font-size:12px">⏳ Ładowanie struktury...</div>`
+            : !z.zlTree ? `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px">
+                <button onclick="zlModalLoadTree()" style="background:var(--blue);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700">Wczytaj strukturę G→P</button>
+              </div>`
+            : z.zlTree === 'brak' ? `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim)">Brak struktury G→P dla wyrobu <strong>${z.numer}</strong> w bazie drzew.</div>`
+            : `<div style="background:var(--entry);border-radius:10px;padding:10px;overflow-x:auto">${renderDrzewoNode(z.zlTree, 0, z.ilosc_sztuk || 1)}</div>`
+          }
+        </div>
+
         ${z.id ? renderProduktyZleceniaForm(z.id) : '<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">💡 Zapisz zlecenie, aby móc dodać produkty/zakupy</div>'}
         <button class="btn btn-accent" onclick="saveZlecenieForm(${z.id||0})">💾 Zapisz</button>
       </div>

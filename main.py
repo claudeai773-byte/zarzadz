@@ -689,10 +689,13 @@ def zapisz_wynik_kj(oid: int, req: KJRequest):
         op = conn.execute("SELECT * FROM operacje WHERE id=?", (oid,)).fetchone()
         if not op:
             raise HTTPException(404, "Operacja nie istnieje")
-        nowy_status = "zakonczona" if req.wynik == "zgodny" else "niezgodna_kj"
+        # Wynik KJ (zgodny/niezgodny) jest zapisywany wyłącznie jako informacja
+        # do raportu – NIE zmienia statusu wykonania operacji (status zostaje
+        # bez zmian, np. operacja nie jest automatycznie oznaczana jako
+        # "wykonana" po kliknięciu ZGODNE).
         conn.execute(
-            "UPDATE operacje SET kj_wynik=?, status=?, kj_user_id=?, kj_user_name=?, kj_data=datetime('now'), opis_czynnosci=CASE WHEN ?!='' THEN opis_czynnosci||'\n[KJ '||datetime('now')||']: '||? ELSE opis_czynnosci END WHERE id=?",
-            (req.wynik, nowy_status, req.user_id, req.user_name, req.uwagi, req.uwagi, oid)
+            "UPDATE operacje SET kj_wynik=?, kj_user_id=?, kj_user_name=?, kj_data=datetime('now'), opis_czynnosci=CASE WHEN ?!='' THEN opis_czynnosci||'\n[KJ '||datetime('now')||']: '||? ELSE opis_czynnosci END WHERE id=?",
+            (req.wynik, req.user_id, req.user_name, req.uwagi, req.uwagi, oid)
         )
         if req.wynik == "niezgodny":
             conn.execute(
@@ -1890,6 +1893,19 @@ def delete_wyrob(wid: int):
         conn.execute("DELETE FROM wyroby_bom WHERE wyrob_id=? OR (typ_skladnika='P' AND skladnik_id=?)", (wid, wid))
         conn.execute("DELETE FROM wyroby WHERE id=?", (wid,))
         return {"ok": True}
+
+@app.patch("/api/wyroby/{wid}/model3d", dependencies=[Depends(verify_key)])
+def patch_wyrob_model3d(wid: int, body: dict = Body(...)):
+    """Aktualizuje URL modelu 3D (.STEP) dla wyrobu (G lub P) – niezależnie od zlecenia."""
+    url = body.get("model_3d_url")
+    with get_db() as conn:
+        w = conn.execute("SELECT id FROM wyroby WHERE id=?", (wid,)).fetchone()
+        if not w:
+            raise HTTPException(404, "Wyrób nie znaleziony")
+        conn.execute("UPDATE wyroby SET model_3d_url=? WHERE id=?", (url, wid))
+        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        return {"ok": True}
+
 
 # ── BOM wyrobu ─────────────────────────────────────────────────────────────────
 @app.get("/api/wyroby/{wid}/bom", dependencies=[Depends(verify_key)])
@@ -3868,6 +3884,8 @@ def init_db_on_start():
     try: c.execute("ALTER TABLE operacje ADD COLUMN kj_user_name TEXT DEFAULT NULL")
     except: pass
     try: c.execute("ALTER TABLE operacje ADD COLUMN czas_tpz_min REAL DEFAULT 0.0")
+    except: pass
+    try: c.execute("ALTER TABLE wyroby ADD COLUMN model_3d_url TEXT DEFAULT NULL")
     except: pass
 
     c.execute("""CREATE TABLE IF NOT EXISTS sesje_pracy (

@@ -762,4 +762,3 @@ function renderDrzewoImportPanel() {
   </div>`;
 }
 
-</script>

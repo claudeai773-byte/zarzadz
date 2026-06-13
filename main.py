@@ -2,7 +2,7 @@
 Serwer FastAPI dla Systemu Zarządzania Produkcją v4.1
 Deploy na Railway.app
 """
-from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile, File, Body, Form
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile, File, Body, Form, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +11,46 @@ from typing import List, Any, Optional
 import sqlite3, os, json, hashlib, time, io, datetime as _dt, traceback, urllib.request, urllib.error
 import openpyxl as _openpyxl
 from contextlib import contextmanager
+
+# ─── WebSocket – Menedżer połączeń (powiadomienia real-time) ──────────────────
+class _WSManager:
+    """Zarządza połączeniami WebSocket i rozgłasza zdarzenia do wszystkich klientów."""
+    def __init__(self):
+        self._connections: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self._connections.append(ws)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self._connections:
+            self._connections.remove(ws)
+
+    async def broadcast(self, event: dict):
+        """Wyślij zdarzenie JSON do wszystkich aktywnych połączeń."""
+        import asyncio
+        dead = []
+        for ws in self._connections:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+ws_manager = _WSManager()
+
+def _broadcast_sync(event: dict):
+    """Wrapper synchroniczny – wywołaj z endpointów synchronicznych."""
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(ws_manager.broadcast(event))
+        else:
+            loop.run_until_complete(ws_manager.broadcast(event))
+    except Exception:
+        pass
 
 def _now():
     """Bieżący czas UTC jako ISO string z 'Z' (JS-kompatybilny)."""
@@ -346,7 +386,18 @@ def create_zlecenie(req: ZlecenieRequest):
                  req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta, qr,
                  req.model_3d_url)
             )
-            return {"id": cur.lastrowid, "qr_code": qr}
+            new_id = cur.lastrowid
+            # ─ Powiadomienie real-time dla majstrów ─────────────────────
+            _broadcast_sync({
+                "type": "nowe_zlecenie",
+                "id": new_id,
+                "numer": req.numer,
+                "nazwa": req.nazwa,
+                "status": req.status,
+                "termin": req.termin,
+                "ts": _now()
+            })
+            return {"id": new_id, "qr_code": qr}
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Zlecenie o tym numerze już istnieje")
         except Exception as e:
@@ -5498,6 +5549,11 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 BUILD_VERSION = os.environ.get("BUILD_VERSION", _dt.datetime.utcnow().strftime("%Y%m%d%H%M%S"))
 
+# Serwowanie plików statycznych (CSS, JS)
+_static_assets = os.path.join(STATIC_DIR, "static")
+os.makedirs(_static_assets, exist_ok=True)
+app.mount("/static", StaticFiles(directory=_static_assets), name="static")
+
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/app/", response_class=HTMLResponse)
 def serve_app():
@@ -5778,6 +5834,24 @@ def export_all_faktury():
             d = dict(fak); d["pozycje"] = [dict(p) for p in poz]
             result.append(d)
         return result
+
+# ─── WebSocket endpoint ────────────────────────────────────────────────────────
+@app.websocket("/ws/powiadomienia")
+async def websocket_powiadomienia(websocket: WebSocket):
+    """Endpoint WebSocket – klienci subskrybują powiadomienia real-time."""
+    await ws_manager.connect(websocket)
+    try:
+        # Wyślij powitanie z bieżącym timestampem
+        await websocket.send_json({"type": "connected", "ts": _now()})
+        # Trzymaj połączenie otwarte i obsługuj ping/pong
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception:
+        ws_manager.disconnect(websocket)
 
 if __name__ == "__main__":
     import uvicorn

@@ -5549,15 +5549,14 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 BUILD_VERSION = os.environ.get("BUILD_VERSION", _dt.datetime.utcnow().strftime("%Y%m%d%H%M%S"))
 
-# Serwowanie plików statycznych (CSS, JS)
-_static_assets = os.path.join(STATIC_DIR, "static")
-os.makedirs(_static_assets, exist_ok=True)
-app.mount("/static", StaticFiles(directory=_static_assets), name="static")
+# Serwowanie plików statycznych (CSS, JS) – bezpośrednio z static/
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/app/", response_class=HTMLResponse)
 def serve_app():
-    html_path = os.path.join(STATIC_DIR, "index.html")
+    # index.html leży w root repo obok main.py
+    html_path = os.path.join(os.path.dirname(__file__), "index.html")
     if not os.path.exists(html_path):
         raise HTTPException(404, "Brak pliku index.html")
     with open(html_path, "r", encoding="utf-8") as f:

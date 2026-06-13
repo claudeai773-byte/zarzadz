@@ -1271,6 +1271,8 @@ def get_zakonczone_transport():
             JOIN zlecenia z ON o.zlecenie_id = z.id
             WHERE o.status = 'zakonczona'
               AND z.status IN ('nowe','w_toku')
+              AND COALESCE(o.typ_operacji, '') != 'kj'
+              AND COALESCE(o.ilosc_wykonana, 0) > 0
             ORDER BY z.numer, o.kolejnosc
         """).fetchall()
         return [dict(r) for r in rows]
@@ -1485,6 +1487,26 @@ def get_aktywne_sesje(user_id: int):
             WHERE s.user_id=? AND s.status='aktywna'
             ORDER BY s.start_time
         """, (user_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+@app.get("/api/sesje/aktywne", dependencies=[Depends(verify_key)])
+def get_wszystkie_aktywne_sesje():
+    """Wszystkie aktywne sesje – dla widoku Priorytety majstra."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT s.*, u.full_name, u.full_name as user_name,
+                   o.nazwa as op_nazwa, o.stanowisko,
+                   COALESCE(z.numer, zi.numer) as zl_numer,
+                   COALESCE(z.nazwa, zi.nazwa) as zl_nazwa,
+                   COALESCE(z.id, zi.id) as zlecenie_id
+            FROM sesje_pracy s
+            JOIN users u ON s.user_id = u.id
+            LEFT JOIN operacje o ON s.operacja_id = o.id
+            LEFT JOIN zlecenia z ON o.zlecenie_id = z.id
+            LEFT JOIN zlecenia zi ON s.zlecenie_id_inne = zi.id
+            WHERE s.status = 'aktywna'
+            ORDER BY s.start_time
+        """).fetchall()
         return [dict(r) for r in rows]
 
 # backward compat

@@ -197,6 +197,14 @@ let state = {
   // Nowe modale: równoległa obróbka + zmiana maszyny
   parallelModal: null,       // {operacjaId, stanowisko, aktywne:[]} – drugi scan uruchomionej op
   zmianaMaszynyModal: null,  // {operacjaId, stanowiskoOryginalne, stanowiskoLista:[]}
+
+  // ── Patch 1: autocomplete historii zleceń w wizardzie ───────────────────────
+  nzFromHistory: null,       // {id, numer, nazwa} | null – załadowany szablon z historii
+
+  // ── Patch 3: widok priorytetów dla majstra ───────────────────────────────────
+  majsterPriorytety: (function(){ try{ return JSON.parse(localStorage.getItem('majster_priorytety')||'{}'); }catch(e){return {};} })(),
+  majsterPriorFilter: 'all',      // 'all' | 'opoznione' | 'dzis' | 'bez_op'
+  majsterSesjeAktywne: [],        // cache sesji wszystkich pracowników dla widoku priorytetów
 };
 
 function setState(p, noRender) {

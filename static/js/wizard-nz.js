@@ -13,7 +13,9 @@ function nzOpen() {
     nzTree: null, nzEditNode: null,
     nzEditId: null,   // null = nowe zlecenie
     nzMatSearch: '', nzMatResults: [], nzSaving: false,
+    nzFromHistory: null,   // wyczyść szablon z historii
   });
+  nzLoadHistoria();   // załaduj historię do autocomplete
 }
 
 function nzClose() {
@@ -876,10 +878,16 @@ function renderNzWizard() {
 
   if (step === 1) {
     body = `
+      ${nzRenderFromHistoryBanner()}
       <div class="field"><label>Numer zlecenia *</label>
-        <input id="nz-numer" type="text" placeholder="np. ZL-2024/001"
-               value="${s.nzNumer}"
-               style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
+        <div style="position:relative">
+          <input id="nz-numer" type="text" placeholder="np. ZL-2024/001"
+                 value="${s.nzNumer}"
+                 oninput="clearTimeout(window._nzAcTimer2);window._nzAcTimer2=setTimeout(()=>nzAcSearch(this.value),220)"
+                 onfocus="if(this.value.length>=1)nzAcSearch(this.value)"
+                 onblur="setTimeout(_nzAcHide,200)"
+                 style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
+        </div>
       </div>
       <div class="field"><label>Nazwa zlecenia *</label>
         <input id="nz-nazwa" type="text" placeholder="np. Wał napędowy Ø50"
@@ -923,6 +931,7 @@ function renderNzWizard() {
           Dalej: Struktura G→P →
         </button>
       </div>`;
+    requestAnimationFrame(() => nzInitAutocomplete());
 
   } else {
     // Krok 2 – drzewo

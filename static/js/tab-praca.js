@@ -172,7 +172,8 @@ function renderPracaGlowna() {
         <div class="timer-display" id="timer-${sesja.id}" style="color:${timerColor}">00:00:00</div>
         <div class="timer-op">${sesja.op_nazwa || sesja.uwagi || '—'}</div>
         ${sesja.zl_numer ? `<div class="timer-zl">📋 ${sesja.zl_numer} – ${sesja.zl_nazwa}</div>` : ''}
-        <div style="color:var(--dim);font-size:12px;margin:4px 0 12px">${sesja.stanowisko||''}</div>
+        <div style="color:var(--dim);font-size:12px;margin:4px 0 8px">${sesja.stanowisko||''}</div>
+        ${(!isNieprod && !isZbrojenie) ? renderNormaBar(sesja) : ''}
         <div class="btn-row">
           ${!isNieprod && !isZbrojenie ? `<button class="btn ${paused?'btn-green':'btn-accent'}" onclick="togglePauza(${JSON.stringify(sesja).replace(/"/g,'&quot;')})">
             ${paused ? '▶ Wznów' : '⏸ Pauza'}

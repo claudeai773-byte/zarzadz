@@ -5,7 +5,7 @@ function renderMajster() {
   const stats = state.majsterStats;
   if (!stats) return '<div class="empty">Ładowanie...</div>';
 
-  const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'oblozenie',label:'🏭 Obłożenie'},{id:'podsumowanie',label:'📊 Podsumowanie'},{id:'wydajnosc',label:'🏆 Wydajność'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];
+  const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'priorytety',label:'🎯 Priorytety'},{id:'oblozenie',label:'🏭 Obłożenie'},{id:'podsumowanie',label:'📊 Podsumowanie'},{id:'wydajnosc',label:'🏆 Wydajność'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];
   let html = `
   <div class="tabs" style="flex-wrap:wrap;gap:2px">
     ${subTabs.map(t => `<button class="tab ${state.majsterSubTab===t.id?'active':''}"
@@ -246,6 +246,10 @@ function renderMajster() {
     }
   }
 
+  if (state.majsterSubTab === 'priorytety') {
+    html += renderMajsterPriorytety();
+  }
+
   if (state.majsterSubTab === 'oblozenie') {
     html += renderGantt();
     // Attach gantt events after DOM update
@@ -271,6 +275,9 @@ function switchMajsterTab(tab) {
   }
   if (tab === 'oblozenie') {
     loadOblozenie();
+  }
+  if (tab === 'priorytety') {
+    loadMajsterPriorytety();
   }
   render();
 }

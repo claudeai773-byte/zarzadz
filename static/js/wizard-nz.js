@@ -883,9 +883,6 @@ function renderNzWizard() {
         <div style="position:relative">
           <input id="nz-numer" type="text" placeholder="np. ZL-2024/001"
                  value="${s.nzNumer}"
-                 oninput="clearTimeout(window._nzAcTimer2);window._nzAcTimer2=setTimeout(()=>nzAcSearch(this.value),220)"
-                 onfocus="if(this.value.length>=1)nzAcSearch(this.value)"
-                 onblur="setTimeout(_nzAcHide,200)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
         </div>
       </div>

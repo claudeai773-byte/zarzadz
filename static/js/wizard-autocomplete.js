@@ -18,8 +18,10 @@
 // ── Cache zleceń (odświeżany przy otwarciu wizarda) ───────────────────────────
 let _nzHistoriaCache = [];   // [{id, numer, nazwa, ...}]
 let _nzAcTimer = null;
+let _nzAcInitialized = false;  // flaga zapobiegająca duplikatom listenerów
 
 async function nzLoadHistoria() {
+  _nzAcInitialized = false;  // reset przy każdym otwarciu wizarda – nowy DOM
   try {
     _nzHistoriaCache = await get('/api/zlecenia');
   } catch(e) {
@@ -29,13 +31,18 @@ async function nzLoadHistoria() {
 
 // ── Wywołaj po wyrenderowaniu kroku 1 ─────────────────────────────────────────
 function nzInitAutocomplete() {
-  // Ładuj historię (nieblokująco)
-  nzLoadHistoria();
+  // NIE wywołuj nzLoadHistoria() tutaj – wywoływana raz w nzOpen()
 
   const input = document.getElementById('nz-numer');
   if (!input) return;
 
-  // Stwórz kontener autocomplete jeśli jeszcze nie ma
+  // Zapobiegnij duplikowaniu listenerów po każdym requestAnimationFrame
+  // _nzAcInitialized jest resetowane przez nzLoadHistoria() przy nowym otwarciu wizarda
+  if (_nzAcInitialized) return;
+  _nzAcInitialized = true;
+
+  // Stwórz kontener autocomplete wewnątrz div[position:relative] (wrappera inputu)
+  const wrapper = input.parentElement; // to jest <div style="position:relative">
   if (!document.getElementById('nz-ac-list')) {
     const ul = document.createElement('ul');
     ul.id = 'nz-ac-list';
@@ -47,21 +54,30 @@ function nzInitAutocomplete() {
       'width:100%','box-shadow:0 8px 24px #00000066',
       'display:none',
     ].join(';');
-    // Ustaw wrapper z position:relative
-    const wrapper = input.closest('.field') || input.parentElement;
-    wrapper.style.position = 'relative';
     wrapper.appendChild(ul);
   }
 
+  // Dodaj listenery tylko raz (flaga _nzAcInitialized powyżej gwarantuje brak duplikatów)
   input.addEventListener('input', _nzAcOnInput);
   input.addEventListener('keydown', _nzAcOnKeydown);
-  // Zamknij po kliknięciu poza
-  document.addEventListener('mousedown', _nzAcClickOutside, { once: false });
+  input.addEventListener('focus', _nzAcOnFocus);
+  input.addEventListener('blur',  _nzAcOnBlur);
+  // Zamknij po kliknięciu poza – usuń poprzedni jeśli istniał
+  document.removeEventListener('mousedown', _nzAcClickOutside);
+  document.addEventListener('mousedown', _nzAcClickOutside);
 }
 
 function _nzAcOnInput(e) {
   clearTimeout(_nzAcTimer);
   _nzAcTimer = setTimeout(() => nzAcSearch(e.target.value), 220);
+}
+
+function _nzAcOnFocus(e) {
+  if (e.target.value.length >= 1) nzAcSearch(e.target.value);
+}
+
+function _nzAcOnBlur() {
+  setTimeout(_nzAcHide, 200);
 }
 
 function nzAcSearch(query) {
@@ -305,6 +321,7 @@ async function nzAcSelect(zlecenieId) {
 
     // Odśwież DOM pól formularza (setState wywołuje render(), więc pola zostaną przebudowane)
     // Musimy ponownie podpiąć autocomplete po re-renderze
+    _nzAcInitialized = false;   // reset – nowy DOM po setState
     requestAnimationFrame(() => nzInitAutocomplete());
 
   } catch(e) {

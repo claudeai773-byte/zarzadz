@@ -317,7 +317,7 @@ async function nzAcSelect(zlecenieId) {
     // Odśwież DOM pól formularza (setState wywołuje render(), więc pola zostaną przebudowane)
     // Musimy ponownie podpiąć autocomplete po re-renderze
     _nzAcInitialized = false;   // reset – nowy DOM po setState
-    requestAnimationFrame(() => nzInitAutocomplete());
+    setTimeout(() => nzInitAutocomplete(), 0);
 
   } catch(e) {
     alert('Błąd ładowania historii: ' + e.message);

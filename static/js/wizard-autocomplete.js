@@ -18,10 +18,10 @@
 // ── Cache zleceń (odświeżany przy otwarciu wizarda) ───────────────────────────
 let _nzHistoriaCache = [];   // [{id, numer, nazwa, ...}]
 let _nzAcTimer = null;
-let _nzAcInitialized = false;  // flaga zapobiegająca duplikatom listenerów
+let _nzAcInitialized = false;  // flaga – zapobiega duplikatom listenerów po re-renderze
 
 async function nzLoadHistoria() {
-  _nzAcInitialized = false;  // reset przy każdym otwarciu wizarda – nowy DOM
+  _nzAcInitialized = false;  // reset przy nowym otwarciu wizarda
   try {
     _nzHistoriaCache = await get('/api/zlecenia');
   } catch(e) {
@@ -31,23 +31,20 @@ async function nzLoadHistoria() {
 
 // ── Wywołaj po wyrenderowaniu kroku 1 ─────────────────────────────────────────
 function nzInitAutocomplete() {
-  // NIE wywołuj nzLoadHistoria() tutaj – wywoływana raz w nzOpen()
-
   const input = document.getElementById('nz-numer');
   if (!input) return;
 
   // Zapobiegnij duplikowaniu listenerów po każdym requestAnimationFrame
-  // _nzAcInitialized jest resetowane przez nzLoadHistoria() przy nowym otwarciu wizarda
   if (_nzAcInitialized) return;
   _nzAcInitialized = true;
 
-  // Stwórz kontener autocomplete wewnątrz div[position:relative] (wrappera inputu)
-  const wrapper = input.parentElement; // to jest <div style="position:relative">
+  // Stwórz dropdown wewnątrz div[position:relative] (bezpośredni rodzic inputu)
+  const wrapper = input.parentElement;
   if (!document.getElementById('nz-ac-list')) {
     const ul = document.createElement('ul');
     ul.id = 'nz-ac-list';
     ul.style.cssText = [
-      'position:absolute','z-index:9999',
+      'position:absolute','z-index:9999','top:100%','left:0',
       'background:#0f172a','border:1px solid #334155',
       'border-radius:8px','margin:2px 0 0 0','padding:0',
       'list-style:none','max-height:220px','overflow-y:auto',
@@ -57,12 +54,10 @@ function nzInitAutocomplete() {
     wrapper.appendChild(ul);
   }
 
-  // Dodaj listenery tylko raz (flaga _nzAcInitialized powyżej gwarantuje brak duplikatów)
-  input.addEventListener('input', _nzAcOnInput);
+  input.addEventListener('input',   _nzAcOnInput);
   input.addEventListener('keydown', _nzAcOnKeydown);
-  input.addEventListener('focus', _nzAcOnFocus);
-  input.addEventListener('blur',  _nzAcOnBlur);
-  // Zamknij po kliknięciu poza – usuń poprzedni jeśli istniał
+  input.addEventListener('focus',   _nzAcOnFocus);
+  input.addEventListener('blur',    _nzAcOnBlur);
   document.removeEventListener('mousedown', _nzAcClickOutside);
   document.addEventListener('mousedown', _nzAcClickOutside);
 }
@@ -73,7 +68,7 @@ function _nzAcOnInput(e) {
 }
 
 function _nzAcOnFocus(e) {
-  if (e.target.value.length >= 1) nzAcSearch(e.target.value);
+  if ((e.target.value || '').length >= 1) nzAcSearch(e.target.value);
 }
 
 function _nzAcOnBlur() {

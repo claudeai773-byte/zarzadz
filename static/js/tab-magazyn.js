@@ -55,18 +55,46 @@ function switchMagazynTab(tab) {
 }
 
 // ─── Sub-tab: Transport ───────────────────────────────────────────────────────
+// Ukryte operacje – zachowane w state, resetowane przy odświeżeniu
+function transportDismiss(opId) {
+  const hidden = new Set(state.transportHidden || []);
+  hidden.add(opId);
+  setState({ transportHidden: [...hidden] }, true);
+  render();
+}
+
 function renderMagazynTransport() {
-  let html = `<div class="section-hdr">📦 Operacje zakończone – do transportu (${state.transportOps.length})</div>`;
-  if (!state.transportOps.length) {
+  const hidden = new Set(state.transportHidden || []);
+
+  // Filtruj: wyklucz operacje ukryte przez użytkownika oraz operacje z KJ
+  // (operacja zatwierdzona przez KJ to taka, gdzie ilosc_wykonana === 0
+  //  ale status === 'zakonczona' – oznacza odbiór KJ, nie faktyczną produkcję)
+  const wszystkie = (state.transportOps || []).filter(op => {
+    if (hidden.has(op.id)) return false;
+    // Pomiń jeśli to operacja kontroli jakości (KJ): wykonano 0 szt, a zlecenie wymaga >0
+    const ilocWyk = op.ilosc_wykonana ?? 0;
+    const ilocSzt = op.ilosc_sztuk ?? 1;
+    if (ilocWyk === 0 && ilocSzt > 0) return false;
+    return true;
+  });
+
+  let html = `<div class="section-hdr">📦 Operacje zakończone – do transportu (${wszystkie.length})</div>`;
+
+  if (!wszystkie.length) {
     html += `<div class="card" style="text-align:center;padding:30px">
       <div style="font-size:40px;margin-bottom:10px">✅</div>
       <div style="color:var(--green);font-size:16px;font-weight:600">Brak operacji do transportu</div>
     </div>`;
   } else {
-    state.transportOps.forEach(op => {
+    wszystkie.forEach(op => {
       html += `
-      <div class="card">
-        <div class="card-header">
+      <div class="card" style="position:relative">
+        <button onclick="transportDismiss(${op.id})"
+          title="Usuń z widoku"
+          style="position:absolute;top:8px;right:8px;background:rgba(248,113,113,0.12);border:1px solid rgba(248,113,113,0.3);
+                 color:#f87171;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:13px;font-weight:700;
+                 z-index:1;line-height:1.4">✕</button>
+        <div class="card-header" style="padding-right:40px">
           <div>
             <div class="card-title">${op.kolejnosc}. ${op.nazwa}</div>
             <div class="card-sub">📋 ${op.zl_numer} – ${op.zl_nazwa}</div>
@@ -80,7 +108,8 @@ function renderMagazynTransport() {
       </div>`;
     });
   }
-  html += `<button class="btn-outline" style="margin-top:8px" onclick="loadMagazynier()">🔄 Odśwież</button>`;
+
+  html += `<button class="btn-outline" style="margin-top:8px" onclick="setState({transportHidden:[]},true);loadMagazynier()">🔄 Odśwież</button>`;
   return html;
 }
 

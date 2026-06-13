@@ -3,6 +3,20 @@
 function renderMajster() {
   if (state.loading) return '<div class="spinner">⏳</div>';
   const stats = state.majsterStats;
+
+  // Zakładka Priorytety nie wymaga majsterStats – renderuj niezależnie
+  if (state.majsterSubTab === 'priorytety') {
+    const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'priorytety',label:'🎯 Priorytety'},{id:'oblozenie',label:'🏭 Obłożenie'},{id:'podsumowanie',label:'📊 Podsumowanie'},{id:'wydajnosc',label:'🏆 Wydajność'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];
+    let html = `
+    <div class="tabs" style="flex-wrap:wrap;gap:2px">
+      ${subTabs.map(t => `<button class="tab ${state.majsterSubTab===t.id?'active':''}"
+        onclick="switchMajsterTab('${t.id}')">${t.label}</button>`).join('')}
+    </div>`;
+    html += renderMajsterPriorytety();
+    html += `<button class="btn-outline no-print" style="margin-top:8px" onclick="loadMajster()">🔄 Odśwież</button>`;
+    return html;
+  }
+
   if (!stats) return '<div class="empty">Ładowanie...</div>';
 
   const subTabs = [{id:'live',label:'📡 Live'},{id:'zlecenia',label:'📋 Zlecenia'},{id:'priorytety',label:'🎯 Priorytety'},{id:'oblozenie',label:'🏭 Obłożenie'},{id:'podsumowanie',label:'📊 Podsumowanie'},{id:'wydajnosc',label:'🏆 Wydajność'},{id:'koszty',label:'💰 Koszty'},{id:'alerty',label:'⚠ Alerty'}];

@@ -20,6 +20,7 @@ let state = {
 
   // Magazynier
   transportOps: [],
+  transportHidden: [],    // ID operacji ukrytych przez użytkownika (przycisk X)
 
   // Zlecenia
   zlecenia: [],

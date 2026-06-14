@@ -137,6 +137,19 @@ def get_db():
     finally:
         conn.close()
 
+def db_log(user_id, username, typ, akcja, szczegoly="", ip=""):
+    """Zapisuje akcję do tabeli action_log."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.execute(
+            "INSERT INTO action_log (user_id, username, typ, akcja, szczegoly, ip) VALUES (?,?,?,?,?,?)",
+            (user_id, username, typ, akcja, szczegoly, ip)
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # Logi nie mogą blokować głównej logiki
+
 # _hash zastąpione przez hash_password/verify_password z security.py
 
 # ── Helpers: stawki per zlecenie ─────────────────────────────────────────────
@@ -243,6 +256,7 @@ def login(req: LoginRequest, request: Request):
             rate_limit_login.record_failure(ip)
             rate_limit_login.record_failure(req.username)
             log_login(req.username, False, ip, "wrong credentials")
+            db_log(None, req.username, "LOGIN_FAIL", "Nieudana próba logowania", "wrong credentials", ip)
             raise HTTPException(401, "Nieprawidłowy login lub hasło")
 
         # Sukces – czyść liczniki
@@ -259,6 +273,7 @@ def login(req: LoginRequest, request: Request):
         # Utwórz sesję serwerową
         token = create_session(row["id"], row["username"], row["role"], ip)
         log_login(row["username"], True, ip)
+        db_log(row["id"], row["username"], "LOGIN_OK", "Zalogowanie do systemu", "", ip)
 
         return {
             "token": token,
@@ -1412,6 +1427,12 @@ def start_sesja(req: StartSesjaRequest):
                 (req.operacja_id,)
             )
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        # Loguj start sesji
+        user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (req.user_id,)).fetchone()
+        u_name = user_row["username"] if user_row else str(req.user_id)
+        op_row = conn.execute("SELECT o.nazwa, z.numer FROM operacje o LEFT JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?", (req.operacja_id,)).fetchone() if req.operacja_id else None
+        szczeg = f"op={op_row['nazwa'] if op_row else '-'}, zlecenie={op_row['numer'] if op_row else '-'}, typ={req.typ}" if op_row else f"typ={req.typ}"
+        db_log(req.user_id, u_name, "SESJA_START", "Start sesji pracy", szczeg)
         return {"sesja_id": sesja_id, "start_time": now}
 
 @app.post("/api/sesje/pauza/start", dependencies=[Depends(verify_key)])
@@ -1485,6 +1506,10 @@ def stop_sesja(req: StopSesjaRequest):
                     )
 
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        # Loguj stop sesji
+        user_row = conn.execute("SELECT username FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
+        u_name = user_row["username"] if user_row else str(sesja["user_id"])
+        db_log(sesja["user_id"], u_name, "SESJA_STOP", "Zatrzymanie sesji pracy", f"sztuk={req.ilosc_sztuk}, uwagi={req.uwagi or '-'}")
         return {"status": "ok", "end_time": now}
 
 class EditSesjaTimeRequest(BaseModel):
@@ -1778,6 +1803,7 @@ def create_user(req: NewUserRequest):
                 (req.username, hash_password(req.password), req.full_name, req.role, req.is_kj or 0)
             )
             log_admin("system", "create_user", req.username)
+            db_log(cur.lastrowid, req.username, "ADMIN", "Utworzenie użytkownika", f"rola={req.role}")
             return {"id": cur.lastrowid}
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Użytkownik już istnieje")
@@ -1806,6 +1832,7 @@ def update_user(uid: int, req: EditUserRequest):
                 (req.full_name, req.role, req.is_kj or 0, uid)
             )
         log_admin("system", "update_user", str(uid))
+        db_log(uid, req.full_name, "ADMIN", "Aktualizacja danych użytkownika", f"rola={req.role}")
         return {"ok": True}
 
 @app.post("/api/users/{uid}/change-password", dependencies=[Depends(verify_key)])
@@ -1836,6 +1863,7 @@ def reset_password(uid: int):
         conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(new_pass), uid))
         revoke_all_user_sessions(uid)
         log_admin("system", "reset_password", str(uid))
+        db_log(uid, user["full_name"], "ADMIN", "Reset hasła użytkownika", f"uid={uid}")
         return {"ok": True, "new_password": new_pass, "full_name": user["full_name"]}
 
 @app.delete("/api/users/{uid}", dependencies=[Depends(verify_admin)])
@@ -1847,6 +1875,7 @@ def delete_user(uid: int):
         conn.execute("DELETE FROM users WHERE id=?", (uid,))
         revoke_all_user_sessions(uid)
         log_admin("system", "delete_user", str(uid))
+        db_log(uid, str(uid), "ADMIN", "Usunięcie użytkownika", f"uid={uid}")
         return {"ok": True}
 
 # ─── Uprawnienia użytkowników ────────────────────────────────────────────────
@@ -3737,7 +3766,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
                        s.uwagi, s.sesja_glowna,
                        o.nazwa as op_nazwa, o.czas_norma, o.stanowisko, o.zlecenie_id,
-                       z.numer as zl_numer,
+                       z.numer as zl_numer, z.cena_brutto_szt, z.ilosc_sztuk as zl_ilosc,
                        zi.numer as zl_inne_numer,
                        COALESCE(st_zl_rz.stawka_godz, st_rz.stawka_godz, st_zl.stawka_godz, st.stawka_godz, 0) as stawka_godz,
                        COALESCE(st_zl_rz.zbrojenie_stawka_godz, st_rz.zbrojenie_stawka_godz, st_zl.zbrojenie_stawka_godz, st.zbrojenie_stawka_godz, 0) as zbrojenie_stawka_godz,
@@ -3810,6 +3839,9 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     "op_nazwa": display_op,
                     "stanowisko": s["stanowisko"] or "—",
                     "zl_numer": display_zl,
+                    "zlecenie_id": s["zlecenie_id"],
+                    "cena_brutto_szt": float(s["cena_brutto_szt"] or 0),
+                    "zl_ilosc": int(s["zl_ilosc"] or 0),
                     "koszt": round(koszt_sesji, 2),
                     "ilosc_sztuk": s["ilosc_sztuk"],
                     "czas_min": round(elapsed, 1),
@@ -4161,6 +4193,16 @@ def init_db_on_start():
         wiadomosc TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL)""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS action_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        czas TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        user_id INTEGER,
+        username TEXT,
+        typ TEXT NOT NULL,
+        akcja TEXT DEFAULT '',
+        szczegoly TEXT DEFAULT '',
+        ip TEXT DEFAULT '')""")
 
     # ─── Fakturowanie ────────────────────────────────────────────────────────
     c.execute("""CREATE TABLE IF NOT EXISTS kontrahenci (
@@ -5943,6 +5985,17 @@ def export_all_faktury():
 def admin_get_sessions():
     """Lista aktywnych sesji użytkowników (tylko admin)."""
     return {"sessions": get_active_sessions()}
+
+@app.get("/api/admin/logi", dependencies=[Depends(verify_admin)])
+def admin_get_logi(limit: int = 500):
+    """Zwraca ostatnie wpisy z dziennika akcji (tylko admin)."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, czas, user_id, username, typ, akcja, szczegoly, ip
+               FROM action_log ORDER BY id DESC LIMIT ?""",
+            (min(limit, 2000),)
+        ).fetchall()
+        return {"logi": [dict(r) for r in rows]}
 
 # ─── WebSocket endpoint ────────────────────────────────────────────────────────
 @app.websocket("/ws/powiadomienia")

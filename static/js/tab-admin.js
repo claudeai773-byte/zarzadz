@@ -2,11 +2,11 @@
 // ══════════════════════════════════════════════════════════════
 function renderAdmin() {
   if (state.loading) return '<div class="spinner">⏳</div>';
-  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'uprawnienia',label:'🔐 Uprawnienia'},{id:'import_pdf',label:'📄 Import PDF'},{id:'katalog',label:'📦 Katalog'},{id:'materialy',label:'🏗 Materiały'},{id:'oceny',label:'⭐ Oceny'}];
+  const subTabs = [{id:'uzytkownicy',label:'👤 Użytkownicy'},{id:'uprawnienia',label:'🔐 Uprawnienia'},{id:'import_pdf',label:'📄 Import PDF'},{id:'oceny',label:'⭐ Oceny'},{id:'logi',label:'📋 Logi'}];
   let html = `
   <div class="tabs">
     ${subTabs.map(t => `<button class="tab ${state.adminTab===t.id?'active':''}"
-      onclick="setState({adminTab:'${t.id}'})${t.id==='oceny'?';loadAdminFeedbacks()':t.id==='materialy'?';loadMaterialyCount()':''}">${t.label}</button>`).join('')}
+      onclick="setState({adminTab:'${t.id}'})${t.id==='oceny'?';loadAdminFeedbacks()':t.id==='logi'?';loadAdminLogi()':''}">${t.label}</button>`).join('')}
   </div>`;
 
   if (state.adminTab === 'uzytkownicy') {
@@ -244,74 +244,6 @@ function renderAdmin() {
     }
   }
 
-  if (state.adminTab === 'katalog') {
-    html += `<button class="btn btn-accent" style="margin-bottom:12px" onclick="setState({produktModal:{}})">+ Nowy produkt</button>`;
-    (state.katalog||[]).forEach(p => {
-      html += `
-      <div class="card">
-        <div class="card-header">
-          <div>
-            <div class="card-title">${p.nazwa}</div>
-            <div class="card-sub">${p.opis||'—'} | ${fmtPLN(p.cena_szt)}/szt | domyślnie: ${p.ilosc_domyslna} szt.</div>
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="btn-sm btn-blue" onclick="setState({produktModal:${JSON.stringify(p).replace(/"/g,'&quot;')}})">✏</button>
-            <button class="btn-sm btn-red" onclick="deleteProdukt(${p.id})">🗑</button>
-          </div>
-        </div>
-      </div>`;
-    });
-    if (state.produktModal !== null) {
-      const p = state.produktModal;
-      html += `
-      <div class="modal-overlay">
-        <div class="modal">
-          <button class="modal-close" onclick="setState({produktModal:null})">×</button>
-          <h3>${p.id?'✏ Edytuj produkt':'+ Nowy produkt'}</h3>
-          <div class="field"><label>Nazwa</label><input id="pr-nazwa" type="text" value="${p.nazwa||''}"></div>
-          <div class="field"><label>Opis</label><textarea id="pr-opis">${p.opis||''}</textarea></div>
-          <div class="field"><label>Ilość domyślna</label><input id="pr-ilosc" type="number" value="${p.ilosc_domyslna||1}" min="1"></div>
-          <div class="field"><label>Cena (zł/szt)</label><input id="pr-cena" type="number" step="0.01" value="${p.cena_szt||0}"></div>
-          <button class="btn btn-accent" onclick="saveProduktForm(${p.id||0})">💾 Zapisz</button>
-        </div>
-      </div>`;
-    }
-  }
-
-  if (state.adminTab === 'materialy') {
-    const cnt = state.materialyCount;
-    html += `
-    <div class="card" style="margin-bottom:14px">
-      <div style="font-size:13px;font-weight:700;margin-bottom:12px">📂 Import bazy materiałów (plik .xlsx)</div>
-      <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.5">
-        Wczytaj plik Excel z bazą materiałów. Wymagane kolumny: <b>Indeks</b>, <b>Opis artykułu</b>.<br>
-        Opcjonalne: Kod, Jm, Do dyspozycji, Stan rzeczywisty, Rezerwacja, Kod paskowy.<br>
-        Import nadpisuje istniejące rekordy po kolumnie <b>Indeks</b>.
-      </div>
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <input type="file" id="mat-xlsx-file" accept=".xlsx,.xls"
-          style="font-size:12px;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px">
-        <button class="btn btn-accent" onclick="importMaterialyXlsx()">📥 Importuj</button>
-      </div>
-      <div id="mat-import-status" style="font-size:12px;margin-top:8px;color:var(--dim)"></div>
-    </div>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div style="font-size:13px;font-weight:700">🔍 Podgląd bazy materiałów</div>
-        <span style="font-size:12px;color:var(--dim)">${cnt !== null ? cnt + ' pozycji w bazie' : '...'}</span>
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:10px">
-        <input id="mat-preview-q" type="text" placeholder="Szukaj materiału..."
-          style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px"
-          onkeyup="if(event.key==='Enter')loadMaterialyPreview()">
-        <button class="btn-outline" onclick="loadMaterialyPreview()">🔍</button>
-      </div>
-      <div id="mat-preview-results" style="font-size:12px;color:var(--dim)">
-        ${cnt === null ? 'Kliknij zakładkę aby załadować.' : cnt === 0 ? 'Brak materiałów – zaimportuj plik xlsx.' : 'Wpisz frazę i naciśnij Enter aby wyszukać.'}
-      </div>
-    </div>`;
-  }
-
   if (state.adminTab === 'oceny') {
     const feedbacks = state.adminFeedbacks;
     if (!feedbacks) {
@@ -362,6 +294,62 @@ function renderAdmin() {
       });
     }
     html += `<button class="btn-outline" style="margin-top:4px" onclick="loadAdminFeedbacks()">🔄 Odśwież</button>`;
+  }
+
+  if (state.adminTab === 'logi') {
+    const logi = state.adminLogi;
+    const logiFiltr = state.adminLogiFiltr || '';
+    html += `
+    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+      <input id="logi-filtr" type="text" placeholder="Szukaj w logach (użytkownik, akcja...)"
+        value="${logiFiltr}"
+        style="flex:1;min-width:180px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px"
+        onkeyup="setState({adminLogiFiltr:this.value})">
+      <button class="btn btn-accent" style="padding:7px 14px" onclick="loadAdminLogi()">🔄 Odśwież</button>
+    </div>`;
+    if (!logi) {
+      html += `<div class="empty">⏳ Ładowanie logów...</div>`;
+    } else if (!logi.length) {
+      html += `<div class="empty">Brak wpisów w logach.</div>`;
+    } else {
+      const filtr = (state.adminLogiFiltr||'').toLowerCase();
+      const filtered = filtr ? logi.filter(l =>
+        (l.username||'').toLowerCase().includes(filtr) ||
+        (l.akcja||'').toLowerCase().includes(filtr) ||
+        (l.szczegoly||'').toLowerCase().includes(filtr)
+      ) : logi;
+      const ikonaTypu = (typ) => {
+        if (typ==='LOGIN_OK') return '🟢';
+        if (typ==='LOGIN_FAIL') return '🔴';
+        if (typ==='LOGOUT') return '⚪';
+        if (typ==='ADMIN') return '🔐';
+        if (typ==='SESJA_START') return '▶️';
+        if (typ==='SESJA_STOP') return '⏹️';
+        if (typ==='PAUZA') return '⏸️';
+        return '📌';
+      };
+      const kolorTypu = (typ) => {
+        if (typ==='LOGIN_OK'||typ==='SESJA_START') return 'var(--green)';
+        if (typ==='LOGIN_FAIL') return 'var(--red)';
+        if (typ==='ADMIN') return '#8e44ad';
+        return 'var(--dim)';
+      };
+      html += `<div style="font-size:11px;color:var(--dim);margin-bottom:8px">Pokazano ${filtered.length} z ${logi.length} wpisów</div>`;
+      filtered.forEach(l => {
+        const dt = l.czas ? new Date(l.czas.replace('Z','+00:00')).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+        html += `
+        <div class="card" style="padding:8px 12px;margin-bottom:6px;border-left:3px solid ${kolorTypu(l.typ)}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;font-weight:700">${ikonaTypu(l.typ)} <span style="color:${kolorTypu(l.typ)}">${l.typ}</span> &nbsp;<span style="color:var(--text)">👤 ${l.username||'—'}</span></div>
+              <div style="font-size:12px;color:var(--text);margin-top:3px">${l.akcja||''}</div>
+              ${l.szczegoly ? `<div style="font-size:11px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.szczegoly}</div>` : ''}
+            </div>
+            <div style="font-size:10px;color:var(--dim);white-space:nowrap;margin-top:2px">${dt}</div>
+          </div>
+        </div>`;
+      });
+    }
   }
 
   return html;
@@ -678,3 +666,16 @@ function saveProduktForm(id) {
 }
 
 // ══════════════════════════════════════════════════════════════
+
+async function loadAdminLogi() {
+  setState({adminLogi: null});
+  render();
+  try {
+    const data = await get('/api/admin/logi');
+    setState({adminLogi: data.logi || []});
+  } catch(e) {
+    setState({adminLogi: []});
+    console.error('Błąd ładowania logów:', e);
+  }
+  render();
+}

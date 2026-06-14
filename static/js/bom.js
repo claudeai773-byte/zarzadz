@@ -574,36 +574,70 @@ function printRaportWydajnosc(data, od, doDt, typ) {
       });
       tabelaHtml += `</tbody></table>`;
     } else if (typ === 'zarobki') {
-      // ZAROBKI – dzienna tabela zarobków pracowników
-      tabelaHtml += `
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="background:#3d4a63;color:#fff">
-          <th style="padding:7px 10px;text-align:left">Pracownik</th>
-          <th style="padding:7px 10px;text-align:center">Roboczy (min)</th>
-          <th style="padding:7px 10px;text-align:center">Zarobek za pracę</th>
-          <th style="padding:7px 10px;text-align:center">Zbrojenie (min)</th>
-          <th style="padding:7px 10px;text-align:center">Zarobek za zbrojenie</th>
-          <th style="padding:7px 10px;text-align:center">Razem zarobek</th>
-        </tr></thead><tbody>`;
-      let dzienSumaZarobek = 0;
-      dzienPracownicy.forEach((p, i) => {
+      // ZAROBKI – zestawienie per zlecenie: przychód - koszty = marża
+      // Zbierz sesje tego dnia ze wszystkich pracowników
+      const zlecMap = {}; // zlecenie_id -> {numer, cena_szt, ilosc, koszt_pracy, koszt_zbrojenia}
+      dzienPracownicy.forEach(p => {
         const ds = dayStats[date][p.user_id];
-        const razemZarobek = (ds.koszt_pracy||0) + (ds.koszt_zbrojenia||0);
-        dzienSumaZarobek += razemZarobek;
-        tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8">${Math.round(ds.min_roboczy)}</td>
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c;font-weight:600">${fmtPLNr(ds.koszt_pracy)}</td>
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${Math.round(ds.min_zbrojenie)}</td>
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c;font-weight:600">${fmtPLNr(ds.koszt_zbrojenia)}</td>
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:#1e8a4c">${fmtPLNr(razemZarobek)}</td>
-        </tr>`;
+        if (!ds) return;
+        ds.sesje.forEach(s => {
+          if (!s.zlecenie_id || !s.zl_numer || s.zl_numer === '—') return;
+          if (s.typ === 'nieprodukcyjna') return;
+          const zid = s.zlecenie_id;
+          if (!zlecMap[zid]) {
+            zlecMap[zid] = {
+              numer: s.zl_numer,
+              cena_szt: s.cena_brutto_szt || 0,
+              ilosc: s.zl_ilosc || 0,
+              koszt_pracy: 0,
+              koszt_zbrojenia: 0,
+            };
+          }
+          if (s.typ === 'zbrojenie') zlecMap[zid].koszt_zbrojenia += (parseFloat(s.koszt)||0);
+          else zlecMap[zid].koszt_pracy += (parseFloat(s.koszt)||0);
+        });
       });
-      tabelaHtml += `<tr style="background:#eef3ff;font-weight:700">
-          <td style="padding:6px 10px;border:1px solid #e0e0e0" colspan="5">Razem za dzień</td>
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c">${fmtPLNr(dzienSumaZarobek)}</td>
+      const zlecList = Object.values(zlecMap).sort((a,b) => a.numer.localeCompare(b.numer));
+      if (!zlecList.length) {
+        tabelaHtml += `<div style="color:#888;font-size:12px;padding:12px">Brak danych o zleceniach w tym dniu.</div>`;
+      } else {
+        tabelaHtml += `
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:#3d4a63;color:#fff">
+            <th style="padding:7px 10px;text-align:left">Zlecenie</th>
+            <th style="padding:7px 10px;text-align:center">Cena/szt</th>
+            <th style="padding:7px 10px;text-align:center">Ilość</th>
+            <th style="padding:7px 10px;text-align:center">Przychód</th>
+            <th style="padding:7px 10px;text-align:center">Koszt pracy</th>
+            <th style="padding:7px 10px;text-align:center">Koszt zbrojenia</th>
+            <th style="padding:7px 10px;text-align:center;background:#1e3a1e">Marża</th>
+          </tr></thead><tbody>`;
+        let dzienPrzychod = 0, dzienKoszt = 0, dzienMarza = 0;
+        zlecList.forEach((z, i) => {
+          const przychod = z.cena_szt * z.ilosc;
+          const koszt = z.koszt_pracy + z.koszt_zbrojenia;
+          const marza = przychod - koszt;
+          const marzaKolor = marza >= 0 ? '#1e8a4c' : '#c0392b';
+          dzienPrzychod += przychod; dzienKoszt += koszt; dzienMarza += marza;
+          tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${z.numer}</td>
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(z.cena_szt)}</td>
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${z.ilosc}</td>
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8;font-weight:600">${fmtPLNr(przychod)}</td>
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(z.koszt_pracy)}</td>
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(z.koszt_zbrojenia)}</td>
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${marzaKolor}">${fmtPLNr(marza)}</td>
+          </tr>`;
+        });
+        const dzienMarzaKol = dzienMarza >= 0 ? '#1e8a4c' : '#c0392b';
+        tabelaHtml += `<tr style="background:#eef3ff;font-weight:700">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0" colspan="3">Razem za dzień</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8">${fmtPLNr(dzienPrzychod)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00" colspan="2">${fmtPLNr(dzienKoszt)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${dzienMarzaKol}">${fmtPLNr(dzienMarza)}</td>
         </tr>`;
-      tabelaHtml += `</tbody></table>`;
+        tabelaHtml += `</tbody></table>`;
+      }
     } else {
       // PEŁNY – każdy pracownik z rozpiską sesji dla tego dnia
       dzienPracownicy.forEach(p => {
@@ -662,57 +696,76 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   // ────── Tabelka podsumowania: pracownicy × dni ──────────────────────────────
   if (sortedDates.length > 0 && pr.length > 0) {
     const tytulPodsum = typ === 'zarobki'
-      ? `💰 Podsumowanie zarobków — ${od} – ${doDt}`
+      ? `💰 Podsumowanie marży — ${od} – ${doDt}`
       : `📊 Podsumowanie wydajności — ${od} – ${doDt}`;
     tabelaHtml += `
     <div style="margin-top:30px;page-break-before:auto">
       <div style="background:#1a2233;color:#fff;padding:9px 14px;border-radius:6px 6px 0 0;font-size:14px;font-weight:700">
         ${tytulPodsum}
-      </div>
+      </div>`;
+
+    if (typ === 'zarobki') {
+      // Podsumowanie: per zlecenie przez cały okres
+      const zlecTotals = {}; // zlecenie_id -> {numer, cena_szt, ilosc, koszt_pracy, koszt_zbrojenia}
+      pr.forEach(p => {
+        (p.sesje||[]).forEach(s => {
+          if (!s.zlecenie_id || !s.zl_numer || s.zl_numer === '—') return;
+          if (s.typ === 'nieprodukcyjna') return;
+          const zid = s.zlecenie_id;
+          if (!zlecTotals[zid]) {
+            zlecTotals[zid] = {numer:s.zl_numer, cena_szt:s.cena_brutto_szt||0, ilosc:s.zl_ilosc||0, koszt_pracy:0, koszt_zbrojenia:0};
+          }
+          if (s.typ === 'zbrojenie') zlecTotals[zid].koszt_zbrojenia += (parseFloat(s.koszt)||0);
+          else zlecTotals[zid].koszt_pracy += (parseFloat(s.koszt)||0);
+        });
+      });
+      const zlecArr = Object.values(zlecTotals).sort((a,b) => a.numer.localeCompare(b.numer));
+      let gPrzychod=0, gKoszt=0, gMarza=0;
+      tabelaHtml += `
       <table style="width:100%;border-collapse:collapse;font-size:11px">
-        <thead>
-          <tr style="background:#2e3548;color:#fff">
-            <th style="padding:7px 10px;text-align:left;border:1px solid #3d4a63;min-width:120px">Pracownik</th>`;
+        <thead><tr style="background:#2e3548;color:#fff">
+          <th style="padding:7px 10px;text-align:left;border:1px solid #3d4a63">Zlecenie</th>
+          <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Cena/szt</th>
+          <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Ilość</th>
+          <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Przychód</th>
+          <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Koszty pracy</th>
+          <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63;background:#1e3a1e">Marża</th>
+        </tr></thead><tbody>`;
+      zlecArr.forEach((z, i) => {
+        const przychod = z.cena_szt * z.ilosc;
+        const koszt = z.koszt_pracy + z.koszt_zbrojenia;
+        const marza = przychod - koszt;
+        const marzaKol = marza >= 0 ? '#1e8a4c' : '#c0392b';
+        gPrzychod += przychod; gKoszt += koszt; gMarza += marza;
+        tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${z.numer}</td>
+          <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(z.cena_szt)}</td>
+          <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center">${z.ilosc}</td>
+          <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8;font-weight:600">${fmtPLNr(przychod)}</td>
+          <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(koszt)}</td>
+          <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${marzaKol}">${fmtPLNr(marza)}</td>
+        </tr>`;
+      });
+      const gMarzaKol = gMarza >= 0 ? '#1e8a4c' : '#c0392b';
+      tabelaHtml += `<tr style="background:#1a2233;color:#fff;font-weight:700">
+        <td style="padding:7px 10px;border:1px solid #3d4a63" colspan="3">RAZEM</td>
+        <td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center">${fmtPLNr(gPrzychod)}</td>
+        <td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center">${fmtPLNr(gKoszt)}</td>
+        <td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center;color:${gMarzaKol}">${fmtPLNr(gMarza)}</td>
+      </tr>`;
+      tabelaHtml += `</tbody></table>`;
+    } else {
+    // Tabela wydajności: pracownicy × dni
+    tabelaHtml += `
+    <table style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr style="background:#2e3548;color:#fff">
+        <th style="padding:7px 10px;text-align:left;border:1px solid #3d4a63;min-width:120px">Pracownik</th>`;
     sortedDates.forEach(d => {
       const [y,m,dd] = d.split('-');
       tabelaHtml += `<th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63;min-width:68px">${parseInt(dd,10)}.${parseInt(m,10)}</th>`;
     });
     tabelaHtml += `<th style="padding:7px 10px;text-align:center;border:1px solid #3d4a63">Łącznie</th>
-          </tr>
-        </thead><tbody>`;
-
-    if (typ === 'zarobki') {
-      const dayTotals = {};
-      sortedDates.forEach(d => dayTotals[d] = 0);
-      let grandTotal = 0;
-
-      pr.forEach((p, pi) => {
-        let totalZarobek = 0;
-        tabelaHtml += `<tr style="background:${pi%2?'#fff':'#f9fafb'}">
-          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>`;
-        sortedDates.forEach(d => {
-          const ds = dayStats[d][p.user_id];
-          if (!ds) {
-            tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#bbb">—</td>`;
-          } else {
-            const zarobek = (ds.koszt_pracy||0) + (ds.koszt_zbrojenia||0);
-            totalZarobek += zarobek;
-            dayTotals[d] += zarobek;
-            grandTotal += zarobek;
-            tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c;font-weight:600">${fmtPLNr(zarobek)}</td>`;
-          }
-        });
-        tabelaHtml += `<td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;background:#f0f4ff;color:#1e8a4c">${fmtPLNr(totalZarobek)}</td></tr>`;
-      });
-
-      // Wiersz sumy dla wszystkich pracowników
-      tabelaHtml += `<tr style="background:#1a2233;color:#fff;font-weight:700">
-        <td style="padding:7px 10px;border:1px solid #3d4a63">RAZEM</td>`;
-      sortedDates.forEach(d => {
-        tabelaHtml += `<td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center">${fmtPLNr(dayTotals[d])}</td>`;
-      });
-      tabelaHtml += `<td style="padding:7px 10px;border:1px solid #3d4a63;text-align:center;background:#0f1726">${fmtPLNr(grandTotal)}</td></tr>`;
-    } else {
+      </tr></thead><tbody>`;
     pr.forEach((p, pi) => {
       let totalMin = 0;
       tabelaHtml += `<tr style="background:${pi%2?'#fff':'#f9fafb'}">
@@ -741,9 +794,10 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         <div style="font-size:10px;color:#666">${totalZmiany} zmian</div>
       </td></tr>`;
     });
+    tabelaHtml += `</tbody></table>`;
     }
 
-    tabelaHtml += `</tbody></table></div>`;
+    tabelaHtml += `</div>`;
   }
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -756,7 +810,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:18px">
     <div>
       <div style="font-size:22px;font-weight:700">Raport wydajności pracowników</div>
-      <div style="font-size:13px;color:#555">${typ==='skrocony'?'Raport skrócony':typ==='zarobki'?'Raport zarobków':'Raport pełny'} | Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
+      <div style="font-size:13px;color:#555">${typ==='skrocony'?'Raport skrócony':typ==='zarobki'?'Raport marży (przychód – koszty pracy)':'Raport pełny'} | Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
     </div>
     <div style="text-align:right;font-size:13px">Pracowników: <b>${pr.length}</b> | Zmiana = <b>${ZMIANA_MIN} min</b></div>
   </div>

@@ -126,11 +126,10 @@ async function loadMagazynMaterialyCount() {
 }
 
 async function loadMagazynMaterialySearch() {
-  const q = document.getElementById('mag-mat-search')?.value?.trim() || state.magazynMatSearch;
-  if (!q) return;
+  const q = document.getElementById('mag-mat-search')?.value?.trim() ?? state.magazynMatSearch ?? '';
   setState({magazynMatSearching: true, magazynMatSearch: q});
   try {
-    const res = await get(`/api/materialy?q=${encodeURIComponent(q)}&limit=30`);
+    const res = await get(`/api/materialy?q=${encodeURIComponent(q)}&limit=100`);
     setState({magazynMatResults: res, magazynMatSearching: false});
   } catch(e) { setState({magazynMatSearching: false}); }
 }

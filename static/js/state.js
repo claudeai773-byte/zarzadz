@@ -86,6 +86,8 @@ let state = {
   feedbackModal: false,
   feedbackMsg: '',
   adminFeedbacks: null,
+  adminLogi: null,
+  adminLogiFiltr: '',
 
   // ─── Wizard: Nowe zlecenie z drzewem G→P ────────────────────────────────────
   nzModal: false,       // czy wizard otwarty

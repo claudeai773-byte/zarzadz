@@ -46,6 +46,7 @@ function renderMagazyn() {
 function switchMagazynTab(tab) {
   setState({magazynSubTab: tab}, true);
   if (tab === 'materialy' && state.magazynMatCount === null) loadMagazynMaterialyCount();
+  if (tab === 'materialy') loadMagazynMaterialySearch();
   if (tab === 'rezerwacje') { loadRezerwacjeZSerwera(); }
   if (tab === 'zapotrzebowanie' && !state.magazynZapotrzebowanie && !state.magazynZapotrzebowanieLoading) {
     loadMagazynZapotrzebowanie();
@@ -238,10 +239,10 @@ function renderMagazynMaterialy() {
       </div>`;
     }
     html += `</div>`;
-  } else if (state.magazynMatSearch) {
-    html += `<div style="color:var(--dim);font-size:12px;text-align:center;padding:14px">Brak wyników</div>`;
-  } else {
-    html += `<div style="color:var(--dim);font-size:12px;text-align:center;padding:14px">${cnt===0?'Baza pusta – zaimportuj plik xlsx.':'Wpisz frazę i naciśnij Enter'}</div>`;
+  } else if (state.magazynMatSearch && !state.magazynMatResults.length) {
+    html += `<div style="color:var(--dim);font-size:12px;text-align:center;padding:14px">Brak wyników dla frazy „${state.magazynMatSearch}"</div>`;
+  } else if (!state.magazynMatResults.length) {
+    html += `<div style="color:var(--dim);font-size:12px;text-align:center;padding:14px">${cnt===0?'Baza pusta – zaimportuj plik xlsx.':'⏳ Ładowanie listy...'}</div>`;
   }
   html += `</div>`;
   return html;

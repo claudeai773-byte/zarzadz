@@ -6,11 +6,25 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
 import sqlite3, os, json, hashlib, time, io, datetime as _dt, traceback, urllib.request, urllib.error
 import openpyxl as _openpyxl
 from contextlib import contextmanager
+from security import (
+    hash_password, verify_password, needs_rehash,
+    create_session, verify_session, revoke_session, revoke_all_user_sessions,
+    get_active_sessions,
+    verify_key, get_session_user, require_role, verify_admin,
+    rate_limit_login,
+    SECURITY_HEADERS, get_allowed_origins,
+    log_login, log_admin,
+    sanitize_sql_readonly,
+    validate_password_strength,
+    get_client_ip,
+    SecurityHeadersMiddleware,
+)
 
 # ─── WebSocket – Menedżer połączeń (powiadomienia real-time) ──────────────────
 class _WSManager:
@@ -87,25 +101,25 @@ if not os.path.exists(os.path.dirname(DB_PATH)):
 app = FastAPI(title="Produkcja API", version="4.1")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=get_allowed_origins(),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "x-api-key", "x-session-token"],
 )
+app.add_middleware(BaseHTTPMiddleware, dispatch=SecurityHeadersMiddleware())
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
     print(f"[500] {request.method} {request.url.path}\n{tb}", flush=True)
+    # NIE ujawniamy szczegółów wyjątku klientowi (information disclosure)
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Błąd serwera [{type(exc).__name__}]: {str(exc)}"}
+        content={"detail": "Błąd wewnętrzny serwera."}
     )
 
-# ─── Auth ──────────────────────────────────────────────────────────────────────
-def verify_key(x_api_key: str = Header(..., alias="x-api-key")):
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Nieprawidłowy klucz API")
-    return True
+# ─── Auth – zaimportowane z security.py ───────────────────────────────────────
+# verify_key, verify_admin, get_session_user, require_role – z security.py
 
 # ─── Database helpers ──────────────────────────────────────────────────────────
 @contextmanager
@@ -123,7 +137,7 @@ def get_db():
     finally:
         conn.close()
 
-def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
+# _hash zastąpione przez hash_password/verify_password z security.py
 
 # ── Helpers: stawki per zlecenie ─────────────────────────────────────────────
 def _init_stawki_zlecenia(conn, zlecenie_id: int) -> int:
@@ -171,34 +185,23 @@ class SQLRequest(BaseModel):
 class TransactionRequest(BaseModel):
     operations: List[dict]
 
-@app.post("/sql", dependencies=[Depends(verify_key)])
+@app.post("/sql", dependencies=[Depends(verify_admin)])
 def execute_sql(req: SQLRequest):
+    # Tylko zapytania SELECT – blokada zapisu przez API
+    sanitize_sql_readonly(req.sql)
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         cur = conn.cursor()
-        if req.many and req.params_list:
-            cur.executemany(req.sql, req.params_list)
-            conn.commit()
-            conn.close()
-            return {"rowcount": cur.rowcount, "lastrowid": cur.lastrowid}
         cur.execute(req.sql, req.params)
-        is_read = req.sql.strip().upper().startswith(("SELECT", "PRAGMA", "WITH"))
-        if is_read:
-            rows = cur.fetchall()
-            conn.close()
-            return {"rows": [list(r) for r in rows]}
-        else:
-            conn.commit()
-            lastrowid = cur.lastrowid
-            rowcount  = cur.rowcount
-            conn.close()
-            return {"lastrowid": lastrowid, "rowcount": rowcount}
+        rows = cur.fetchall()
+        conn.close()
+        return {"rows": [list(r) for r in rows]}
     except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail="Błąd zapytania SQL.")
 
-@app.post("/transaction", dependencies=[Depends(verify_key)])
+@app.post("/transaction", dependencies=[Depends(verify_admin)])
 def execute_transaction(req: TransactionRequest):
     try:
         conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -222,15 +225,56 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/api/login")
-def login(req: LoginRequest):
+def login(req: LoginRequest, request: Request):
+    ip = get_client_ip(request)
+
+    # Rate limiting – blokada po MAX_LOGIN_TRIES nieudanych próbach
+    rate_limit_login.check(ip)
+    rate_limit_login.check(req.username)
+
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, username, full_name, role, COALESCE(is_kj,0) as is_kj FROM users WHERE username=? AND password=?",
-            (req.username, _hash(req.password))
+            "SELECT id, username, full_name, role, password, COALESCE(is_kj,0) as is_kj "
+            "FROM users WHERE username=?",
+            (req.username,)
         ).fetchone()
-        if not row:
+
+        if not row or not verify_password(req.password, row["password"]):
+            rate_limit_login.record_failure(ip)
+            rate_limit_login.record_failure(req.username)
+            log_login(req.username, False, ip, "wrong credentials")
             raise HTTPException(401, "Nieprawidłowy login lub hasło")
-        return {"id": row[0], "username": row[1], "full_name": row[2], "role": row[3], "is_kj": row[4]}
+
+        # Sukces – czyść liczniki
+        rate_limit_login.record_success(ip)
+        rate_limit_login.record_success(req.username)
+
+        # Migracja SHA-256 → bcrypt przy pierwszym logowaniu po aktualizacji
+        if needs_rehash(row["password"]):
+            conn.execute(
+                "UPDATE users SET password=? WHERE id=?",
+                (hash_password(req.password), row["id"])
+            )
+
+        # Utwórz sesję serwerową
+        token = create_session(row["id"], row["username"], row["role"], ip)
+        log_login(row["username"], True, ip)
+
+        return {
+            "token": token,
+            "id": row["id"],
+            "username": row["username"],
+            "full_name": row["full_name"],
+            "role": row["role"],
+            "is_kj": row["is_kj"],
+        }
+
+@app.post("/api/logout")
+def logout(x_session_token: Optional[str] = Header(None, alias="x-session-token")):
+    """Wylogowanie – unieważnia token sesji."""
+    if x_session_token:
+        revoke_session(x_session_token)
+    return {"ok": True}
 
 @app.get("/api/status/produkcja", dependencies=[Depends(verify_key)])
 def status_produkcja():
@@ -242,6 +286,7 @@ def status_produkcja():
                    o.czas_norma, z.id as zlecenie_id
             FROM operacje o JOIN zlecenia z ON o.zlecenie_id=z.id
             WHERE o.status='zakonczona' AND z.status IN ('nowe','w_toku')
+              AND COALESCE(o.transport_dismissed, 0) = 0
             ORDER BY z.numer, o.kolejnosc
         """).fetchall()
         aktywne = conn.execute("""
@@ -1273,9 +1318,18 @@ def get_zakonczone_transport():
               AND z.status IN ('nowe','w_toku')
               AND COALESCE(o.typ_operacji, '') != 'kj'
               AND COALESCE(o.ilosc_wykonana, 0) > 0
+              AND COALESCE(o.transport_dismissed, 0) = 0
             ORDER BY z.numer, o.kolejnosc
         """).fetchall()
         return [dict(r) for r in rows]
+
+@app.post("/api/operacje/{oid}/transport-dismiss", dependencies=[Depends(verify_key)])
+def dismiss_transport_operacja(oid: int):
+    """Oznacza operację jako odrzuconą z listy 'do transportu' – trwale, nie wraca po odświeżeniu
+    ani na ekranie logowania."""
+    with get_db() as conn:
+        conn.execute("UPDATE operacje SET transport_dismissed=1 WHERE id=?", (oid,))
+        return {"ok": True}
 
 # ─── Sesje pracy ──────────────────────────────────────────────────────────────
 class StartSesjaRequest(BaseModel):
@@ -1712,14 +1766,18 @@ class NewUserRequest(BaseModel):
     role: str
     is_kj: Optional[int] = 0
 
-@app.post("/api/users", dependencies=[Depends(verify_key)])
+@app.post("/api/users", dependencies=[Depends(verify_admin)])
 def create_user(req: NewUserRequest):
+    ok, msg = validate_password_strength(req.password)
+    if not ok:
+        raise HTTPException(400, msg)
     with get_db() as conn:
         try:
             cur = conn.execute(
                 "INSERT INTO users (username, password, full_name, role, is_kj) VALUES (?,?,?,?,?)",
-                (req.username, _hash(req.password), req.full_name, req.role, req.is_kj or 0)
+                (req.username, hash_password(req.password), req.full_name, req.role, req.is_kj or 0)
             )
+            log_admin("system", "create_user", req.username)
             return {"id": cur.lastrowid}
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Użytkownik już istnieje")
@@ -1730,59 +1788,69 @@ class EditUserRequest(BaseModel):
     password: Optional[str] = None
     is_kj: Optional[int] = 0
 
-@app.put("/api/users/{uid}", dependencies=[Depends(verify_key)])
+@app.put("/api/users/{uid}", dependencies=[Depends(verify_admin)])
 def update_user(uid: int, req: EditUserRequest):
     with get_db() as conn:
         if req.password:
+            ok, msg = validate_password_strength(req.password)
+            if not ok:
+                raise HTTPException(400, msg)
             conn.execute(
                 "UPDATE users SET full_name=?,role=?,password=?,is_kj=? WHERE id=?",
-                (req.full_name, req.role, _hash(req.password), req.is_kj or 0, uid)
+                (req.full_name, req.role, hash_password(req.password), req.is_kj or 0, uid)
             )
+            revoke_all_user_sessions(uid)
         else:
             conn.execute(
                 "UPDATE users SET full_name=?,role=?,is_kj=? WHERE id=?",
                 (req.full_name, req.role, req.is_kj or 0, uid)
             )
+        log_admin("system", "update_user", str(uid))
         return {"ok": True}
 
 @app.post("/api/users/{uid}/change-password", dependencies=[Depends(verify_key)])
 def change_password(uid: int, req: dict = Body(...)):
     old_pass = req.get("old_password", "")
     new_pass = req.get("new_password", "")
-    if not new_pass or len(new_pass) < 4:
-        raise HTTPException(400, "Nowe hasło musi mieć co najmniej 4 znaki")
+    ok, msg = validate_password_strength(new_pass)
+    if not ok:
+        raise HTTPException(400, msg)
     with get_db() as conn:
         user = conn.execute(
-            "SELECT id FROM users WHERE id=? AND password=?",
-            (uid, _hash(old_pass))
+            "SELECT id, password FROM users WHERE id=?", (uid,)
         ).fetchone()
-        if not user:
+        if not user or not verify_password(old_pass, user["password"]):
             raise HTTPException(400, "Aktualne hasło jest nieprawidłowe")
-        conn.execute("UPDATE users SET password=? WHERE id=?", (_hash(new_pass), uid))
+        conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(new_pass), uid))
+        revoke_all_user_sessions(uid)
         return {"ok": True}
 
-@app.post("/api/users/{uid}/reset-password", dependencies=[Depends(verify_key)])
+@app.post("/api/users/{uid}/reset-password", dependencies=[Depends(verify_admin)])
 def reset_password(uid: int):
-    import random, string
-    new_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    import secrets as _sec
+    new_pass = _sec.token_urlsafe(12)
     with get_db() as conn:
         user = conn.execute("SELECT full_name FROM users WHERE id=?", (uid,)).fetchone()
         if not user:
             raise HTTPException(404, "Użytkownik nie znaleziony")
-        conn.execute("UPDATE users SET password=? WHERE id=?", (_hash(new_pass), uid))
+        conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(new_pass), uid))
+        revoke_all_user_sessions(uid)
+        log_admin("system", "reset_password", str(uid))
         return {"ok": True, "new_password": new_pass, "full_name": user["full_name"]}
 
-@app.delete("/api/users/{uid}", dependencies=[Depends(verify_key)])
+@app.delete("/api/users/{uid}", dependencies=[Depends(verify_admin)])
 def delete_user(uid: int):
     with get_db() as conn:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("DELETE FROM sesje_pracy WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM user_permissions WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM users WHERE id=?", (uid,))
+        revoke_all_user_sessions(uid)
+        log_admin("system", "delete_user", str(uid))
         return {"ok": True}
 
 # ─── Uprawnienia użytkowników ────────────────────────────────────────────────
-@app.get("/api/users/{uid}/permissions", dependencies=[Depends(verify_key)])
+@app.get("/api/users/{uid}/permissions", dependencies=[Depends(verify_admin)])
 def get_user_permissions(uid: int):
     with get_db() as conn:
         row = conn.execute(
@@ -1792,7 +1860,7 @@ def get_user_permissions(uid: int):
             return {"user_id": uid, "tabs": json.loads(row["tabs"])}
         return {"user_id": uid, "tabs": []}
 
-@app.get("/api/permissions/all", dependencies=[Depends(verify_key)])
+@app.get("/api/permissions/all", dependencies=[Depends(verify_admin)])
 def get_all_permissions():
     with get_db() as conn:
         rows = conn.execute("SELECT user_id, tabs FROM user_permissions").fetchall()
@@ -1801,7 +1869,7 @@ def get_all_permissions():
 class PermissionsRequest(BaseModel):
     tabs: List[str]
 
-@app.put("/api/users/{uid}/permissions", dependencies=[Depends(verify_key)])
+@app.put("/api/users/{uid}/permissions", dependencies=[Depends(verify_admin)])
 def set_user_permissions(uid: int, req: PermissionsRequest):
     with get_db() as conn:
         conn.execute("""
@@ -1811,7 +1879,7 @@ def set_user_permissions(uid: int, req: PermissionsRequest):
         """, (uid, json.dumps(req.tabs), _now()))
         return {"ok": True, "user_id": uid, "tabs": req.tabs}
 
-@app.delete("/api/users/{uid}/permissions", dependencies=[Depends(verify_key)])
+@app.delete("/api/users/{uid}/permissions", dependencies=[Depends(verify_admin)])
 def reset_user_permissions(uid: int):
     with get_db() as conn:
         conn.execute("DELETE FROM user_permissions WHERE user_id=?", (uid,))
@@ -3711,14 +3779,18 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                             normy_ok += 1
                 if s["typ"] in ("operacja", "inne_zlecenie"):
                     if sesja_glowna == 1:
-                        koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
+                        koszt_sesji = (elapsed / 60.0) * float(s["stawka_godz"] or 0)
                     else:
                         if czas_norma and czas_norma > 0:
-                            koszt_pracy += (czas_norma * ilosc / 60.0) * float(s["stawka_godz"] or 0)
+                            koszt_sesji = (czas_norma * ilosc / 60.0) * float(s["stawka_godz"] or 0)
                         else:
-                            koszt_pracy += (elapsed / 60.0) * float(s["stawka_godz"] or 0)
+                            koszt_sesji = (elapsed / 60.0) * float(s["stawka_godz"] or 0)
+                    koszt_pracy += koszt_sesji
                 elif s["typ"] == "zbrojenie":
-                    koszt_zbrojenia += (elapsed / 60.0) * float(s["zbrojenie_stawka_godz"] or 0)
+                    koszt_sesji = (elapsed / 60.0) * float(s["zbrojenie_stawka_godz"] or 0)
+                    koszt_zbrojenia += koszt_sesji
+                else:
+                    koszt_sesji = 0.0
 
                 typ = s["typ"]
                 if typ == "nieprodukcyjna":
@@ -3738,6 +3810,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     "op_nazwa": display_op,
                     "stanowisko": s["stanowisko"] or "—",
                     "zl_numer": display_zl,
+                    "koszt": round(koszt_sesji, 2),
                     "ilosc_sztuk": s["ilosc_sztuk"],
                     "czas_min": round(elapsed, 1),
                     "norma_min": czas_norma,
@@ -3958,6 +4031,8 @@ def init_db_on_start():
     except: pass
     try: c.execute("ALTER TABLE operacje ADD COLUMN czas_tpz_min REAL DEFAULT 0.0")
     except: pass
+    try: c.execute("ALTER TABLE operacje ADD COLUMN transport_dismissed INTEGER DEFAULT 0")
+    except: pass
     try: c.execute("ALTER TABLE wyroby ADD COLUMN model_3d_url TEXT DEFAULT NULL")
     except: pass
 
@@ -4025,16 +4100,30 @@ def init_db_on_start():
     # Dane startowe
     c.execute("SELECT id FROM users WHERE username='admin'")
     if not c.fetchone():
-        def h(p): return hashlib.sha256(p.encode()).hexdigest()
+        import secrets as _sec
+        # Losowe hasła przy pierwszej inicjalizacji (wydrukowane raz w logach)
+        _init_passwords = {
+            'admin':      os.environ.get("ADMIN_INIT_PASSWORD", _sec.token_urlsafe(12)),
+            'jan.tech':   _sec.token_urlsafe(12),
+            'piotr.p':    _sec.token_urlsafe(12),
+            'anna.p':     _sec.token_urlsafe(12),
+            'mag.jan':    _sec.token_urlsafe(12),
+            'majster.k':  _sec.token_urlsafe(12),
+        }
         users = [
-            ('admin',     h('admin123'),   'Administrator',     'admin'),
-            ('jan.tech',  h('tech123'),    'Jan Kowalski',      'technolog'),
-            ('piotr.p',   h('pracownik1'), 'Piotr Nowak',       'pracownik'),
-            ('anna.p',    h('pracownik2'), 'Anna Wiśniewska',   'pracownik'),
-            ('mag.jan',   h('magazyn123'), 'Jan Magazynowski',  'magazynier'),
-            ('majster.k', h('majster123'), 'Krzysztof Majster', 'majster'),
+            ('admin',     hash_password(_init_passwords['admin']),     'Administrator',     'admin'),
+            ('jan.tech',  hash_password(_init_passwords['jan.tech']),  'Jan Kowalski',      'technolog'),
+            ('piotr.p',   hash_password(_init_passwords['piotr.p']),   'Piotr Nowak',       'pracownik'),
+            ('anna.p',    hash_password(_init_passwords['anna.p']),    'Anna Wiśniewska',   'pracownik'),
+            ('mag.jan',   hash_password(_init_passwords['mag.jan']),   'Jan Magazynowski',  'magazynier'),
+            ('majster.k', hash_password(_init_passwords['majster.k']), 'Krzysztof Majster', 'majster'),
         ]
         c.executemany("INSERT INTO users (username,password,full_name,role) VALUES (?,?,?,?)", users)
+        print("\n" + "="*60, flush=True)
+        print("[INIT] Hasła początkowe użytkowników (zapisz je teraz!):", flush=True)
+        for user, pwd in _init_passwords.items():
+            print(f"  {user:15s}: {pwd}", flush=True)
+        print("="*60 + "\n", flush=True)
 
     c.execute("SELECT id FROM stawki LIMIT 1")
     if not c.fetchone():
@@ -4610,14 +4699,8 @@ def admin_backup():
     summary = {tbl: len(rows) for tbl, rows in data.get("tables", {}).items()}
     return {"ok": True, "ts": data["_ts"], "path": BACKUP_PATH, "rows": summary}
 
-@app.get("/api/admin/backup/download")
-def admin_backup_download(
-    x_api_key: str = "",
-    x_api_key_h: str = Header(None, alias="x-api-key")
-):
-    key = x_api_key or x_api_key_h or ""
-    if key != API_KEY:
-        raise HTTPException(403, "Nieprawidłowy klucz API")
+@app.get("/api/admin/backup/download", dependencies=[Depends(verify_admin)])
+def admin_backup_download():
     data = _db_backup_to_json()
     content = json.dumps(data, ensure_ascii=False, default=str, indent=2)
     return StreamingResponse(
@@ -4626,7 +4709,7 @@ def admin_backup_download(
         headers={"Content-Disposition": 'attachment; filename="produkcja_backup.json"'}
     )
 
-@app.post("/api/admin/backup/restore", dependencies=[Depends(verify_key)])
+@app.post("/api/admin/backup/restore", dependencies=[Depends(verify_admin)])
 async def admin_backup_restore(request: Request):
     body = await request.body()
     if not body:
@@ -4642,7 +4725,7 @@ async def admin_backup_restore(request: Request):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-@app.post("/api/admin/backup/restore-upload", dependencies=[Depends(verify_key)])
+@app.post("/api/admin/backup/restore-upload", dependencies=[Depends(verify_admin)])
 async def admin_backup_restore_upload(request: Request):
     try:
         body = await request.body()
@@ -4658,7 +4741,7 @@ async def admin_backup_restore_upload(request: Request):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-@app.get("/api/admin/backup/status", dependencies=[Depends(verify_key)])
+@app.get("/api/admin/backup/status", dependencies=[Depends(verify_admin)])
 def admin_backup_status():
     exists = os.path.exists(BACKUP_PATH)
     size = os.path.getsize(BACKUP_PATH) if exists else 0
@@ -5855,15 +5938,29 @@ def export_all_faktury():
             result.append(d)
         return result
 
+# ─── Admin: aktywne sesje ─────────────────────────────────────────────────────
+@app.get("/api/admin/sessions", dependencies=[Depends(verify_admin)])
+def admin_get_sessions():
+    """Lista aktywnych sesji użytkowników (tylko admin)."""
+    return {"sessions": get_active_sessions()}
+
 # ─── WebSocket endpoint ────────────────────────────────────────────────────────
 @app.websocket("/ws/powiadomienia")
-async def websocket_powiadomienia(websocket: WebSocket):
-    """Endpoint WebSocket – klienci subskrybują powiadomienia real-time."""
+async def websocket_powiadomienia(websocket: WebSocket, token: Optional[str] = None):
+    """Endpoint WebSocket – wymaga tokenu sesji jako query param: ?token=XYZ"""
+    # Weryfikacja przed akceptacją połączenia
+    if not token:
+        await websocket.close(code=4001, reason="Brak tokenu sesji")
+        return
+    try:
+        verify_session(token)
+    except HTTPException:
+        await websocket.close(code=4001, reason="Nieważna lub wygasła sesja")
+        return
+
     await ws_manager.connect(websocket)
     try:
-        # Wyślij powitanie z bieżącym timestampem
         await websocket.send_json({"type": "connected", "ts": _now()})
-        # Trzymaj połączenie otwarte i obsługuj ping/pong
         while True:
             data = await websocket.receive_text()
             if data == "ping":

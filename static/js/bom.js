@@ -503,14 +503,15 @@ function printRaportWydajnosc(data, od, doDt, typ) {
       if (!dayStats[d][p.user_id]) {
         dayStats[d][p.user_id] = {
           full_name: p.full_name, min_roboczy:0, min_zbrojenie:0,
-          min_nieproduktywny:0, norma_min:0, fakty_min:0, sesje:[]
+          min_nieproduktywny:0, norma_min:0, fakty_min:0, sesje:[],
+          koszt_pracy:0, koszt_zbrojenia:0
         };
       }
       const ds = dayStats[d][p.user_id];
       const m = parseFloat(s.czas_min) || 0;
-      if (s.typ === 'zbrojenie') ds.min_zbrojenie += m;
+      if (s.typ === 'zbrojenie') { ds.min_zbrojenie += m; ds.koszt_zbrojenia += (parseFloat(s.koszt)||0); }
       else if (s.typ === 'nieprodukcyjna') ds.min_nieproduktywny += m;
-      else ds.min_roboczy += m;
+      else { ds.min_roboczy += m; ds.koszt_pracy += (parseFloat(s.koszt)||0); }
       if (s.norma_min && s.norma_min > 0 && s.typ !== 'zbrojenie' && s.sesja_glowna !== 0) {
         ds.norma_min += (s.norma_min * (s.ilosc_sztuk || 1));
         ds.fakty_min += m;
@@ -572,6 +573,37 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         </tr>`;
       });
       tabelaHtml += `</tbody></table>`;
+    } else if (typ === 'zarobki') {
+      // ZAROBKI – dzienna tabela zarobków pracowników
+      tabelaHtml += `
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:#3d4a63;color:#fff">
+          <th style="padding:7px 10px;text-align:left">Pracownik</th>
+          <th style="padding:7px 10px;text-align:center">Roboczy (min)</th>
+          <th style="padding:7px 10px;text-align:center">Zarobek za pracę</th>
+          <th style="padding:7px 10px;text-align:center">Zbrojenie (min)</th>
+          <th style="padding:7px 10px;text-align:center">Zarobek za zbrojenie</th>
+          <th style="padding:7px 10px;text-align:center">Razem zarobek</th>
+        </tr></thead><tbody>`;
+      let dzienSumaZarobek = 0;
+      dzienPracownicy.forEach((p, i) => {
+        const ds = dayStats[date][p.user_id];
+        const razemZarobek = (ds.koszt_pracy||0) + (ds.koszt_zbrojenia||0);
+        dzienSumaZarobek += razemZarobek;
+        tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8">${Math.round(ds.min_roboczy)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c;font-weight:600">${fmtPLNr(ds.koszt_pracy)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${Math.round(ds.min_zbrojenie)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c;font-weight:600">${fmtPLNr(ds.koszt_zbrojenia)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:#1e8a4c">${fmtPLNr(razemZarobek)}</td>
+        </tr>`;
+      });
+      tabelaHtml += `<tr style="background:#eef3ff;font-weight:700">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0" colspan="5">Razem za dzień</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c">${fmtPLNr(dzienSumaZarobek)}</td>
+        </tr>`;
+      tabelaHtml += `</tbody></table>`;
     } else {
       // PEŁNY – każdy pracownik z rozpiską sesji dla tego dnia
       dzienPracownicy.forEach(p => {
@@ -629,10 +661,13 @@ function printRaportWydajnosc(data, od, doDt, typ) {
 
   // ────── Tabelka podsumowania: pracownicy × dni ──────────────────────────────
   if (sortedDates.length > 0 && pr.length > 0) {
+    const tytulPodsum = typ === 'zarobki'
+      ? `💰 Podsumowanie zarobków — ${od} – ${doDt}`
+      : `📊 Podsumowanie wydajności — ${od} – ${doDt}`;
     tabelaHtml += `
     <div style="margin-top:30px;page-break-before:auto">
       <div style="background:#1a2233;color:#fff;padding:9px 14px;border-radius:6px 6px 0 0;font-size:14px;font-weight:700">
-        📊 Podsumowanie wydajności — ${od} – ${doDt}
+        ${tytulPodsum}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead>
@@ -646,6 +681,38 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           </tr>
         </thead><tbody>`;
 
+    if (typ === 'zarobki') {
+      const dayTotals = {};
+      sortedDates.forEach(d => dayTotals[d] = 0);
+      let grandTotal = 0;
+
+      pr.forEach((p, pi) => {
+        let totalZarobek = 0;
+        tabelaHtml += `<tr style="background:${pi%2?'#fff':'#f9fafb'}">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>`;
+        sortedDates.forEach(d => {
+          const ds = dayStats[d][p.user_id];
+          if (!ds) {
+            tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#bbb">—</td>`;
+          } else {
+            const zarobek = (ds.koszt_pracy||0) + (ds.koszt_zbrojenia||0);
+            totalZarobek += zarobek;
+            dayTotals[d] += zarobek;
+            grandTotal += zarobek;
+            tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c;font-weight:600">${fmtPLNr(zarobek)}</td>`;
+          }
+        });
+        tabelaHtml += `<td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;background:#f0f4ff;color:#1e8a4c">${fmtPLNr(totalZarobek)}</td></tr>`;
+      });
+
+      // Wiersz sumy dla wszystkich pracowników
+      tabelaHtml += `<tr style="background:#1a2233;color:#fff;font-weight:700">
+        <td style="padding:7px 10px;border:1px solid #3d4a63">RAZEM</td>`;
+      sortedDates.forEach(d => {
+        tabelaHtml += `<td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center">${fmtPLNr(dayTotals[d])}</td>`;
+      });
+      tabelaHtml += `<td style="padding:7px 10px;border:1px solid #3d4a63;text-align:center;background:#0f1726">${fmtPLNr(grandTotal)}</td></tr>`;
+    } else {
     pr.forEach((p, pi) => {
       let totalMin = 0;
       tabelaHtml += `<tr style="background:${pi%2?'#fff':'#f9fafb'}">
@@ -674,6 +741,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         <div style="font-size:10px;color:#666">${totalZmiany} zmian</div>
       </td></tr>`;
     });
+    }
 
     tabelaHtml += `</tbody></table></div>`;
   }
@@ -688,7 +756,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:18px">
     <div>
       <div style="font-size:22px;font-weight:700">Raport wydajności pracowników</div>
-      <div style="font-size:13px;color:#555">${typ==='skrocony'?'Raport skrócony':'Raport pełny'} | Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
+      <div style="font-size:13px;color:#555">${typ==='skrocony'?'Raport skrócony':typ==='zarobki'?'Raport zarobków':'Raport pełny'} | Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
     </div>
     <div style="text-align:right;font-size:13px">Pracowników: <b>${pr.length}</b> | Zmiana = <b>${ZMIANA_MIN} min</b></div>
   </div>
@@ -1195,6 +1263,7 @@ function renderMajsterWydajnosc() {
         + '<select id="rwd-typ" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px">'
         + '<option value="skrocony" ' + (state.raportWydTyp==='skrocony'?'selected':'') + '>Skrócony</option>'
         + '<option value="pelny" ' + (state.raportWydTyp==='pelny'?'selected':'') + '>Pełny</option>'
+        + '<option value="zarobki" ' + (state.raportWydTyp==='zarobki'?'selected':'') + '>Zarobki</option>'
         + '</select></div>'
         + '<button class="btn btn-accent" style="padding:8px 14px;white-space:nowrap" onclick="generateRaportWydajnoscPDF()">📥 Generuj PDF</button>'
         + '</div></div>';

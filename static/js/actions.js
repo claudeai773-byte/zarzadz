@@ -5,6 +5,10 @@ async function doLogin(username, password) {
   try {
     const user = await post('/api/login', {username, password});
     stopWHRefresh();
+    // Zapisz token sesji do globalnej zmiennej (używanej przez HEADERS w config.js)
+    if (user.token) {
+      SESSION_TOKEN = user.token;
+    }
     // Pobierz uprawnienia użytkownika
     let userTabs = [];
     try {
@@ -703,6 +707,11 @@ function logout() {
   }
   stopAllTimers();
   if (typeof wsDisconnect === 'function') wsDisconnect();
+  // Unieważnij sesję na serwerze
+  if (SESSION_TOKEN) {
+    post('/api/logout', {}).catch(() => {});
+    SESSION_TOKEN = '';
+  }
   setState({user:null, screen:'login', aktywnesje:[], operacje:[], timers:{}});
 }
 

@@ -18,7 +18,14 @@
 let CONFIG = JSON.parse(localStorage.getItem('produkcja_config') || '{}');
 let SERVER_URL = CONFIG.server_url || '';
 let API_KEY    = CONFIG.api_key    || '';
-const HEADERS  = () => ({'Content-Type':'application/json','x-api-key':API_KEY});
+// Token sesji – ustawiany po zalogowaniu przez doLogin() w actions.js
+let SESSION_TOKEN = '';
+
+const HEADERS  = () => {
+  const h = {'Content-Type':'application/json','x-api-key':API_KEY};
+  if (SESSION_TOKEN) h['x-session-token'] = SESSION_TOKEN;
+  return h;
+};
 
 async function api(path, opts={}) {
   const url = SERVER_URL.replace(/\/$/, '') + path;

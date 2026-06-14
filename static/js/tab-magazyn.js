@@ -61,6 +61,11 @@ function transportDismiss(opId) {
   hidden.add(opId);
   setState({ transportHidden: [...hidden] }, true);
   render();
+  // Zapisz trwałe odrzucenie na serwerze – operacja nie wróci po odświeżeniu
+  // ani na ekranie logowania.
+  post(`/api/operacje/${opId}/transport-dismiss`, {}).catch(err => {
+    console.error('Nie udało się zapisać odrzucenia operacji:', err);
+  });
 }
 
 function renderMagazynTransport() {

@@ -710,6 +710,7 @@ async function ganttSaveChanges() {
     if (!changedOps.has(op.op_id)) continue;
     try {
       await put(`/api/operacje/${op.op_id}`, {
+        zlecenie_id: op.zlecenie_id,
         nazwa: op.op_nazwa,
         kolejnosc: op._newKolejnosc ?? op.op_kolejnosc,
         czas_norma: op.czas_norma || 0,

@@ -132,7 +132,8 @@ function wsConnect() {
   const wsUrl = SERVER_URL
     .replace(/^https?:\/\//, m => m === 'https://' ? 'wss://' : 'ws://')
     .replace(/\/$/, '')
-    + '/ws/powiadomienia';
+    + '/ws/powiadomienia'
+    + (SESSION_TOKEN ? '?token=' + encodeURIComponent(SESSION_TOKEN) : '');
 
   try {
     _ws = new WebSocket(wsUrl);

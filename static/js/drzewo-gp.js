@@ -124,6 +124,22 @@ async function drzewoDeleteZlecenie(zid, numer) {
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
+// ─── Usuwanie wyrobu (struktury) z listy po lewej stronie ─────────────────────
+async function drzewoDeleteWyrob(wid, symbol, typ) {
+  const ostrzezenie = typ === 'G'
+    ? `Usunąć wyrób ${symbol}?\n\nZostanie usunięta cała struktura BOM tego wyrobu (powiązania ze składnikami). Powiązane zlecenia produkcyjne NIE zostaną usunięte – jeśli chcesz je usunąć, zrób to z poziomu zlecenia.`
+    : `Usunąć półprodukt ${symbol}?\n\nZostanie usunięty wraz z jego strukturą BOM oraz powiązaniami jako składnik w innych wyrobach.`;
+  if (!confirm(ostrzezenie)) return;
+  try {
+    await del('/api/wyroby/' + wid);
+    if (state.drzewoSelectedG?.id === wid) {
+      setState({drzewoSelectedG: null, drzewoTree: null, drzewoPanel: 'drzewo'});
+    }
+    await loadDrzewoGP();
+    render();
+  } catch(e) { alert('Błąd usuwania: ' + e.message); }
+}
+
 // ─── Helpers: rozwiń / zwiń całe drzewo ───────────────────────────────────────
 function _collectNodeKeys(node, depth, acc) {
   if (!node) return;
@@ -293,7 +309,7 @@ function renderDrzewoGP() {
             ? `<span style="width:7px;height:7px;border-radius:50%;background:${{nowe:'#60a5fa',w_toku:'#4ade80',zakonczone:'#86efac',wstrzymane:'#f87171',anulowane:'#6b7280'}[zl.status]||'#60a5fa'};display:inline-block;flex-shrink:0"></span>`
             : '';
           return `<div onclick="drzewoSelectG(${JSON.stringify(wg).replace(/"/g,'&quot;')})"
-            style="padding:9px 12px;border-radius:6px;cursor:pointer;margin-bottom:3px;
+            style="padding:9px 12px;border-radius:6px;cursor:pointer;margin-bottom:3px;position:relative;
               background:${isActive?'#1e3a5f':'transparent'};
               border:1px solid ${isActive?'#3b82f640':'transparent'};transition:all .15s"
             onmouseenter="if(!${isActive})this.style.background='#ffffff08'"
@@ -301,6 +317,10 @@ function renderDrzewoGP() {
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
               ${statusDot}
               <span style="color:#60a5fa;font-weight:700;font-size:.77rem;font-family:monospace">${wg.symbol}</span>
+              <div style="flex:1"></div>
+              <button onclick="event.stopPropagation();drzewoDeleteWyrob(${wg.id},'${(wg.symbol||'').replace(/'/g,"\\'")}','${wg.typ||'G'}')"
+                title="Usuń wyrób / strukturę" style="background:transparent;border:none;color:#475569;cursor:pointer;font-size:.8rem;padding:0 2px;flex-shrink:0;line-height:1"
+                onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#475569'">✕</button>
             </div>
             <div style="color:#94a3b8;font-size:.71rem;line-height:1.3">${(wg.nazwa||'').slice(0,52)}${(wg.nazwa||'').length>52?'…':''}</div>
           </div>`;

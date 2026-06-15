@@ -56,7 +56,7 @@ function _mpAutoScore(z) {
 
   // Oblicz postęp: min z ilosc_wykonana / ilosc_sztuk wg sesji
   const ilosc  = z.ilosc_sztuk || 1;
-  const wykon  = z._wykonano || 0;
+  const wykon  = z.sztuki_wykonane ?? z._wykonano ?? 0;
   const postep = wykon / ilosc;
 
   // Wynik: mniejszy → ważniejszy
@@ -171,7 +171,7 @@ function renderMajsterPriorytety() {
     const isPinned   = priorytety[z.id] === 0;
     const dniDo      = z._dniDo;
     const postepPct  = z.ilosc_sztuk > 0
-      ? Math.min(100, Math.round((z._wykonano / z.ilosc_sztuk) * 100))
+      ? Math.min(100, Math.round(((z.sztuki_wykonane ?? z._wykonano ?? 0) / z.ilosc_sztuk) * 100))
       : 0;
 
     // Kolor terminu
@@ -249,7 +249,7 @@ function renderMajsterPriorytety() {
           <div style="display:flex;justify-content:space-between;font-size:11px;
                       color:var(--dim);margin-bottom:3px">
             <span>Postęp</span>
-            <span style="color:var(--text);font-weight:600">${z._wykonano} / ${z.ilosc_sztuk} szt. (${postepPct}%)</span>
+            <span style="color:var(--text);font-weight:600">${(z.sztuki_wykonane ?? z._wykonano ?? 0)} / ${z.ilosc_sztuk} szt. (${postepPct}%)</span>
           </div>
           <div style="height:6px;background:#1e293b;border-radius:3px;overflow:hidden">
             <div style="height:100%;width:${postepPct}%;background:${barColor};

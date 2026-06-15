@@ -5768,6 +5768,8 @@ async def step_proxy(url: str):
     elif 'onedrive.live.com' in url or '1drv.ms' in url:
         sep = '&' if '?' in url else '?'
         url = url + sep + 'download=1'
+    if "/upload/" in url and "/raw/" not in url:
+        url = url.replace("/upload/", "/raw/upload/")
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0",
@@ -5794,6 +5796,8 @@ async def step_proxy(url: str):
             media_type="application/octet-stream",
             headers={
                 "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Methods": "*",
                 "Content-Disposition": "inline; filename=model.step",
                 "Cache-Control": "public, max-age=3600",
             }

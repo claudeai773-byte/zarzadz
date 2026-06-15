@@ -61,12 +61,13 @@ async function nzOpenEdit(zid) {
 
   // Rekurencyjne ładowanie węzła P (łącznie z zagnieżdżonymi P i M)
   async function buildPNode(zleceniePId, symbol, nazwa, ilosc) {
-    let pOps = [], pMats = [], pSubZapotrz = [];
+    let pOps = [], pMats = [], pSubZapotrz = [], pZlecenie = null;
     try {
-      [pOps, pMats, pSubZapotrz] = await Promise.all([
+      [pOps, pMats, pSubZapotrz, pZlecenie] = await Promise.all([
         get(`/api/zlecenia/${zleceniePId}/operacje`).catch(() => []),
         get(`/api/zlecenia/${zleceniePId}/materialy-zlecenia`).catch(() => []),
         get(`/api/zlecenia/${zleceniePId}/zapotrzebowania`).catch(() => []),
+        get(`/api/zlecenia/${zleceniePId}`).catch(() => null),
       ]);
     } catch(_) {}
 
@@ -99,6 +100,7 @@ async function nzOpenEdit(zid) {
       nazwa: nazwa,
       ilosc: ilosc, jednostka: 'szt',
       _zlecenie_p_id: zleceniePId,
+      model_3d_url: (pZlecenie && pZlecenie.model_3d_url) || '',
       ops: apiOpsToNz(pOps),
       children: [...subPNodes, ...mChildren],
     };
@@ -153,6 +155,7 @@ async function nzOpenEdit(zid) {
     _id: nzNewId(), typ: 'G',
     symbol: z.numer, nazwa: z.nazwa,
     ilosc: z.ilosc_sztuk || 1, jednostka: 'szt',
+    model_3d_url: z.model_3d_url || '',
     ops: apiOpsToNz(opsG),
     children: [...pNodes, ...gMChildren],
   };
@@ -352,6 +355,94 @@ function nzUpdateField(id, field, value) {
   setState({ nzTree: root });
 }
 
+// ── Plik STEP przypisany do węzła G/P ────────────────────────────────────────
+function nzRenderStepBox(node) {
+  const url = node.model_3d_url || '';
+  const fname = url ? decodeURIComponent(url.split('/').pop().split('?')[0]) : '';
+  return `
+    <div class="nz-step-box">
+      <div style="font-size:.7rem;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">🧊 Plik STEP (podgląd 3D)</div>
+      ${url ? `
+        <div style="font-size:.74rem;color:#4ade80;margin-bottom:6px;word-break:break-all">✓ ${fname}</div>
+        <div class="nz-step-row">
+          <button class="nz-step-btn view" onclick="openStep3DViewer('${url.replace(/'/g,"\\'")}')">🧊 Podgląd</button>
+          <button class="nz-step-btn" onclick="nzUploadStepForNode('${node._id}')">📎 Zamień plik</button>
+          <button class="nz-step-btn remove" onclick="nzUpdateField('${node._id}','model_3d_url','')">🗑 Usuń</button>
+        </div>
+      ` : `
+        <div style="font-size:.7rem;color:#475569;margin-bottom:6px">Brak pliku STEP dla tego elementu.</div>
+        <div class="nz-step-row">
+          <button class="nz-step-btn" onclick="nzUploadStepForNode('${node._id}')">📎 Wgraj plik STEP</button>
+        </div>
+      `}
+      <div id="nz-step-status-${node._id}" style="font-size:.7rem;margin-top:6px"></div>
+    </div>`;
+}
+
+// ── Zapisz model_3d_url węzła do zlecenia (G/P) i odpowiadającego wyrobu BOM ──
+async function nzSyncStep3D(node, zlecenieIdForNode, symbol) {
+  const url = node && node.model_3d_url ? node.model_3d_url : null;
+  if (zlecenieIdForNode) {
+    try { await patch(`/api/zlecenia/${zlecenieIdForNode}/model3d`, {model_3d_url: url}); } catch(_) {}
+  }
+  if (symbol) {
+    try {
+      const list = await get('/api/wyroby?q=' + encodeURIComponent(symbol)).catch(() => []);
+      const found = (list || []).find(w => w.symbol === symbol);
+      if (found) await patch(`/api/wyroby/${found.id}/model3d`, {model_3d_url: url});
+    } catch(_) {}
+  }
+}
+
+// ── Wgraj/zamień plik STEP dla węzła G/P (zapisany przy zapisie zlecenia) ────
+function nzUploadStepForNode(nodeId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.onchange = async function() {
+    const file = this.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    const statusEl = document.getElementById('nz-step-status-' + nodeId);
+    const MAX = 100 * 1024 * 1024;
+    if (file.size > MAX) {
+      if (statusEl) { statusEl.textContent = '✗ Plik za duży (maks. 100 MB)'; statusEl.style.color = '#f87171'; }
+      return;
+    }
+    if (statusEl) { statusEl.textContent = '⏳ Wgrywanie... 0%'; statusEl.style.color = '#8892a4'; }
+    try {
+      const buf = await file.arrayBuffer();
+      const result = await new Promise((res, rej) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', SERVER_URL.replace(/\/$/, '') + '/api/step-upload');
+        xhr.setRequestHeader('x-api-key', API_KEY);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('x-filename', encodeURIComponent(file.name));
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable && statusEl)
+            statusEl.textContent = '⏳ Wgrywanie... ' + Math.round(e.loaded/e.total*100) + '%';
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) res(JSON.parse(xhr.responseText));
+          else rej(new Error(xhr.responseText || 'HTTP ' + xhr.status));
+        };
+        xhr.onerror = () => rej(new Error('Błąd sieci'));
+        xhr.send(buf);
+      });
+      if (result.ok && result.url) {
+        nzUpdateField(nodeId, 'model_3d_url', result.url);
+      } else {
+        throw new Error(result.error || 'Nieznany błąd');
+      }
+    } catch(e) {
+      if (statusEl) { statusEl.textContent = '✗ Błąd uploadu: ' + e.message; statusEl.style.color = '#f87171'; }
+    }
+  };
+  input.click();
+}
+
 async function nzSearchMat() {
   const q = (document.getElementById('nz-mat-search')?.value || state.nzMatSearch || '').trim();
   if (q.length < 2) { setState({ nzMatResults: [] }); return; }
@@ -401,6 +492,9 @@ async function nzSave() {
         material_od_klienta: state.nzMatKlienta ? 1 : 0,
       });
       zlecenieId = state.nzEditId;
+
+      // Zapisz/zaktualizuj plik STEP węzła G (zlecenie + wyrób BOM)
+      await nzSyncStep3D(tree, zlecenieId, state.nzNumer);
 
       // Pomocnik: synchronizuje operacje węzła z API
       async function syncNodeOps(nzOps, targetZlId) {
@@ -593,6 +687,9 @@ async function nzSave() {
 
           if (!pid) continue;
 
+          // Zapisz/zaktualizuj plik STEP węzła P (zlecenie P + wyrób BOM)
+          await nzSyncStep3D(pNode, pid, pSymbol);
+
           // Synchronizuj operacje P
           await syncNodeOps(pNode.ops || [], pid);
           // Synchronizuj materiały M dzieci P (tylko węzły M)
@@ -663,6 +760,9 @@ async function nzSave() {
       material_od_klienta: state.nzMatKlienta ? 1 : 0,
     });
     zlecenieId = zl.id;
+
+    // Zapisz plik STEP węzła G (jeśli wgrany przed zapisem)
+    await nzSyncStep3D(tree, zlecenieId, state.nzNumer);
 
     // 2. Utwórz lub pobierz wyrób G w drzewie BOM
     let wyrob_g_id = null;
@@ -762,6 +862,11 @@ async function nzSave() {
 
             // Operacje P-węzła trafiają do zlecenia P
             await saveNodeOps(node.ops, zlecenie_p_id || zlecenieId);
+
+            // Zapisz plik STEP węzła P (jeśli wgrany przed zapisem)
+            if (zlecenie_p_id) {
+              await nzSyncStep3D(node, zlecenie_p_id, pSymbol);
+            }
 
             // Zapisz materiały M dzieci P do materialy-zlecenia zlecenia P
             if (zlecenie_p_id) {
@@ -915,7 +1020,8 @@ function renderNzWizard() {
                     style="flex:1;background:#1a1f2e;color:#6b7280;border:1px solid #6b728044;border-radius:6px;padding:7px;cursor:pointer;font-size:.78rem">
               + Materiał (M)
             </button>
-          </div>`;
+          </div>
+          ${nzRenderStepBox(editNode)}`;
 
     } else if (editNode.typ === 'P') {
       const pOps = editNode.ops || [];
@@ -1000,6 +1106,7 @@ function renderNzWizard() {
               <button onclick="nzDeleteNode('${editNode._id}')"
                       style="background:#3a1a1a;color:#f87171;border:1px solid #f8717133;border-radius:5px;padding:6px 10px;cursor:pointer;font-size:.75rem">✕ Usuń</button>
             </div>
+            ${nzRenderStepBox(editNode)}
           </div>`;
 
     } else if (editNode.typ === 'M') {
@@ -1164,6 +1271,8 @@ function renderNzWizard() {
 
   const body = `
     ${nzRenderFromHistoryBanner()}
+    <div class="nz-grid">
+    <div class="nz-col-left">
     <!-- Dane zlecenia -->
     <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:14px">
       <div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">📋 Dane zlecenia</div>
@@ -1206,12 +1315,15 @@ function renderNzWizard() {
       </div>
     </div>
 
+    </div>
+
+    <div class="nz-col-right">
     <!-- Struktura G→P -->
     <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:14px">
       <div style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">🌳 Struktura G→P</div>
       <div style="display:flex;flex-direction:column;gap:14px;min-height:200px">
         <div style="display:flex;flex-direction:column;gap:8px">
-          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px;overflow-y:auto;max-height:220px;min-height:60px;overflow-x:auto">
+          <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:10px;overflow-y:auto;max-height:280px;min-height:60px;overflow-x:auto">
             ${treeHtml || '<div style="color:#334155;font-size:.78rem;padding:8px">Brak węzłów</div>'}
           </div>
           <div style="font-size:.7rem;color:#334155;line-height:1.6">
@@ -1220,10 +1332,12 @@ function renderNzWizard() {
             <span style="color:#6b7280">M</span> = materiał
           </div>
         </div>
-        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;overflow-y:auto;max-height:320px">
+        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;overflow-y:auto;max-height:420px">
           ${editPanel}
         </div>
       </div>
+    </div>
+    </div>
     </div>
 
     <div style="display:flex;gap:10px;margin-top:8px">
@@ -1241,7 +1355,7 @@ function renderNzWizard() {
 
   return `
     <div class="modal-overlay" onclick="if(event.target===this&&!state.nzSaving)nzClose()">
-      <div class="modal" style="max-width:820px;width:95vw">
+      <div class="modal nz-modal-wide" style="width:97vw">
         <button class="modal-close" onclick="nzClose()">×</button>
         <h3 style="margin-bottom:18px">${s.nzEditId ? '✏ Edytuj zlecenie produkcyjne' : '🏭 Nowe zlecenie produkcyjne'}</h3>
         ${body}

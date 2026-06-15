@@ -357,6 +357,9 @@ def scan_qr(qr: str):
                 (op["id"],)
             ).fetchone()[0]
             od["zbrojenie_wykonane"] = bool(zbr_done)
+            # Model 3D (.step) przypisany do wyrobu G/P w strukturze (jeśli istnieje)
+            wyrob = conn.execute("SELECT model_3d_url FROM wyroby WHERE symbol=?", (od.get("zl_numer"),)).fetchone()
+            od["wyrob_model_3d_url"] = (wyrob["model_3d_url"] if wyrob else None)
             return {"type": "operacja", "data": od}
 
         zl = conn.execute("SELECT * FROM zlecenia WHERE qr_code=?", (qr,)).fetchone()
@@ -373,7 +376,11 @@ def scan_qr(qr: str):
                 ).fetchone()[0]
                 od["zbrojenie_wykonane"] = bool(zbr_done)
                 ops_list.append(od)
-            return {"type": "zlecenie", "data": dict(zl), "operacje": ops_list}
+            zd = dict(zl)
+            # Model 3D (.step) przypisany do wyrobu G/P w strukturze (jeśli istnieje)
+            wyrob = conn.execute("SELECT model_3d_url FROM wyroby WHERE symbol=?", (zd.get("numer"),)).fetchone()
+            zd["wyrob_model_3d_url"] = (wyrob["model_3d_url"] if wyrob else None)
+            return {"type": "zlecenie", "data": zd, "operacje": ops_list}
 
         raise HTTPException(404, "Nie znaleziono kodu QR: " + qr)
 

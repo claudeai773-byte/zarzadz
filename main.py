@@ -5720,7 +5720,7 @@ async def step_upload(request: Request):
     ts = str(int(_time.time()))
     public_id = "produkcja_step/step_" + _hl.md5(body[:1024]).hexdigest()[:12]
 
-    sign_params = f"public_id={public_id}&timestamp={ts}"
+    sign_params = f"access_mode=public&public_id={public_id}&timestamp={ts}"
     sig = _hl.sha1(f"{sign_params}{CLOUDINARY_SECRET}".encode()).hexdigest()
 
     boundary = "----CLD" + _hl.md5(ts.encode()).hexdigest()[:16]
@@ -5739,6 +5739,7 @@ async def step_upload(request: Request):
         _field("timestamp", ts) +
         _field("signature", sig) +
         _field("public_id", public_id) +
+        _field("access_mode", "public") +
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: application/octet-stream\r\n\r\n".encode() +
         body + f"\r\n--{boundary}--\r\n".encode()
     )
@@ -5774,7 +5775,23 @@ async def step_proxy(url: str):
     elif 'onedrive.live.com' in url or '1drv.ms' in url:
         sep = '&' if '?' in url else '?'
         url = url + sep + 'download=1'
-    # Cloudinary i inne HTTPS – użyj ssl context z weryfikacją certyfikatów
+
+    # Cloudinary: jeśli URL jest z res.cloudinary.com, wygeneruj signed URL
+    # żeby ominąć błąd 401 dla plików raw bez access_mode=public
+    cld_match = _re.match(r'https://res\.cloudinary\.com/([^/]+)/raw/upload/(?:v\d+/)?(.+)', url)
+    if cld_match and CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET:
+        import hashlib as _hl, time as _time
+        cloud_name = cld_match.group(1)
+        public_id  = cld_match.group(2)
+        # usuń rozszerzenie z public_id jeśli jest (Cloudinary tego nie lubi w public_id)
+        ts = str(int(_time.time()) + 3600)  # expires 1h
+        sign_str = f"public_id={public_id}&timestamp={ts}{CLOUDINARY_SECRET}"
+        sig = _hl.sha1(sign_str.encode()).hexdigest()
+        url = (
+            f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD}/raw/download"
+            f"?public_id={public_id}&timestamp={ts}&api_key={CLOUDINARY_KEY}&signature={sig}"
+        )
+
     ssl_ctx = _ssl.create_default_context()
     try:
         req = urllib.request.Request(url, headers={
@@ -5808,6 +5825,8 @@ async def step_proxy(url: str):
         )
     except HTTPException:
         raise
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"Błąd HTTP {e.code} podczas pobierania pliku STEP: {e.reason}")
     except Exception as e:
         raise HTTPException(502, f"Nie można pobrać pliku STEP: {e}")
 

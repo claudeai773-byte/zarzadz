@@ -588,6 +588,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           const zid = s.zlecenie_id;
           if (!zlecMap[zid]) {
             zlecMap[zid] = {
+              id: zid,
               numer: s.zl_numer,
               cena_szt: s.cena_brutto_szt || 0,
               wykonano: 0,
@@ -601,6 +602,22 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           if (s.jest_ostatnia_operacja) zlecMap[zid].wykonano += (s.ilosc_sztuk || 0);
         });
       });
+      // Zbuduj mapę: zlecenie_id -> lista pracowników z kosztami
+      const zlecPracMap = {}; // zlecenie_id -> [{imie, koszt_pracy, koszt_zbrojenia}]
+      dzienPracownicy.forEach(p => {
+        const ds = dayStats[date][p.user_id];
+        if (!ds) return;
+        ds.sesje.forEach(s => {
+          if (!s.zlecenie_id || !s.zl_numer || s.zl_numer === '—') return;
+          if (s.typ === 'nieprodukcyjna') return;
+          const zid = s.zlecenie_id;
+          if (!zlecPracMap[zid]) zlecPracMap[zid] = {};
+          if (!zlecPracMap[zid][p.user_id]) zlecPracMap[zid][p.user_id] = { imie: p.full_name || p.imie || p.login || ('ID:'+p.user_id), koszt_pracy: 0, koszt_zbrojenia: 0 };
+          if (s.typ === 'zbrojenie') zlecPracMap[zid][p.user_id].koszt_zbrojenia += (parseFloat(s.koszt)||0);
+          else zlecPracMap[zid][p.user_id].koszt_pracy += (parseFloat(s.koszt)||0);
+        });
+      });
+
       const zlecList = Object.values(zlecMap).sort((a,b) => a.numer.localeCompare(b.numer));
       if (!zlecList.length) {
         tabelaHtml += `<div style="color:#888;font-size:12px;padding:12px">Brak danych o zleceniach w tym dniu.</div>`;
@@ -632,6 +649,37 @@ function printRaportWydajnosc(data, od, doDt, typ) {
             <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(z.koszt_zbrojenia)}</td>
             <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${marzaKolor}">${fmtPLNr(marza)}</td>
           </tr>`;
+          // Udział pracowników w zleceniu
+          const pracZlec = Object.values(zlecPracMap[z.id] || {});
+          if (pracZlec.length > 0) {
+            const totalKoszt = koszt || 1; // unikaj dzielenia przez 0
+            pracZlec.sort((a,b) => (b.koszt_pracy+b.koszt_zbrojenia) - (a.koszt_pracy+a.koszt_zbrojenia));
+            tabelaHtml += `<tr style="background:#f0f4ff">
+              <td colspan="7" style="padding:4px 10px 4px 24px;border:1px solid #e0e0e0">
+                <table style="width:100%;border-collapse:collapse;font-size:11px">
+                  <thead><tr style="color:#475569">
+                    <th style="text-align:left;padding:2px 6px;font-weight:600">👷 Pracownik</th>
+                    <th style="text-align:center;padding:2px 6px;font-weight:600">Koszt pracy</th>
+                    <th style="text-align:center;padding:2px 6px;font-weight:600">Koszt zbrojenia</th>
+                    <th style="text-align:center;padding:2px 6px;font-weight:600">Razem koszt</th>
+                    <th style="text-align:center;padding:2px 6px;font-weight:600">Udział %</th>
+                  </tr></thead><tbody>
+                  ${pracZlec.map(pw => {
+                    const kRazem = pw.koszt_pracy + pw.koszt_zbrojenia;
+                    const udzial = totalKoszt > 0 ? ((kRazem / totalKoszt) * 100).toFixed(1) : '0.0';
+                    return `<tr>
+                      <td style="padding:2px 6px;color:#334155">${pw.imie}</td>
+                      <td style="padding:2px 6px;text-align:center;color:#e67e00">${fmtPLNr(pw.koszt_pracy)}</td>
+                      <td style="padding:2px 6px;text-align:center;color:#e67e00">${fmtPLNr(pw.koszt_zbrojenia)}</td>
+                      <td style="padding:2px 6px;text-align:center;font-weight:600;color:#c0392b">${fmtPLNr(kRazem)}</td>
+                      <td style="padding:2px 6px;text-align:center;color:#475569">${udzial}%</td>
+                    </tr>`;
+                  }).join('')}
+                  </tbody>
+                </table>
+              </td>
+            </tr>`;
+          }
         });
         const dzienMarzaKol = dzienMarza >= 0 ? '#1e8a4c' : '#c0392b';
         tabelaHtml += `<tr style="background:#eef3ff;font-weight:700">
@@ -756,7 +804,21 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           if (s.jest_ostatnia_operacja) zlecTotals[zid].wykonano += (s.ilosc_sztuk || 0);
         });
       });
-      const zlecArr = Object.values(zlecTotals).sort((a,b) => a.numer.localeCompare(b.numer));
+      // Zbuduj globalną mapę pracownicy per zlecenie
+      const zlecPracTotals = {}; // zlecenie_id -> {user_id -> {imie, koszt_pracy, koszt_zbrojenia}}
+      pr.forEach(p => {
+        (p.sesje||[]).forEach(s => {
+          if (!s.zlecenie_id || !s.zl_numer || s.zl_numer === '—') return;
+          if (s.typ === 'nieprodukcyjna') return;
+          const zid = s.zlecenie_id;
+          if (!zlecPracTotals[zid]) zlecPracTotals[zid] = {};
+          if (!zlecPracTotals[zid][p.user_id]) zlecPracTotals[zid][p.user_id] = { imie: p.full_name || p.imie || p.login || ('ID:'+p.user_id), koszt_pracy: 0, koszt_zbrojenia: 0 };
+          if (s.typ === 'zbrojenie') zlecPracTotals[zid][p.user_id].koszt_zbrojenia += (parseFloat(s.koszt)||0);
+          else zlecPracTotals[zid][p.user_id].koszt_pracy += (parseFloat(s.koszt)||0);
+        });
+      });
+
+      const zlecArr = Object.entries(zlecTotals).sort((a,b) => a[1].numer.localeCompare(b[1].numer));
       let gPrzychod=0, gKoszt=0, gMarza=0;
       tabelaHtml += `
       <table style="width:100%;border-collapse:collapse;font-size:11px">
@@ -768,7 +830,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Koszty pracy</th>
           <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63;background:#1e3a1e">Marża</th>
         </tr></thead><tbody>`;
-      zlecArr.forEach((z, i) => {
+      zlecArr.forEach(([zid, z], i) => {
         const przychod = z.cena_szt * z.wykonano;
         const koszt = z.koszt_pracy + z.koszt_zbrojenia;
         const marza = przychod - koszt;
@@ -782,6 +844,37 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(koszt)}</td>
           <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${marzaKol}">${fmtPLNr(marza)}</td>
         </tr>`;
+        // Udział pracowników w zleceniu (globalny)
+        const pracZlec = Object.values(zlecPracTotals[zid] || {});
+        if (pracZlec.length > 0) {
+          const totalKoszt = koszt || 1;
+          pracZlec.sort((a,b) => (b.koszt_pracy+b.koszt_zbrojenia) - (a.koszt_pracy+a.koszt_zbrojenia));
+          tabelaHtml += `<tr style="background:#f0f4ff">
+            <td colspan="6" style="padding:3px 10px 3px 20px;border:1px solid #e0e0e0">
+              <table style="width:100%;border-collapse:collapse;font-size:10px">
+                <thead><tr style="color:#475569">
+                  <th style="text-align:left;padding:2px 6px;font-weight:600">👷 Pracownik</th>
+                  <th style="text-align:center;padding:2px 6px;font-weight:600">Koszt pracy</th>
+                  <th style="text-align:center;padding:2px 6px;font-weight:600">Koszt zbrojenia</th>
+                  <th style="text-align:center;padding:2px 6px;font-weight:600">Razem</th>
+                  <th style="text-align:center;padding:2px 6px;font-weight:600">Udział %</th>
+                </tr></thead><tbody>
+                ${pracZlec.map(pw => {
+                  const kRazem = pw.koszt_pracy + pw.koszt_zbrojenia;
+                  const udzial = totalKoszt > 0 ? ((kRazem / totalKoszt) * 100).toFixed(1) : '0.0';
+                  return `<tr>
+                    <td style="padding:2px 6px;color:#334155">${pw.imie}</td>
+                    <td style="padding:2px 6px;text-align:center;color:#e67e00">${fmtPLNr(pw.koszt_pracy)}</td>
+                    <td style="padding:2px 6px;text-align:center;color:#e67e00">${fmtPLNr(pw.koszt_zbrojenia)}</td>
+                    <td style="padding:2px 6px;text-align:center;font-weight:600;color:#c0392b">${fmtPLNr(kRazem)}</td>
+                    <td style="padding:2px 6px;text-align:center;color:#475569">${udzial}%</td>
+                  </tr>`;
+                }).join('')}
+                </tbody>
+              </table>
+            </td>
+          </tr>`;
+        }
       });
       const gMarzaKol = gMarza >= 0 ? '#1e8a4c' : '#c0392b';
       tabelaHtml += `<tr style="background:#1a2233;color:#fff;font-weight:700">
@@ -1394,7 +1487,6 @@ function renderMajsterWydajnosc() {
         + '<option value="skrocony" ' + (state.raportWydTyp==='skrocony'?'selected':'') + '>Skrócony</option>'
         + '<option value="pelny" ' + (state.raportWydTyp==='pelny'?'selected':'') + '>Pełny</option>'
         + '<option value="zarobki" ' + (state.raportWydTyp==='zarobki'?'selected':'') + '>Marża zleceń</option>'
-        + '<option value="zarobki_pracownicy" ' + (state.raportWydTyp==='zarobki_pracownicy'?'selected':'') + '>Zarobki pracowników</option>'
         + '</select></div>'
         + '<button class="btn btn-accent" style="padding:8px 14px;white-space:nowrap" onclick="generateRaportWydajnoscPDF()">📥 Generuj PDF</button>'
         + '</div></div>';

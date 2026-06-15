@@ -141,6 +141,67 @@ async function uploadStepForZlecenie(zlecenieId) {
   input.click();
 }
 
+// ── Upload/zmiana STEP po zeskanowaniu kodu QR zlecenia (G lub P) ─────────────
+async function uploadStepFromQR(zlecenieId) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.onchange = async function() {
+    const file = this.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    const MAX = 100 * 1024 * 1024;
+    if (file.size > MAX) { alert('Plik za duży (maks. 100 MB)'); return; }
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:10000;background:#1e3a5f;border:1px solid #3b82f6;color:#e8eaf0;padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 4px 12px #0008;min-width:220px';
+    toast.textContent = '⏳ Wgrywanie STEP... 0%';
+    document.body.appendChild(toast);
+    try {
+      const buf = await file.arrayBuffer();
+      const result = await new Promise((res, rej) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', SERVER_URL.replace(/\/$/, '') + '/api/step-upload');
+        xhr.setRequestHeader('x-api-key', API_KEY);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('x-filename', encodeURIComponent(file.name));
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable)
+            toast.textContent = '⏳ Wgrywanie STEP... ' + Math.round(e.loaded/e.total*100) + '%';
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) res(JSON.parse(xhr.responseText));
+          else rej(new Error(xhr.responseText || 'HTTP ' + xhr.status));
+        };
+        xhr.onerror = () => rej(new Error('Błąd sieci'));
+        xhr.send(buf);
+      });
+      if (result.ok && result.url) {
+        await patch('/api/zlecenia/' + zlecenieId + '/model3d', {model_3d_url: result.url});
+        toast.style.background = '#1a3a1a';
+        toast.style.borderColor = '#4ade80';
+        toast.textContent = '✅ Wgrano: ' + file.name;
+        setTimeout(() => toast.remove(), 3000);
+        // Odśwież modal QR jeśli dotyczy tego zlecenia
+        const m = state.qrZleceniePickerModal;
+        if (m?.zlecenie?.id === zlecenieId) {
+          setState({qrZleceniePickerModal: {...m, zlecenie: {...m.zlecenie, model_3d_url: result.url}}}, true);
+          render();
+        }
+      } else {
+        throw new Error(result.error || 'Nieznany błąd');
+      }
+    } catch(e) {
+      toast.style.background = '#3a1a1a';
+      toast.style.borderColor = '#f87171';
+      toast.textContent = '✗ Błąd: ' + e.message;
+      setTimeout(() => toast.remove(), 4000);
+    }
+  };
+  input.click();
+}
+
 // ── Upload STEP dla wyrobu G/P (niezależnie od zlecenia) ──────────────────────
 async function uploadStepForWyrob(wyrobId) {
   const input = document.createElement('input');

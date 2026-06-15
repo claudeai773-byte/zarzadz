@@ -575,8 +575,10 @@ function printRaportWydajnosc(data, od, doDt, typ) {
       tabelaHtml += `</tbody></table>`;
     } else if (typ === 'zarobki') {
       // ZAROBKI – zestawienie per zlecenie: przychód - koszty = marża
+      // Przychód liczony od FAKTYCZNIE WYKONANEJ ilości (ostatnia operacja produkcyjna
+      // zlecenia danego dnia), a nie od całej zleconej ilości sztuk.
       // Zbierz sesje tego dnia ze wszystkich pracowników
-      const zlecMap = {}; // zlecenie_id -> {numer, cena_szt, ilosc, koszt_pracy, koszt_zbrojenia}
+      const zlecMap = {}; // zlecenie_id -> {numer, cena_szt, wykonano, koszt_pracy, koszt_zbrojenia}
       dzienPracownicy.forEach(p => {
         const ds = dayStats[date][p.user_id];
         if (!ds) return;
@@ -588,13 +590,15 @@ function printRaportWydajnosc(data, od, doDt, typ) {
             zlecMap[zid] = {
               numer: s.zl_numer,
               cena_szt: s.cena_brutto_szt || 0,
-              ilosc: s.zl_ilosc || 0,
+              wykonano: 0,
               koszt_pracy: 0,
               koszt_zbrojenia: 0,
             };
           }
           if (s.typ === 'zbrojenie') zlecMap[zid].koszt_zbrojenia += (parseFloat(s.koszt)||0);
           else zlecMap[zid].koszt_pracy += (parseFloat(s.koszt)||0);
+          // Faktycznie wykonana ilość – tylko sesje ostatniej operacji produkcyjnej
+          if (s.jest_ostatnia_operacja) zlecMap[zid].wykonano += (s.ilosc_sztuk || 0);
         });
       });
       const zlecList = Object.values(zlecMap).sort((a,b) => a.numer.localeCompare(b.numer));
@@ -606,7 +610,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           <thead><tr style="background:#3d4a63;color:#fff">
             <th style="padding:7px 10px;text-align:left">Zlecenie</th>
             <th style="padding:7px 10px;text-align:center">Cena/szt</th>
-            <th style="padding:7px 10px;text-align:center">Ilość</th>
+            <th style="padding:7px 10px;text-align:center">Wykonano</th>
             <th style="padding:7px 10px;text-align:center">Przychód</th>
             <th style="padding:7px 10px;text-align:center">Koszt pracy</th>
             <th style="padding:7px 10px;text-align:center">Koszt zbrojenia</th>
@@ -614,7 +618,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           </tr></thead><tbody>`;
         let dzienPrzychod = 0, dzienKoszt = 0, dzienMarza = 0;
         zlecList.forEach((z, i) => {
-          const przychod = z.cena_szt * z.ilosc;
+          const przychod = z.cena_szt * z.wykonano;
           const koszt = z.koszt_pracy + z.koszt_zbrojenia;
           const marza = przychod - koszt;
           const marzaKolor = marza >= 0 ? '#1e8a4c' : '#c0392b';
@@ -622,7 +626,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
           tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
             <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${z.numer}</td>
             <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(z.cena_szt)}</td>
-            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${z.ilosc}</td>
+            <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${z.wykonano}</td>
             <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8;font-weight:600">${fmtPLNr(przychod)}</td>
             <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(z.koszt_pracy)}</td>
             <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(z.koszt_zbrojenia)}</td>
@@ -638,6 +642,35 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         </tr>`;
         tabelaHtml += `</tbody></table>`;
       }
+    } else if (typ === 'zarobki_pracownicy') {
+      // ZAROBKI PRACOWNIKÓW – ile każdy pracownik zarobił danego dnia
+      tabelaHtml += `
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="background:#3d4a63;color:#fff">
+          <th style="padding:7px 10px;text-align:left">Pracownik</th>
+          <th style="padding:7px 10px;text-align:center">Zarobek za pracę</th>
+          <th style="padding:7px 10px;text-align:center">Zarobek za zbrojenie</th>
+          <th style="padding:7px 10px;text-align:center;background:#1e3a1e">Zarobek razem</th>
+        </tr></thead><tbody>`;
+      let dzienZarobek = 0, dzienZarobekPracy = 0, dzienZarobekZbr = 0;
+      dzienPracownicy.forEach((p, i) => {
+        const ds = dayStats[date][p.user_id];
+        const zarobek = ds.koszt_pracy + ds.koszt_zbrojenia;
+        dzienZarobek += zarobek; dzienZarobekPracy += ds.koszt_pracy; dzienZarobekZbr += ds.koszt_zbrojenia;
+        tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(ds.koszt_pracy)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(ds.koszt_zbrojenia)}</td>
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:#1e8a4c">${fmtPLNr(zarobek)}</td>
+        </tr>`;
+      });
+      tabelaHtml += `<tr style="background:#eef3ff;font-weight:700">
+        <td style="padding:6px 10px;border:1px solid #e0e0e0">Razem za dzień</td>
+        <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(dzienZarobekPracy)}</td>
+        <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(dzienZarobekZbr)}</td>
+        <td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;color:#1e8a4c">${fmtPLNr(dzienZarobek)}</td>
+      </tr>`;
+      tabelaHtml += `</tbody></table>`;
     } else {
       // PEŁNY – każdy pracownik z rozpiską sesji dla tego dnia
       dzienPracownicy.forEach(p => {
@@ -697,6 +730,8 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   if (sortedDates.length > 0 && pr.length > 0) {
     const tytulPodsum = typ === 'zarobki'
       ? `💰 Podsumowanie marży — ${od} – ${doDt}`
+      : typ === 'zarobki_pracownicy'
+      ? `💵 Podsumowanie zarobków pracowników — ${od} – ${doDt}`
       : `📊 Podsumowanie wydajności — ${od} – ${doDt}`;
     tabelaHtml += `
     <div style="margin-top:30px;page-break-before:auto">
@@ -706,17 +741,19 @@ function printRaportWydajnosc(data, od, doDt, typ) {
 
     if (typ === 'zarobki') {
       // Podsumowanie: per zlecenie przez cały okres
-      const zlecTotals = {}; // zlecenie_id -> {numer, cena_szt, ilosc, koszt_pracy, koszt_zbrojenia}
+      // Przychód liczony od FAKTYCZNIE WYKONANEJ ilości (ostatnia operacja produkcyjna)
+      const zlecTotals = {}; // zlecenie_id -> {numer, cena_szt, wykonano, koszt_pracy, koszt_zbrojenia}
       pr.forEach(p => {
         (p.sesje||[]).forEach(s => {
           if (!s.zlecenie_id || !s.zl_numer || s.zl_numer === '—') return;
           if (s.typ === 'nieprodukcyjna') return;
           const zid = s.zlecenie_id;
           if (!zlecTotals[zid]) {
-            zlecTotals[zid] = {numer:s.zl_numer, cena_szt:s.cena_brutto_szt||0, ilosc:s.zl_ilosc||0, koszt_pracy:0, koszt_zbrojenia:0};
+            zlecTotals[zid] = {numer:s.zl_numer, cena_szt:s.cena_brutto_szt||0, wykonano:0, koszt_pracy:0, koszt_zbrojenia:0};
           }
           if (s.typ === 'zbrojenie') zlecTotals[zid].koszt_zbrojenia += (parseFloat(s.koszt)||0);
           else zlecTotals[zid].koszt_pracy += (parseFloat(s.koszt)||0);
+          if (s.jest_ostatnia_operacja) zlecTotals[zid].wykonano += (s.ilosc_sztuk || 0);
         });
       });
       const zlecArr = Object.values(zlecTotals).sort((a,b) => a.numer.localeCompare(b.numer));
@@ -726,13 +763,13 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         <thead><tr style="background:#2e3548;color:#fff">
           <th style="padding:7px 10px;text-align:left;border:1px solid #3d4a63">Zlecenie</th>
           <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Cena/szt</th>
-          <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Ilość</th>
+          <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Wykonano</th>
           <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Przychód</th>
           <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63">Koszty pracy</th>
           <th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63;background:#1e3a1e">Marża</th>
         </tr></thead><tbody>`;
       zlecArr.forEach((z, i) => {
-        const przychod = z.cena_szt * z.ilosc;
+        const przychod = z.cena_szt * z.wykonano;
         const koszt = z.koszt_pracy + z.koszt_zbrojenia;
         const marza = przychod - koszt;
         const marzaKol = marza >= 0 ? '#1e8a4c' : '#c0392b';
@@ -740,7 +777,7 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         tabelaHtml += `<tr style="background:${i%2?'#fff':'#f9fafb'}">
           <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${z.numer}</td>
           <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(z.cena_szt)}</td>
-          <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center">${z.ilosc}</td>
+          <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center">${z.wykonano}</td>
           <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#1a73e8;font-weight:600">${fmtPLNr(przychod)}</td>
           <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#e67e00">${fmtPLNr(koszt)}</td>
           <td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;font-weight:700;color:${marzaKol}">${fmtPLNr(marza)}</td>
@@ -753,6 +790,45 @@ function printRaportWydajnosc(data, od, doDt, typ) {
         <td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center">${fmtPLNr(gKoszt)}</td>
         <td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center;color:${gMarzaKol}">${fmtPLNr(gMarza)}</td>
       </tr>`;
+      tabelaHtml += `</tbody></table>`;
+    } else if (typ === 'zarobki_pracownicy') {
+      // Tabela zarobków: pracownicy × dni
+      tabelaHtml += `
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="background:#2e3548;color:#fff">
+          <th style="padding:7px 10px;text-align:left;border:1px solid #3d4a63;min-width:120px">Pracownik</th>`;
+      sortedDates.forEach(d => {
+        const [y,m,dd] = d.split('-');
+        tabelaHtml += `<th style="padding:7px 6px;text-align:center;border:1px solid #3d4a63;min-width:68px">${parseInt(dd,10)}.${parseInt(m,10)}</th>`;
+      });
+      tabelaHtml += `<th style="padding:7px 10px;text-align:center;border:1px solid #3d4a63;background:#1e3a1e">Łącznie</th>
+        </tr></thead><tbody>`;
+      let sumaWszyscy = 0;
+      const sumaDniWszyscy = {}; sortedDates.forEach(d => sumaDniWszyscy[d] = 0);
+      pr.forEach((p, pi) => {
+        let totalZarobek = 0;
+        tabelaHtml += `<tr style="background:${pi%2?'#fff':'#f9fafb'}">
+          <td style="padding:6px 10px;border:1px solid #e0e0e0;font-weight:600">${p.full_name}</td>`;
+        sortedDates.forEach(d => {
+          const ds = dayStats[d][p.user_id];
+          if (!ds) {
+            tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center;color:#bbb">—</td>`;
+          } else {
+            const zarobek = ds.koszt_pracy + ds.koszt_zbrojenia;
+            totalZarobek += zarobek;
+            sumaDniWszyscy[d] += zarobek;
+            tabelaHtml += `<td style="padding:6px 6px;border:1px solid #e0e0e0;text-align:center">${fmtPLNr(zarobek)}</td>`;
+          }
+        });
+        sumaWszyscy += totalZarobek;
+        tabelaHtml += `<td style="padding:6px 10px;border:1px solid #e0e0e0;text-align:center;font-weight:700;background:#eafaf0;color:#1e8a4c">${fmtPLNr(totalZarobek)}</td></tr>`;
+      });
+      tabelaHtml += `<tr style="background:#1a2233;color:#fff;font-weight:700">
+        <td style="padding:7px 10px;border:1px solid #3d4a63">RAZEM</td>`;
+      sortedDates.forEach(d => {
+        tabelaHtml += `<td style="padding:7px 6px;border:1px solid #3d4a63;text-align:center">${fmtPLNr(sumaDniWszyscy[d])}</td>`;
+      });
+      tabelaHtml += `<td style="padding:7px 10px;border:1px solid #3d4a63;text-align:center">${fmtPLNr(sumaWszyscy)}</td></tr>`;
       tabelaHtml += `</tbody></table>`;
     } else {
     // Tabela wydajności: pracownicy × dni
@@ -809,8 +885,8 @@ function printRaportWydajnosc(data, od, doDt, typ) {
   </head><body>
   <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #222;padding-bottom:10px;margin-bottom:18px">
     <div>
-      <div style="font-size:22px;font-weight:700">Raport wydajności pracowników</div>
-      <div style="font-size:13px;color:#555">${typ==='skrocony'?'Raport skrócony':typ==='zarobki'?'Raport marży (przychód – koszty pracy)':'Raport pełny'} | Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
+      <div style="font-size:22px;font-weight:700">${typ==='zarobki_pracownicy'?'Raport zarobków pracowników':'Raport wydajności pracowników'}</div>
+      <div style="font-size:13px;color:#555">${typ==='skrocony'?'Raport skrócony':typ==='zarobki'?'Raport marży zleceń (przychód od faktycznie wykonanej ilości – koszty pracy)':typ==='zarobki_pracownicy'?'Zarobki pracowników wg dni':'Raport pełny'} | Okres: ${od} – ${doDt} | Wygenerowano: ${new Date().toLocaleString('pl-PL')}</div>
     </div>
     <div style="text-align:right;font-size:13px">Pracowników: <b>${pr.length}</b> | Zmiana = <b>${ZMIANA_MIN} min</b></div>
   </div>
@@ -1317,7 +1393,8 @@ function renderMajsterWydajnosc() {
         + '<select id="rwd-typ" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px">'
         + '<option value="skrocony" ' + (state.raportWydTyp==='skrocony'?'selected':'') + '>Skrócony</option>'
         + '<option value="pelny" ' + (state.raportWydTyp==='pelny'?'selected':'') + '>Pełny</option>'
-        + '<option value="zarobki" ' + (state.raportWydTyp==='zarobki'?'selected':'') + '>Zarobki</option>'
+        + '<option value="zarobki" ' + (state.raportWydTyp==='zarobki'?'selected':'') + '>Marża zleceń</option>'
+        + '<option value="zarobki_pracownicy" ' + (state.raportWydTyp==='zarobki_pracownicy'?'selected':'') + '>Zarobki pracowników</option>'
         + '</select></div>'
         + '<button class="btn btn-accent" style="padding:8px 14px;white-space:nowrap" onclick="generateRaportWydajnoscPDF()">📥 Generuj PDF</button>'
         + '</div></div>';

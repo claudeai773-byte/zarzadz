@@ -378,10 +378,14 @@ function renderQRZleceniePickerModal() {
       <h3>📋 ${z.numer}</h3>
       <div style="color:var(--dim);font-size:13px;margin-bottom:10px">${z.nazwa}</div>
       ${z.model_3d_url ? `
-      <button class="btn btn-blue" style="width:100%;margin-bottom:12px;font-size:14px"
+      <button class="btn btn-blue" style="width:100%;margin-bottom:8px;font-size:14px"
               onclick="openStep3DViewer('${z.model_3d_url.replace(/'/g,"\\'")}')">
         🧊 Podgląd modelu 3D (.STEP)
       </button>` : ''}
+      <button class="btn" style="width:100%;margin-bottom:12px;font-size:13px;background:rgba(139,92,246,0.12);border:1px solid #8b5cf640;color:#a78bfa"
+              onclick="uploadStepFromQR(${z.id})">
+        📎 ${z.model_3d_url ? 'Zmień plik STEP' : 'Dodaj plik STEP (.step/.stp)'}
+      </button>
       <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <span style="font-size:12px;color:var(--dim)">Zlecona ilość:</span>

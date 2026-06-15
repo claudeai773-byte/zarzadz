@@ -52,7 +52,41 @@ async function _initStep3DScene(stepUrl) {
     // 1. Biblioteki Three.js
     _setStep3dStatus('⏳ Ładowanie Three.js...', '#e6a020');
     await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
-    await _loadScript('https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js');
+    // OrbitControls dla r128 – musi być ładowany przez fetch+eval bo jsdelivr blokuje jako JS module
+    if (typeof THREE !== 'undefined' && !THREE.OrbitControls) {
+      try {
+        const ocSrc = await fetch('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js').then(r => r.text());
+        // eslint-disable-next-line no-eval
+        eval(ocSrc);
+      } catch(_) {
+        // Fallback: prosta kamera bez orbit controls
+        THREE.OrbitControls = function(camera, domElement) {
+          this.camera = camera; this.domElement = domElement;
+          this.enableDamping = false; this.dampingFactor = 0.05;
+          this.update = function() {};
+          let isDown = false, lastX = 0, lastY = 0;
+          let phi = Math.PI/3, theta = 0;
+          let radius = camera.position.length();
+          const updateCam = () => {
+            camera.position.set(
+              radius * Math.sin(phi) * Math.sin(theta),
+              radius * Math.cos(phi),
+              radius * Math.sin(phi) * Math.cos(theta)
+            );
+            camera.lookAt(0, 0, 0);
+          };
+          domElement.addEventListener('mousedown', e => { isDown = true; lastX = e.clientX; lastY = e.clientY; });
+          domElement.addEventListener('mouseup', () => isDown = false);
+          domElement.addEventListener('mousemove', e => {
+            if (!isDown) return;
+            theta -= (e.clientX - lastX) * 0.01;
+            phi = Math.max(0.1, Math.min(Math.PI - 0.1, phi - (e.clientY - lastY) * 0.01));
+            lastX = e.clientX; lastY = e.clientY; updateCam();
+          });
+          domElement.addEventListener('wheel', e => { radius = Math.max(0.5, radius + e.deltaY * 0.01); updateCam(); });
+        };
+      }
+    }
 
     // 2. Pobranie pliku STEP przez proxy (dłuższy timeout dla telefonu)
     _setStep3dStatus('⏳ Pobieranie pliku STEP...', '#e6a020');

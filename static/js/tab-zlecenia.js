@@ -468,127 +468,147 @@ function renderZlecenia() {
   if (state.zlecenieModal !== null) {
     const z = state.zlecenieModal;
     const isNew = !z.id;
+
+    // ── Kolumna PRAWA: Struktura G→P z przyciskami STEP ──────────────────────
+    const rightColContent = (() => {
+      const headerBtns = z.id && z.zlTree && z.zlTree !== 'brak'
+        ? `<button class="btn-sm" style="background:var(--entry);color:var(--dim);border:1px solid var(--border)" onclick="setState({zlecenieModal:{...state.zlecenieModal,zlTree:null,zlTreeLoading:false}})">↺</button>`
+        : '';
+      let treeHtml;
+      if (!z.id) {
+        treeHtml = `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:12px;font-size:12px;color:var(--dim);text-align:center">Zapisz zlecenie, aby zobaczyć strukturę G→P</div>`;
+      } else if (z.zlTreeLoading) {
+        treeHtml = `<div style="text-align:center;padding:24px;color:var(--dim);font-size:12px">⏳ Ładowanie struktury...</div>`;
+      } else if (!z.zlTree) {
+        treeHtml = `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:12px;text-align:center">
+          <button onclick="zlModalLoadTree()" style="background:var(--blue);color:#fff;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700">🌳 Wczytaj strukturę G→P</button>
+        </div>`;
+      } else if (z.zlTree === 'brak') {
+        treeHtml = `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:12px;font-size:12px;color:var(--dim)">Brak struktury G→P dla wyrobu <strong>${z.numer}</strong> w bazie drzew.</div>`;
+      } else {
+        treeHtml = `<div style="background:var(--entry);border-radius:10px;padding:8px;overflow-x:auto;max-height:calc(100vh - 240px);overflow-y:auto">${renderZlModalGPTree(z.zlTree, z.id, z.ilosc_sztuk || 1)}</div>`;
+      }
+
+      // STEP dla głównego zlecenia G
+      const stepG = z.model_3d_url;
+      const stepGRow = `
+        <div style="background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:8px 10px;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">📐 Plik STEP – G: ${z.numer||'—'}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            ${stepG
+              ? `<button onclick="openStep3DViewer('${stepG.replace(/'/g,"\\'")}') " style="background:rgba(59,130,246,0.15);border:1px solid #3b82f640;color:#60a5fa;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer">🧊 Podgląd</button>
+                 <button onclick="zlModalUploadStepG(${z.id})" style="background:rgba(139,92,246,0.12);border:1px solid #8b5cf640;color:#a78bfa;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer">📎 Zmień STEP</button>
+                 <span style="font-size:11px;color:var(--dim)">✅ Wgrany</span>`
+              : `<button onclick="zlModalUploadStepG(${z.id})" style="background:rgba(139,92,246,0.15);border:1px solid #8b5cf660;color:#a78bfa;border-radius:6px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:700">📎 Wgraj plik STEP</button>`
+            }
+            <div id="zl-stepg-status" style="font-size:11px;color:var(--dim)"></div>
+          </div>
+          <input type="hidden" id="zl-model3d" value="${stepG||''}">
+        </div>`;
+
+      return `
+        <div style="font-size:12px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+          🌳 Struktura G → P ${headerBtns}
+        </div>
+        ${stepGRow}
+        ${treeHtml}`;
+    })();
+
     html += `
-    <div class="modal-overlay">
-      <div class="modal">
-        <button class="modal-close" onclick="setState({zlecenieModal:null})">×</button>
-        <h3>${z.id ? '✏ Edytuj zlecenie' : '+ Nowe zlecenie'}</h3>
-        ${isNew ? `
-        <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px">
-          <div style="font-size:11px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
-            📂 Wczytaj istniejące zlecenie (autouzupełnienie)
+    <div class="modal-overlay" style="align-items:flex-start;padding:10px">
+      <div style="background:var(--panel);border-radius:14px;width:100%;max-width:1100px;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px #000a">
+        <!-- Nagłówek -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 12px;border-bottom:1px solid var(--border);flex-shrink:0">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:18px">🔧</span>
+            <div>
+              <div style="font-size:16px;font-weight:700;color:var(--accent)">${z.id ? '✏ Edytuj zlecenie produkcyjne' : '+ Nowe zlecenie produkcyjne'}</div>
+              ${z.id ? `<div style="font-size:12px;color:var(--dim)">${z.numer} – ${z.nazwa||''}</div>` : ''}
+            </div>
           </div>
-          <div style="display:flex;gap:8px">
-            <input id="zl-search" type="text" placeholder="Wpisz numer lub nazwę..." 
-                   style="flex:1;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;outline:none"
-                   oninput="filterZleceniaSearch(this.value)"
-                   onfocus="filterZleceniaSearch(this.value)">
-          </div>
-          <div id="zl-search-results" style="margin-top:6px"></div>
-          ${state.autofillOperacje && state.autofillOperacje.length ? `
-          <div style="margin-top:8px;background:rgba(39,174,96,0.08);border:1px solid var(--green);border-radius:6px;padding:8px 10px;">
-            <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:6px">
-              ✅ Zostaną skopiowane operacje (${state.autofillOperacje.length}):
-            </div>
-            ${state.autofillOperacje.map(op =>
-              `<div style="font-size:12px;padding:2px 0;border-bottom:1px solid rgba(39,174,96,0.2)">
-                <span style="color:var(--dim)">${op.kolejnosc}.</span>
-                <span style="margin-left:6px">${op.nazwa}</span>
-                ${op.stanowisko ? `<span style="color:var(--dim);margin-left:6px">| ${op.stanowisko}</span>` : ''}
-                ${op.czas_norma ? `<span style="color:var(--accent);margin-left:6px">| ${op.czas_norma} min/szt</span>` : ''}
-              </div>`
-            ).join('')}
-          </div>` : ''}
-          ${state.autofillProdukty && state.autofillProdukty.length ? `
-          <div style="margin-top:6px;background:rgba(52,152,219,0.08);border:1px solid var(--blue);border-radius:6px;padding:8px 10px;">
-            <div style="font-size:11px;font-weight:700;color:var(--blue);margin-bottom:6px">
-              🛒 Zostaną skopiowane produkty (${state.autofillProdukty.length}):
-            </div>
-            ${state.autofillProdukty.map(p =>
-              `<div style="font-size:12px;padding:2px 0;border-bottom:1px solid rgba(52,152,219,0.2)">
-                <span>${p.nazwa}</span>
-                <span style="color:var(--dim);margin-left:6px">${p.ilosc} szt. × ${fmtPLN(p.cena)}</span>
-              </div>`
-            ).join('')}
-          </div>` : ''}
-          ${state.autofillStepUrl ? `
-          <div style="margin-top:6px;background:rgba(155,89,182,0.08);border:1px solid #9b59b6;border-radius:6px;padding:8px 10px;font-size:12px;color:#9b59b6;font-weight:700;">
-            📐 Plik STEP zostanie przypisany z wzorca
-          </div>` : ''}
-        </div>` : ''}
-        <div class="field"><label>Numer</label><input id="zl-numer" type="text" value="${z.numer||''}"></div>
-        <div class="field"><label>Nazwa</label><input id="zl-nazwa" type="text" value="${z.nazwa||''}"></div>
-        <div class="field"><label>Opis</label><textarea id="zl-opis">${z.opis||''}</textarea></div>
-        <div class="field"><label>Termin</label><input id="zl-termin" type="date" value="${z.termin||''}"></div>
-        <div class="field"><label>Ilość sztuk</label><input id="zl-ilosc" type="number" value="${z.ilosc_sztuk||1}" min="1"></div>
-        <div class="field"><label>Cena brutto/szt (zł)</label><input id="zl-cena" type="number" step="0.01" value="${z.cena_brutto_szt||0}"></div>
-        <div class="field">
-          <label>Model 3D (.step / .stp)</label>
-          <div id="zl-model3d-wrap" style="display:flex;flex-direction:column;gap:6px">
-            <div id="zl-model3d-info" style="display:${z.model_3d_url ? 'flex' : 'none'};align-items:center;gap:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px">
-              <span style="font-size:13px;flex:1;color:var(--text)">✅ Plik wgrany</span>
-              <button type="button" class="btn-sm" onclick="stepModelRemove()">🗑 Usuń</button>
-            </div>
-            <div id="zl-model3d-upload-area" style="${z.model_3d_url ? 'display:none' : ''}">
-              <input type="file" id="zl-model3d-file" accept=".step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*"
-                     style="font-size:13px;width:100%"
-                     onchange="uploadStepFile(this)">
-            </div>
-            <div id="zl-model3d-status" style="font-size:12px;color:var(--dim)"></div>
-          </div>
-          <input type="hidden" id="zl-model3d" value="${z.model_3d_url||''}" >
-        </div>
-        <div class="field">
-          <label>Materiał od klienta</label>
-          <select id="zl-mat" onchange="toggleBomSection(this.value)">
-            <option value="0" ${!z.material_od_klienta?'selected':''}>Nie – definiuję materiał (BOM)</option>
-            <option value="1" ${z.material_od_klienta?'selected':''}>Tak – klient dostarcza materiał</option>
-          </select>
-        </div>
-        <div id="zl-bom-section" style="display:${z.material_od_klienta ? 'none' : 'block'}">
-          ${z.id ? renderBomSection(z.id) : '<div style="background:var(--entry);border:1px dashed var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">📦 <b>BOM</b> – Zapisz zlecenie, aby zdefiniować materiały</div>'}
+          <button onclick="setState({zlecenieModal:null})" style="background:var(--entry);border:none;color:var(--text);font-size:20px;width:36px;height:36px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0">×</button>
         </div>
 
-        <!-- Sekcja Półprodukty P -->
-        <div style="margin-bottom:14px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#a78bfa;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
-            🔩 Półprodukty P
-            ${z.id ? `<button class="btn-sm" style="background:rgba(167,139,250,0.15);color:#a78bfa;border:1px solid rgba(167,139,250,0.3);margin-left:auto" onclick="openAddPolprodukt(${z.id})">+ Dodaj</button>` : ''}
-          </div>
-          ${z.id ? `<div id="pm-polprodukty-list-${z.id}">
-            ${renderPolproduktList(z.id)}
-          </div>` : `<div style="background:var(--entry);border:1px dashed rgba(167,139,250,0.4);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim)">Zapisz zlecenie, aby dodać półprodukty P</div>`}
-        </div>
+        <!-- Dwie kolumny -->
+        <div style="display:flex;flex:1;overflow:hidden;gap:0">
 
-        <!-- Sekcja Materiały M -->
-        <div style="margin-bottom:14px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--orange);letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
-            📦 Materiały M
-            ${z.id ? `<button class="btn-sm" style="background:rgba(243,156,18,0.12);color:var(--orange);border:1px solid rgba(243,156,18,0.3);margin-left:auto" onclick="openAddMaterial(${z.id})">+ Dodaj</button>` : ''}
-          </div>
-          ${z.id ? `<div id="pm-materialy-list-${z.id}">
-            ${renderMaterialList(z.id)}
-          </div>` : `<div style="background:var(--entry);border:1px dashed rgba(243,156,18,0.4);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim)">Zapisz zlecenie, aby dodać materiały M</div>`}
-        </div>
+          <!-- LEWA: Dane zlecenia -->
+          <div style="flex:0 0 380px;min-width:280px;max-width:400px;overflow-y:auto;padding:14px 16px;border-right:1px solid var(--border)">
+            <div style="font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+              📋 Dane zlecenia
+            </div>
 
-        <!-- Sekcja Struktura G→P (pliki STEP) -->
-        <div style="margin-bottom:14px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#60a5fa;letter-spacing:.5px;margin-bottom:8px;display:flex;align-items:center;gap:8px">
-            🌳 Struktura G→P (pliki STEP)
-            ${z.id && z.zlTree && z.zlTree !== 'brak' ? `<button class="btn-sm" style="background:var(--entry);color:var(--dim);border:1px solid var(--border);margin-left:auto" onclick="setState({zlecenieModal:{...state.zlecenieModal,zlTree:null,zlTreeLoading:false}})">↺ Odśwież</button>` : ''}
-          </div>
-          ${!z.id ? `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim)">Zapisz zlecenie, aby zobaczyć strukturę G→P i dołączyć pliki STEP</div>`
-            : z.zlTreeLoading ? `<div style="text-align:center;padding:16px;color:var(--dim);font-size:12px">⏳ Ładowanie struktury...</div>`
-            : !z.zlTree ? `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px">
-                <button onclick="zlModalLoadTree()" style="background:var(--blue);color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700">Wczytaj strukturę G→P</button>
-              </div>`
-            : z.zlTree === 'brak' ? `<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--dim)">Brak struktury G→P dla wyrobu <strong>${z.numer}</strong> w bazie drzew.</div>`
-            : `<div style="background:var(--entry);border-radius:10px;padding:10px;overflow-x:auto">${renderDrzewoNode(z.zlTree, 0, z.ilosc_sztuk || 1)}</div>`
-          }
-        </div>
+            ${isNew ? `
+            <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+              <div style="font-size:11px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">📂 Autouzupełnienie ze wzorca</div>
+              <input id="zl-search" type="text" placeholder="Wpisz numer lub nazwę..."
+                     style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;outline:none;box-sizing:border-box"
+                     oninput="filterZleceniaSearch(this.value)" onfocus="filterZleceniaSearch(this.value)">
+              <div id="zl-search-results" style="margin-top:6px"></div>
+              ${state.autofillOperacje && state.autofillOperacje.length ? `
+              <div style="margin-top:8px;background:rgba(39,174,96,0.08);border:1px solid var(--green);border-radius:6px;padding:8px 10px;">
+                <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:4px">✅ Operacje (${state.autofillOperacje.length}):</div>
+                ${state.autofillOperacje.slice(0,4).map(op => `<div style="font-size:11px;padding:1px 0;color:var(--dim)">${op.kolejnosc}. ${op.nazwa}</div>`).join('')}
+                ${state.autofillOperacje.length > 4 ? `<div style="font-size:11px;color:var(--dim)">+ ${state.autofillOperacje.length - 4} więcej...</div>` : ''}
+              </div>` : ''}
+              ${state.autofillStepUrl ? `<div style="margin-top:6px;font-size:11px;color:#9b59b6;background:rgba(155,89,182,0.08);border:1px solid #9b59b6;border-radius:6px;padding:6px 10px;font-weight:700">📐 Plik STEP zostanie przypisany z wzorca</div>` : ''}
+            </div>` : ''}
 
-        ${z.id ? renderProduktyZleceniaForm(z.id) : '<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:var(--dim)">💡 Zapisz zlecenie, aby móc dodać produkty/zakupy</div>'}
-        <button class="btn btn-accent" onclick="saveZlecenieForm(${z.id||0})">💾 Zapisz</button>
+            <div class="field"><label>Numer zlecenia *</label><input id="zl-numer" type="text" value="${z.numer||''}"></div>
+            <div class="field"><label>Nazwa zlecenia *</label><input id="zl-nazwa" type="text" value="${z.nazwa||''}"></div>
+            <div class="field"><label>Opis</label><textarea id="zl-opis" style="min-height:56px">${z.opis||''}</textarea></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div class="field"><label>Termin</label><input id="zl-termin" type="date" value="${z.termin||''}"></div>
+              <div class="field"><label>Ilość sztuk</label><input id="zl-ilosc" type="number" value="${z.ilosc_sztuk||1}" min="1"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div class="field"><label>Cena brutto/szt (zł)</label><input id="zl-cena" type="number" step="0.01" value="${z.cena_brutto_szt||0}"></div>
+              <div class="field">
+                <label>Materiał od klienta</label>
+                <select id="zl-mat" onchange="toggleBomSection(this.value)">
+                  <option value="0" ${!z.material_od_klienta?'selected':''}>Nie – definiuję materiał</option>
+                  <option value="1" ${z.material_od_klienta?'selected':''}>Tak – klient dostarcza</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- BOM -->
+            <div id="zl-bom-section" style="display:${z.material_od_klienta ? 'none' : 'block'}">
+              ${z.id ? renderBomSection(z.id) : '<div style="background:var(--entry);border:1px dashed var(--accent);border-radius:8px;padding:10px 12px;margin-bottom:10px;font-size:12px;color:var(--dim)">📦 <b>BOM</b> – Zapisz zlecenie, aby zdefiniować materiały</div>'}
+            </div>
+
+            <!-- Półprodukty P -->
+            <div style="margin-bottom:10px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#a78bfa;letter-spacing:.5px;margin-bottom:6px;display:flex;align-items:center;gap:6px">
+                🔩 Półprodukty P
+                ${z.id ? `<button class="btn-sm" style="background:rgba(167,139,250,0.15);color:#a78bfa;border:1px solid rgba(167,139,250,0.3);margin-left:auto" onclick="openAddPolprodukt(${z.id})">+ Dodaj</button>` : ''}
+              </div>
+              ${z.id ? `<div id="pm-polprodukty-list-${z.id}">${renderPolproduktList(z.id)}</div>`
+                     : `<div style="background:var(--entry);border:1px dashed rgba(167,139,250,0.4);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--dim)">Zapisz zlecenie, aby dodać półprodukty P</div>`}
+            </div>
+
+            <!-- Materiały M -->
+            <div style="margin-bottom:10px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--orange);letter-spacing:.5px;margin-bottom:6px;display:flex;align-items:center;gap:6px">
+                📦 Materiały M
+                ${z.id ? `<button class="btn-sm" style="background:rgba(243,156,18,0.12);color:var(--orange);border:1px solid rgba(243,156,18,0.3);margin-left:auto" onclick="openAddMaterial(${z.id})">+ Dodaj</button>` : ''}
+              </div>
+              ${z.id ? `<div id="pm-materialy-list-${z.id}">${renderMaterialList(z.id)}</div>`
+                     : `<div style="background:var(--entry);border:1px dashed rgba(243,156,18,0.4);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--dim)">Zapisz zlecenie, aby dodać materiały M</div>`}
+            </div>
+
+            <!-- Produkty/Zakupy -->
+            ${z.id ? renderProduktyZleceniaForm(z.id) : '<div style="background:var(--entry);border:1px dashed var(--border);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--dim)">💡 Zapisz zlecenie, aby móc dodać produkty/zakupy</div>'}
+
+            <button class="btn btn-accent" style="width:100%;margin-top:6px" onclick="saveZlecenieForm(${z.id||0})">💾 Zapisz zlecenie</button>
+          </div>
+
+          <!-- PRAWA: Struktura G→P -->
+          <div style="flex:1;min-width:0;overflow-y:auto;padding:14px 16px">
+            ${rightColContent}
+          </div>
+
+        </div>
       </div>
     </div>`;
   }
@@ -1777,3 +1797,111 @@ function renderKosztyModal() {
 }
 
 // ══════════════════════════════════════════════════════════════
+
+
+// ─── Render drzewa G→P w modalu zlecenia z przyciskami STEP ──────────────────
+function renderZlModalGPTree(node, rootZlecenieId, ilocZlecona, depth) {
+  depth = depth || 0;
+  if (!node) return '';
+  const isM = node.typ === 'M';
+  const isG = node.typ === 'G';
+  const hasChildren = node.children && node.children.length > 0;
+  const indent = depth * 18;
+  const ilocBOM = node._bom_ilosc != null ? node._bom_ilosc : node.ilosc;
+  const ilocEfekt = (ilocZlecona != null && ilocBOM != null) ? ilocBOM * ilocZlecona : ilocBOM;
+  const stepUrl = (node.model_3d_url || '').replace(/'/g,"\\'");
+  const nodeId = node.id || 0;
+  const borderColor = isG ? '#3b82f6' : isM ? '#6b7280' : '#8b5cf6';
+  const typeColor   = isG ? '#60a5fa' : isM ? '#9ca3af' : '#a78bfa';
+  const typeBg      = isG ? '59,130,246' : isM ? '107,114,128' : '139,92,246';
+
+  let stepBtns = '';
+  if (!isM && nodeId) {
+    const previewBtn = stepUrl
+      ? `<button onclick="event.stopPropagation();openStep3DViewer('${stepUrl}')" title="Podgląd STEP" style="background:rgba(59,130,246,0.12);border:1px solid #3b82f640;color:#60a5fa;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;white-space:nowrap">🧊 Podgląd</button>`
+      : '';
+    const uploadLbl = stepUrl ? '📎 Zmień STEP' : '📎 Wgraj STEP';
+    const typeArg = isG ? "'wyrob'" : "'zlecenie'";
+    const uploadBtn = `<button onclick="event.stopPropagation();zlModalUploadStepNode(${nodeId},${typeArg})" title="${uploadLbl}" style="background:rgba(139,92,246,0.12);border:1px solid #8b5cf640;color:#a78bfa;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;white-space:nowrap;font-weight:600">${uploadLbl}</button>`;
+    const okMark = stepUrl ? '<span style="font-size:10px;color:var(--green)">✅</span>' : '';
+    stepBtns = `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${previewBtn}${uploadBtn}${okMark}</div>`;
+  }
+
+  const nodeHtml = `
+    <div style="margin-left:${indent}px;border-left:2px solid ${borderColor};padding:6px 10px;margin-bottom:4px;background:rgba(${typeBg},0.04);border-radius:0 6px 6px 0">
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        <span style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(${typeBg},0.15);color:${typeColor}">${node.typ||'?'}</span>
+        <span style="font-size:13px;font-weight:700;color:${typeColor};font-family:Consolas">${node.symbol||node.numer||''}</span>
+        <span style="font-size:12px;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${node.nazwa||node.opis||''}</span>
+        ${ilocEfekt != null ? `<span style="font-size:11px;color:var(--dim);white-space:nowrap">${ilocEfekt} ${node.jednostka||'szt.'}</span>` : ''}
+      </div>
+      ${stepBtns}
+    </div>`;
+
+  const childrenHtml = hasChildren
+    ? node.children.map(c => renderZlModalGPTree(c, rootZlecenieId, ilocEfekt || ilocZlecona, depth + 1)).join('')
+    : '';
+
+  return nodeHtml + childrenHtml;
+}
+
+// ─── Upload STEP w modalu zlecenia dla węzła wyrobu (G) lub zlecenia P ────────
+async function zlModalUploadStepG(zlecenieId) {
+  // Wrapper dla głównego G - używa wyrob przez hidden input
+  await zlModalUploadStepNode(zlecenieId, 'wyrob');
+}
+
+async function zlModalUploadStepNode(nodeId, nodeTyp) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.step,.stp,.STEP,.STP,model/step,application/step,application/octet-stream,*/*';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.onchange = async function() {
+    const file = this.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    if (file.size > 100 * 1024 * 1024) { alert('Plik za duży (maks. 100 MB)'); return; }
+    const statusEl = document.getElementById('zl-stepg-status');
+    const setStatus = (msg, color) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color || 'var(--dim)'; } };
+    setStatus('⏳ Wgrywanie... 0%');
+    try {
+      const buf = await file.arrayBuffer();
+      const result = await new Promise((res, rej) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', SERVER_URL.replace(/\/$/, '') + '/api/step-upload');
+        xhr.setRequestHeader('x-api-key', API_KEY);
+        xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+        xhr.setRequestHeader('x-filename', encodeURIComponent(file.name));
+        xhr.upload.onprogress = e => { if (e.lengthComputable) setStatus('⏳ Wgrywanie... ' + Math.round(e.loaded/e.total*100) + '%'); };
+        xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) res(JSON.parse(xhr.responseText)); else rej(new Error(xhr.responseText||'HTTP '+xhr.status)); };
+        xhr.onerror = () => rej(new Error('Błąd sieci'));
+        xhr.send(buf);
+      });
+      if (!result.ok || !result.url) throw new Error(result.error || 'Nieznany błąd');
+      const endpoint = nodeTyp === 'wyrob'
+        ? '/api/wyroby/' + nodeId + '/model3d'
+        : '/api/zlecenia/' + nodeId + '/model3d';
+      await patch(endpoint, {model_3d_url: result.url});
+      setStatus('✅ Wgrano: ' + file.name, 'var(--green)');
+      // Zaktualizuj hidden input dla głównego zlecenia G
+      const hiddenInput = document.getElementById('zl-model3d');
+      if (hiddenInput && nodeTyp === 'wyrob') {
+        hiddenInput.value = result.url;
+        const m = state.zlecenieModal;
+        if (m) setState({zlecenieModal: {...m, model_3d_url: result.url}});
+      }
+      // Odśwież drzewo
+      const m = state.zlecenieModal;
+      if (m?.zlWyrobId) {
+        try {
+          const tree2 = await get('/api/wyroby/' + m.zlWyrobId + '/drzewo');
+          setState({zlecenieModal: {...state.zlecenieModal, zlTree: tree2}});
+        } catch(_) {}
+      }
+    } catch(e) {
+      setStatus('✗ Błąd: ' + e.message, 'var(--red)');
+    }
+  };
+  input.click();
+}

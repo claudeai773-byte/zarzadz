@@ -254,7 +254,7 @@ function renderDrzewoNode(node, depth, ilocZlecona, parentWyrobId) {
     : '';
 
   return `<div style="margin-left:${indent}px;margin-bottom:4px">
-    <div style="background:rgba(255,255,255,${bgAlpha});border-left:3px solid ${borderColor};border-radius:4px;padding:7px 12px;cursor:${hasChildren?'pointer':'default'};display:flex;align-items:center;gap:10px;user-select:none"
+    <div style="background:rgba(255,255,255,${bgAlpha});border-left:3px solid ${borderColor};border-radius:4px;padding:7px 12px;cursor:${hasChildren?'pointer':'default'};display:flex;align-items:center;gap:10px;user-select:none;flex-wrap:wrap"
       onclick="if(${hasChildren})drzewoToggleNode('${key.replace(/'/g,"\\'")}')">
       ${chevron}
       <span style="font-family:monospace;font-weight:700;color:${isG?'#60a5fa':'#a78bfa'};font-size:.78rem;min-width:70px">${node.symbol||''}</span>
@@ -265,14 +265,15 @@ function renderDrzewoNode(node, depth, ilocZlecona, parentWyrobId) {
       ${noZlHtml}
       ${countBadge}
       ${(!isG && node._bom_id && parentWyrobId) ? `<button onclick="event.stopPropagation();drzewoDeleteBomNode(${node._bom_id},${parentWyrobId})" title="Usuń z drzewa" style="background:transparent;border:none;color:#475569;cursor:pointer;font-size:.8rem;padding:0 2px;flex-shrink:0" onmouseover="this.style.color='#f87171'" onmouseout="this.style.color='#475569'">✕</button>` : ''}
-      ${!isM ? (() => {
-        const stepUrl = node.model_3d_url || zlecenie?.model_3d_url || '';
-        const previewBtn = stepUrl
-          ? `<button onclick="event.stopPropagation();drzewoOpenStepNode(this)" data-url="${stepUrl.replace(/"/g,'&quot;')}" title="Podgląd STEP" style="background:rgba(59,130,246,0.15);border:1px solid #3b82f640;color:#60a5fa;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer;white-space:nowrap;flex-shrink:0">🧊</button>`
-          : '';
-        const uploadBtn = `<button onclick="event.stopPropagation();uploadStepForWyrob(${node.id})" title="${stepUrl ? 'Zmień plik STEP' : 'Wgraj plik STEP'}" style="background:rgba(139,92,246,0.12);border:1px solid #8b5cf640;color:#a78bfa;border-radius:4px;padding:2px 7px;font-size:.67rem;cursor:pointer;white-space:nowrap;flex-shrink:0">${stepUrl ? '📎' : '📎 STEP'}</button>`;
-        return previewBtn + uploadBtn;
-      })() : ''}
+    </div>
+    ${!isM ? (() => {
+      const stepUrl = node.model_3d_url || zlecenie?.model_3d_url || '';
+      const previewBtn = stepUrl
+        ? `<button onclick="event.stopPropagation();drzewoOpenStepNode(this)" data-url="${stepUrl.replace(/"/g,'&quot;')}" title="Podgląd STEP" style="background:rgba(59,130,246,0.15);border:1px solid #3b82f640;color:#60a5fa;border-radius:4px;padding:4px 10px;font-size:.7rem;cursor:pointer;white-space:nowrap">🧊 Podgląd STEP</button>`
+        : '';
+      const uploadBtn = `<button onclick="event.stopPropagation();uploadStepForWyrob(${node.id})" title="${stepUrl ? 'Zmień plik STEP' : 'Wgraj plik STEP'}" style="background:rgba(139,92,246,0.15);border:1px solid #8b5cf640;color:#a78bfa;border-radius:4px;padding:4px 10px;font-size:.7rem;cursor:pointer;white-space:nowrap;font-weight:600">${stepUrl ? '📎 Zmień plik STEP' : '📎 Wgraj plik STEP'}</button>`;
+      return `<div style="margin-top:4px;margin-left:${indent+16}px;display:flex;gap:6px;flex-wrap:wrap">${previewBtn}${uploadBtn}</div>`;
+    })() : ''}
     </div>
     ${childrenHtml}
   </div>`;

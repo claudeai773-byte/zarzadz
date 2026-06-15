@@ -67,6 +67,8 @@ let state = {
   wydajnoscMajster: null,
   wydajnoscOkres: 'dzis',
   majsterExpandedUser: null,
+  marzaPracownikow: null,
+  marzaExpandedUser: null,
   majsterExpandedZlecenie: null,  // id zlecenia rozwiniętego w tab Zlecenia
   oblozenie: null,
   oblozenieLading: false,

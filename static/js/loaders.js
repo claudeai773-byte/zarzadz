@@ -316,6 +316,17 @@ async function loadWydajnoscMajster(okres) {
   } catch(e) {
     setState({wydajnoscMajster: {pracownicy: [], error: e.message}});
   }
+  loadMarzaPracownikow(o);
+}
+
+async function loadMarzaPracownikow(okres) {
+  const o = okres || state.wydajnoscOkres;
+  try {
+    const m = await get(`/api/stats/marza_pracownikow?okres=${o}`);
+    setState({marzaPracownikow: m});
+  } catch(e) {
+    setState({marzaPracownikow: {pracownicy: [], error: e.message}});
+  }
 }
 
 // ══════════════════════════════════════════════════════════════

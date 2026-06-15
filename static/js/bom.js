@@ -1459,7 +1459,6 @@ function renderMajsterWydajnosc() {
           <div style="font-size:12px;color:var(--dim)">
             ${p.sesji} sesji | ${p.sztuki} szt. | ${p.godz}h
             ${wydPct!==null ? ` | normy: <span style="color:${barColor}">${wydPct}%</span>` : ''}
-            ${p.koszt_total ? ` | koszt: <span style="color:var(--green);font-weight:600">${(p.koszt_total).toLocaleString('pl-PL',{minimumFractionDigits:2,maximumFractionDigits:2})} zł</span>` : ''}
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
@@ -1500,6 +1499,62 @@ function renderMajsterWydajnosc() {
                   onclick="deleteSesjaConfirm(${s.sesja_id})">🗑 Usuń sesję</button>`:''}
               </div>
             </div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+    </div>`;
+  });
+
+  html += renderMarzaPracownikow();
+
+  return html;
+}
+
+// ─── Marża zleceń – wkład pracowników ───────────────────────────────────────
+function renderMarzaPracownikow() {
+  const m = state.marzaPracownikow;
+  const okres = state.wydajnoscOkres;
+  const okresLabels = {dzis:'Dziś', tydzien:'7 dni', miesiac:'30 dni'};
+
+  let html = `<div class="section-hdr" style="margin-top:18px">💵 Marża zleceń – wkład pracowników (${okresLabels[okres]})</div>`;
+
+  if (!m) {
+    return html + `<div class="empty">⏳ Ładowanie danych marży...</div>`;
+  }
+  if (m.error) {
+    return html + `<div class="error-banner">⚠ Błąd ładowania danych: ${m.error}</div>`;
+  }
+  if (!m.pracownicy.length) {
+    return html + `<div class="empty">Brak danych o marży za wybrany okres</div>`;
+  }
+
+  m.pracownicy.forEach(p => {
+    const expanded = state.marzaExpandedUser === p.user_id;
+    const marzaColor = p.marza_total >= 0 ? 'var(--green)' : 'var(--red)';
+    html += `
+    <div class="card" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer"
+           onclick="setState({marzaExpandedUser: ${expanded ? 'null' : p.user_id}})">
+        <div>
+          <div style="font-weight:700">${p.full_name}</div>
+          <div style="font-size:12px;color:var(--dim)">${p.zlecenia.length} zlec. w okresie</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:20px;font-weight:700;color:${marzaColor}">${fmtPLN(p.marza_total)}</div>
+          <span style="color:var(--dim)">${expanded?'▲':'▼'}</span>
+        </div>
+      </div>
+      ${expanded ? `
+      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+        ${p.zlecenia.map(z => {
+          const zColor = z.marza_pracownika >= 0 ? 'var(--green)' : 'var(--red)';
+          return `
+          <div style="padding:6px 0;border-bottom:1px solid rgba(46,53,72,.3);display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:12px;font-weight:600;color:var(--accent)">📋 ${z.numer}${z.nazwa && z.nazwa!==z.numer ? ' – '+z.nazwa : ''}</div>
+              <div style="font-size:11px;color:var(--dim)">Marża zlecenia: ${fmtPLN(z.marza_zlecenia)} | udział: ${z.udzial_pct}%</div>
+            </div>
+            <div style="font-weight:700;font-size:14px;color:${zColor};white-space:nowrap;margin-left:8px">${fmtPLN(z.marza_pracownika)}</div>
           </div>`;
         }).join('')}
       </div>` : ''}

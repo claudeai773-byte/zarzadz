@@ -3742,6 +3742,16 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
     filter_sql = f"date(s.end_time) BETWEEN '{data_od}' AND '{data_do}'"
 
     with get_db() as conn:
+        # Mapa zlecenie_id -> numer kolejności ostatniej operacji produkcyjnej
+        # (używana do wyliczenia faktycznie wykonanej ilości "gotowych" sztuk)
+        mk_rows = conn.execute("""
+            SELECT zlecenie_id, MAX(kolejnosc) as max_kol
+            FROM operacje
+            WHERE typ_operacji != 'zbrojenie' AND status != 'anulowane'
+            GROUP BY zlecenie_id
+        """).fetchall()
+        max_kolejnosc_map = {r["zlecenie_id"]: r["max_kol"] for r in mk_rows}
+
         users_rows = conn.execute(f"""
             SELECT u.id, u.full_name,
                    COUNT(CASE WHEN s.typ IN ('operacja','inne_zlecenie') THEN 1 END) as sesji,
@@ -3765,7 +3775,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
             sesje = conn.execute(f"""
                 SELECT s.ilosc_sztuk, s.start_time, s.end_time, s.pauzy, s.typ,
                        s.uwagi, s.sesja_glowna,
-                       o.nazwa as op_nazwa, o.czas_norma, o.stanowisko, o.zlecenie_id,
+                       o.nazwa as op_nazwa, o.czas_norma, o.stanowisko, o.zlecenie_id, o.kolejnosc as op_kolejnosc,
                        z.numer as zl_numer, z.cena_brutto_szt, z.ilosc_sztuk as zl_ilosc,
                        zi.numer as zl_inne_numer,
                        COALESCE(st_zl_rz.stawka_godz, st_rz.stawka_godz, st_zl.stawka_godz, st.stawka_godz, 0) as stawka_godz,
@@ -3835,6 +3845,16 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     display_op = s["op_nazwa"] or "—"
                     display_zl = s["zl_numer"] or "—"
 
+                # Czy ta sesja dotyczy ostatniej operacji produkcyjnej w zleceniu
+                # (czyli reprezentuje faktycznie GOTOWE sztuki tego zlecenia)
+                zid = s["zlecenie_id"]
+                jest_ostatnia_operacja = bool(
+                    s["typ"] in ("operacja", "inne_zlecenie")
+                    and s["op_kolejnosc"] is not None
+                    and zid in max_kolejnosc_map
+                    and s["op_kolejnosc"] == max_kolejnosc_map[zid]
+                )
+
                 sesje_list.append({
                     "op_nazwa": display_op,
                     "stanowisko": s["stanowisko"] or "—",
@@ -3850,6 +3870,7 @@ def stats_wydajnosc_raport(data_od: str = "", data_do: str = ""):
                     "typ": s["typ"],
                     "data": (s["end_time"] or "")[:10],
                     "sesja_glowna": sesja_glowna,
+                    "jest_ostatnia_operacja": jest_ostatnia_operacja,
                 })
 
             norma_wydajnosc_pct = round(suma_norma_min / suma_fakty_min * 100) if suma_fakty_min > 0 else None

@@ -417,6 +417,11 @@ def get_zlecenia(status: Optional[str] = None):
                     if not zbr_done:
                         pozostale_min += zbrojenie
             zd["pozostale_min"] = round(pozostale_min, 1)
+            # sztuki_wykonane = MIN(ilosc_wykonana) po wszystkich operacjach zlecenia
+            if ops:
+                zd["sztuki_wykonane"] = min(op["ilosc_wykonana"] or 0 for op in ops)
+            else:
+                zd["sztuki_wykonane"] = 0
             result.append(zd)
         return result
 
@@ -618,7 +623,7 @@ def get_zlecenie_drzewo(zid: int):
             (zid,)
         ).fetchall()
         operacje = conn.execute(
-            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min, opis_czynnosci FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
+            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min, opis_czynnosci, ilosc_wykonana FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
             (zid,)
         ).fetchall()
 
@@ -644,7 +649,7 @@ def get_zlecenie_drzewo(zid: int):
             if p_id and p_id not in seen_p_ids:
                 seen_p_ids.add(p_id)
                 p_ops = conn.execute(
-                    "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min, opis_czynnosci FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
+                    "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min, opis_czynnosci, ilosc_wykonana FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
                     (p_id,)
                 ).fetchall()
                 p_mats = conn.execute(
@@ -675,7 +680,7 @@ def get_zlecenie_drzewo(zid: int):
                     if sub_pid and sub_pid not in seen_sub:
                         seen_sub.add(sub_pid)
                         sub_ops = conn.execute(
-                            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
+                            "SELECT id, nazwa, kolejnosc, stanowisko, status, czas_norma, czas_zbrojenia_min, ilosc_wykonana FROM operacje WHERE zlecenie_id=? ORDER BY kolejnosc",
                             (sub_pid,)
                         ).fetchall()
                         sub_mats = conn.execute(
@@ -5761,6 +5766,7 @@ async def step_upload(request: Request):
 @app.get("/api/step-proxy")
 async def step_proxy(url: str):
     import re as _re
+    import ssl as _ssl
     gdrive = _re.search(r'drive.google.com/file/d/([^/?]+)', url)
     if gdrive:
         file_id = gdrive.group(1)
@@ -5768,15 +5774,15 @@ async def step_proxy(url: str):
     elif 'onedrive.live.com' in url or '1drv.ms' in url:
         sep = '&' if '?' in url else '?'
         url = url + sep + 'download=1'
-    if "/upload/" in url and "/raw/" not in url:
-        url = url.replace("/upload/", "/raw/upload/")
+    # Cloudinary i inne HTTPS – użyj ssl context z weryfikacją certyfikatów
+    ssl_ctx = _ssl.create_default_context()
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0",
             "Accept": "*/*",
             "Cache-Control": "no-cache"
         })
-        response = urllib.request.urlopen(req, timeout=120)
+        response = urllib.request.urlopen(req, timeout=120, context=ssl_ctx)
         ct = response.headers.get("Content-Type", "application/octet-stream")
         if "text/html" in ct:
             response.close()
@@ -5796,8 +5802,6 @@ async def step_proxy(url: str):
             media_type="application/octet-stream",
             headers={
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "*",
-                "Access-Control-Allow-Methods": "*",
                 "Content-Disposition": "inline; filename=model.step",
                 "Cache-Control": "public, max-age=3600",
             }

@@ -5820,6 +5820,15 @@ def serve_app():
         raise HTTPException(404, "Brak pliku index.html")
     with open(html_path, "r", encoding="utf-8") as f:
         content = f.read()
+    # Cache-busting: wstrzyknij ?v=BUILD_VERSION do wszystkich src= i href= plikow statycznych
+    import re as _re2
+    def _bust(m):
+        pre, attr, val, post = m.group(1), m.group(2), m.group(3), m.group(4)
+        if val.startswith("static/") or val.startswith("/static/"):
+            sep = "&" if "?" in val else "?"
+            return f'{pre}{attr}="{val}{sep}v={BUILD_VERSION}"{post}'
+        return m.group(0)
+    content = _re2.sub(r'(<(?:script|link)[^>]*?\s)(src|href)="([^"]+)"([^>]*>)', _bust, content)
     return HTMLResponse(
         content=content,
         headers={

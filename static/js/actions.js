@@ -235,6 +235,25 @@ function clearQRHistory() {
   setState({qrLastCodes: []});
 }
 
+async function wybierzZlecenieAktywne(zid) {
+  const zl = (state.pracaZlecenia || []).find(z => String(z.id) === String(zid));
+  if (!zl) return;
+  if (zl.qr_code) {
+    await scanQR(zl.qr_code);
+    return;
+  }
+  // Brak qr_code – pobierz zlecenie i operacje bezpośrednio
+  try {
+    const [zlecenie, operacje] = await Promise.all([
+      get('/api/zlecenia/' + zl.id),
+      get('/api/zlecenia/' + zl.id + '/operacje'),
+    ]);
+    showQRResult({type: 'zlecenie', data: zlecenie, operacje: operacje || []});
+  } catch(e) {
+    alert('Błąd ładowania zlecenia: ' + e.message);
+  }
+}
+
 async function scanQR(kod) {
   if (!kod.trim()) return;
   try {
@@ -282,7 +301,7 @@ function showQRResult(res) {
   if (res.type === 'operacja') {
     const op = res.data;
     setState({qrZleceniePickerModal: {
-      zlecenie: {numer: op.zl_numer, nazwa: op.zl_nazwa, id: op.zlecenie_id, ilosc_sztuk: op.ilosc_sztuk, model_3d_url: op.zl_model3d_url || null},
+      zlecenie: {numer: op.zl_numer, nazwa: op.zl_nazwa, id: op.zlecenie_id, ilosc_sztuk: op.ilosc_sztuk, model_3d_url: op.zl_model3d_url || null, wyrob_model_3d_url: op.wyrob_model_3d_url || null},
       operacje: [op],
     }});
   } else if (res.type === 'zlecenie') {
@@ -371,20 +390,28 @@ function renderQRZleceniePickerModal() {
   const iloscWykonana = ops.reduce((sum, op) => sum + (op.ilosc_wykonana||0), 0);
   const iloscPozostalo = Math.max(0, iloscTotal - (ops.length ? Math.min(...ops.map(op => op.ilosc_wykonana||0)) : 0));
 
+  const stepUrlZl = z.model_3d_url || null;
+  const stepUrlWyrob = (z.wyrob_model_3d_url && z.wyrob_model_3d_url !== stepUrlZl) ? z.wyrob_model_3d_url : null;
+
   let html = `
   <div class="modal-overlay">
     <div class="modal">
       <button class="modal-close" onclick="setState({qrZleceniePickerModal:null})">×</button>
       <h3>📋 ${z.numer}</h3>
       <div style="color:var(--dim);font-size:13px;margin-bottom:10px">${z.nazwa}</div>
-      ${z.model_3d_url ? `
+      ${stepUrlWyrob ? `
       <button class="btn btn-blue" style="width:100%;margin-bottom:8px;font-size:14px"
-              onclick="openStep3DViewer('${z.model_3d_url.replace(/'/g,"\\'")}')">
-        🧊 Podgląd modelu 3D (.STEP)
+              onclick="openStep3DViewer('${stepUrlWyrob.replace(/'/g,"\\'")}')">
+        🧊 Podgląd modelu 3D wyrobu G/P (.STEP)
+      </button>` : ''}
+      ${stepUrlZl ? `
+      <button class="btn btn-blue" style="width:100%;margin-bottom:8px;font-size:14px"
+              onclick="openStep3DViewer('${stepUrlZl.replace(/'/g,"\\'")}')">
+        🧊 Podgląd modelu 3D zlecenia (.STEP)
       </button>` : ''}
       <button class="btn" style="width:100%;margin-bottom:12px;font-size:13px;background:rgba(139,92,246,0.12);border:1px solid #8b5cf640;color:#a78bfa"
               onclick="uploadStepFromQR(${z.id})">
-        📎 ${z.model_3d_url ? 'Zmień plik STEP' : 'Dodaj plik STEP (.step/.stp)'}
+        📎 ${stepUrlZl ? 'Zmień plik STEP zlecenia' : 'Dodaj plik STEP (.step/.stp) do zlecenia'}
       </button>
       <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">

@@ -13,6 +13,7 @@ let state = {
   timers: {},             // sesja_id -> {sec, interval, paused}
   qrScanMode: false,
   qrLastCodes: [],        // historia QR
+  pracaZlecenia: [],      // aktywne zlecenia do wyboru z listy (bez skanowania QR)
 
   // Majster
   majsterStats: null,

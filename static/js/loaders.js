@@ -3,13 +3,15 @@
 async function loadPracownik() {
   setState({loading:true, error:null});
   try {
-    const [ops, sesje] = await Promise.all([
+    const [ops, sesje, zlecenia] = await Promise.all([
       get('/api/operacje/aktywne'),
       get(`/api/sesje/aktywne/${state.user.id}`),
+      get('/api/zlecenia').catch(() => []),
     ]);
     stopAllTimers();
     for (const s of sesje) startTimerFor(s);
-    setState({operacje:ops, aktywnesje:sesje, loading:false});
+    const pracaZlecenia = (zlecenia || []).filter(z => z.status === 'nowe' || z.status === 'w_toku');
+    setState({operacje:ops, aktywnesje:sesje, pracaZlecenia, loading:false});
   } catch(e) {
     setState({loading:false, error:e.message});
   }

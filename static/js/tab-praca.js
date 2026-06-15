@@ -143,10 +143,19 @@ function renderPracaGlowna() {
               onclick="stopQRCamera();setState({qrScanMode:false,qrManualMode:false})">✕ Zamknij</button>
     </div>`;
   } else {
+    const zlList = state.pracaZlecenia || [];
     html += `
     <div class="btn-row" style="margin-bottom:12px">
       <button class="btn btn-blue" onclick="setState({qrScanMode:true,qrManualMode:false})">📷 Skanuj QR</button>
       <button class="btn btn-purple" onclick="setState({nieprodukcyjnaModal:true})">⏸ Nieprodukcyjna</button>
+    </div>
+    <div class="field" style="margin-bottom:12px">
+      <label>Lub wybierz aktywne zlecenie z listy</label>
+      <select id="praca-zlecenie-select" onchange="if(this.value)wybierzZlecenieAktywne(this.value);this.value=''">
+        <option value="">— wybierz zlecenie —</option>
+        ${zlList.map(z => `<option value="${z.id}">${z.numer}${z.nazwa ? ' – ' + z.nazwa : ''}</option>`).join('')}
+      </select>
+      ${!zlList.length ? '<div style="color:var(--dim);font-size:12px;margin-top:4px">Brak aktywnych zleceń</div>' : ''}
     </div>`;
   }
 

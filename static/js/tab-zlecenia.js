@@ -515,8 +515,8 @@ function renderZlecenia() {
     })();
 
     html += `
-    <div class="modal-overlay" style="align-items:flex-start;padding:10px">
-      <div style="background:var(--panel);border-radius:14px;width:100%;max-width:1100px;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px #000a">
+    <div id="zl-edit-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:500;display:flex;align-items:center;justify-content:center;padding:8px">
+      <div style="background:var(--panel);border-radius:14px;width:100%;max-width:1100px;height:calc(100vh - 16px);display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px #000a">
         <!-- Nagłówek -->
         <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 12px;border-bottom:1px solid var(--border);flex-shrink:0">
           <div style="display:flex;align-items:center;gap:10px">
@@ -796,21 +796,10 @@ async function fetchAutofillOperacje(zid) {
       autofillStepUrl: stepUrl,
       zlecenieModal: {...currentModal, model_3d_url: stepUrl},
     });
-    // Zaktualizuj ukryty input model_3d i info-box
+    // Zaktualizuj ukryty input model_3d
     setTimeout(() => {
       const hiddenInput = document.getElementById('zl-model3d');
-      const infoBox = document.getElementById('zl-model3d-info');
-      const uploadArea = document.getElementById('zl-model3d-upload-area');
       if (hiddenInput) hiddenInput.value = stepUrl || '';
-      if (infoBox && uploadArea) {
-        if (stepUrl) {
-          infoBox.style.display = 'flex';
-          uploadArea.style.display = 'none';
-        } else {
-          infoBox.style.display = 'none';
-          uploadArea.style.display = '';
-        }
-      }
     }, 100);
   } catch(e) {
     if (myToken !== _autofillToken) return;

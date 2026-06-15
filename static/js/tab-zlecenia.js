@@ -530,10 +530,10 @@ function renderZlecenia() {
         </div>
 
         <!-- Dwie kolumny -->
-        <div class="zl-modal-grid" style="display:grid;grid-template-columns:1fr 1fr;flex:1;overflow:hidden;gap:16px">
+        <div style="display:flex;flex:1;overflow:hidden;gap:0">
 
           <!-- LEWA: Dane zlecenia -->
-          <div style="overflow-y:auto;padding:14px 16px;border-right:1px solid var(--border)">
+          <div style="flex:0 0 380px;min-width:280px;max-width:400px;overflow-y:auto;padding:14px 16px;border-right:1px solid var(--border)">
             <div style="font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;display:flex;align-items:center;gap:6px">
               📋 Dane zlecenia
             </div>

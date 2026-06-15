@@ -90,7 +90,7 @@ async function _initStep3DScene(stepUrl) {
 
     // 2. Pobranie pliku STEP przez proxy (dłuższy timeout dla telefonu)
     _setStep3dStatus('⏳ Pobieranie pliku STEP...', '#e6a020');
-    const proxyUrl = `${SERVER_URL.replace(/\/$/,'')}/api/step-proxy?url=${encodeURIComponent(stepUrl)}&_=${Date.now()}`;
+    const proxyUrl = SERVER_URL.replace(/\/$/, '') + '/api/step-proxy?url=' + encodeURIComponent(stepUrl);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 120000); // 2 min timeout
     let stepData;

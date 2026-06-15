@@ -56,7 +56,7 @@ function _mpAutoScore(z) {
 
   // Oblicz postęp: min z ilosc_wykonana / ilosc_sztuk wg sesji
   const ilosc  = z.ilosc_sztuk || 1;
-  const wykon  = z.sztuki_wykonane ?? z._wykonano ?? 0;
+  const wykon  = z._wykonano || 0;
   const postep = wykon / ilosc;
 
   // Wynik: mniejszy → ważniejszy
@@ -82,7 +82,9 @@ function renderMajsterPriorytety() {
   const wzbogacone = zlecenia.map(z => {
     const sesjeZl = sesjeAkt.filter(s => s.zlecenie_id === z.id || s.zlecenie_id_inne === z.id);
     const operatorzy = [...new Set(sesjeZl.map(s => s.full_name || s.user_name).filter(Boolean))];
-    const wykonano = sesjeZl.reduce((sum, s) => sum + (s.ilosc_sztuk || 0), 0);
+    // #4 FIX: _wykonano = sztuki_wykonane z /api/zlecenia (MIN ilosc_wykonana operacji),
+    //         a nie suma ilosc_sztuk z aktywnych sesji (te są chwilowe i nieprecyzyjne)
+    const wykonano = z.sztuki_wykonane != null ? z.sztuki_wykonane : sesjeZl.reduce((sum, s) => sum + (s.ilosc_sztuk || 0), 0);
     const termin = z.termin ? new Date(z.termin) : null;
     const dniDo  = termin ? (termin.getTime() - teraz) / 86400000 : null;
     return { ...z, _operatorzy: operatorzy, _wykonano: wykonano, _dniDo: dniDo, _sesje: sesjeZl };
@@ -171,7 +173,7 @@ function renderMajsterPriorytety() {
     const isPinned   = priorytety[z.id] === 0;
     const dniDo      = z._dniDo;
     const postepPct  = z.ilosc_sztuk > 0
-      ? Math.min(100, Math.round(((z.sztuki_wykonane ?? z._wykonano ?? 0) / z.ilosc_sztuk) * 100))
+      ? Math.min(100, Math.round((z._wykonano / z.ilosc_sztuk) * 100))
       : 0;
 
     // Kolor terminu
@@ -249,7 +251,7 @@ function renderMajsterPriorytety() {
           <div style="display:flex;justify-content:space-between;font-size:11px;
                       color:var(--dim);margin-bottom:3px">
             <span>Postęp</span>
-            <span style="color:var(--text);font-weight:600">${(z.sztuki_wykonane ?? z._wykonano ?? 0)} / ${z.ilosc_sztuk} szt. (${postepPct}%)</span>
+            <span style="color:var(--text);font-weight:600">${z._wykonano} / ${z.ilosc_sztuk} szt. (${postepPct}%)</span>
           </div>
           <div style="height:6px;background:#1e293b;border-radius:3px;overflow:hidden">
             <div style="height:100%;width:${postepPct}%;background:${barColor};

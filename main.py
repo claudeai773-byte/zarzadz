@@ -5783,7 +5783,10 @@ async def step_proxy(url: str):
         import hashlib as _hl, time as _time
         cloud_name = cld_match.group(1)
         public_id  = cld_match.group(2)
-        # usuń rozszerzenie z public_id jeśli jest (Cloudinary tego nie lubi w public_id)
+        # Usuń rozszerzenie z public_id (Cloudinary przechowuje raw assets bez
+        # rozszerzenia w public_id, ale dołącza je w delivery URL – bez tego
+        # podpis się nie zgadza i /raw/download zwraca 401 -> 502 tutaj)
+        public_id = _re.sub(r'\.[A-Za-z0-9]{1,10}$', '', public_id)
         ts = str(int(_time.time()) + 3600)  # expires 1h
         sign_str = f"public_id={public_id}&timestamp={ts}{CLOUDINARY_SECRET}"
         sig = _hl.sha1(sign_str.encode()).hexdigest()

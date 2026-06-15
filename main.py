@@ -3577,24 +3577,27 @@ def get_zlecenie_szczegoly(zid: int):
         }
 
 # ─── Podsumowanie kosztów zlecenia ────────────────────────────────────────────
-@app.get("/api/zlecenia/{zid}/koszty", dependencies=[Depends(verify_key)])
-def koszty_zlecenia(zid: int):
-    with get_db() as conn:
-        zl = conn.execute("SELECT * FROM zlecenia WHERE id=?", (zid,)).fetchone()
-        if not zl:
-            raise HTTPException(404, "Zlecenie nie znalezione")
+def _koszty_zlecenia_calc(conn, zid: int):
+    """Wylicza koszty/przychód/marżę dla zlecenia. Zwraca None, jeśli zlecenie nie istnieje."""
+    zl = conn.execute("SELECT * FROM zlecenia WHERE id=?", (zid,)).fetchone()
+    if not zl:
+        return None
 
-        # ➤ Używamy COALESCE(stawki_zlecen, stawki globalne)
-        sesje = conn.execute("""
-            SELECT s.*, u.full_name, o.stanowisko, o.nazwa as op_nazwa, o.czas_norma,
-                   COALESCE(st_zl.stawka_godz, st.stawka_godz) as stawka_godz
-            FROM sesje_pracy s
-            JOIN users u ON s.user_id = u.id
-            JOIN operacje o ON s.operacja_id = o.id
-            LEFT JOIN stawki_zlecen st_zl ON st_zl.zlecenie_id=o.zlecenie_id AND st_zl.stanowisko=o.stanowisko
-            LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
-            WHERE o.zlecenie_id=? AND s.status='zakonczona'
-        """, (zid,)).fetchall()
+    # ➤ Używamy COALESCE(stawki_zlecen, stawki globalne)
+    sesje = conn.execute("""
+        SELECT s.*, u.id as pracownik_id, u.full_name, o.stanowisko, o.nazwa as op_nazwa, o.czas_norma,
+               COALESCE(st_zl.stawka_godz, st.stawka_godz) as stawka_godz
+        FROM sesje_pracy s
+        JOIN users u ON s.user_id = u.id
+        JOIN operacje o ON s.operacja_id = o.id
+        LEFT JOIN stawki_zlecen st_zl ON st_zl.zlecenie_id=o.zlecenie_id AND st_zl.stanowisko=o.stanowisko
+        LEFT JOIN stawki st ON o.stanowisko = st.stanowisko
+        WHERE o.zlecenie_id=? AND s.status='zakonczona'
+    """, (zid,)).fetchall()
+    return _koszty_zlecenia_finish(conn, zid, zl, sesje)
+
+
+def _koszty_zlecenia_finish(conn, zid, zl, sesje):
 
         total_koszt = 0
         total_godz = 0
@@ -3642,6 +3645,7 @@ def koszty_zlecenia(zid: int):
             total_godz += elapsed
             rows.append({
                 "sesja_id": s["id"],
+                "pracownik_id": s["pracownik_id"],
                 "pracownik": s["full_name"],
                 "operacja": s["op_nazwa"],
                 "stanowisko": s["stanowisko"],
@@ -3672,6 +3676,87 @@ def koszty_zlecenia(zid: int):
             "przychod": round(przychod, 2),
             "marza": round(przychod - total_koszty_z_zbrojeniem, 2),
         }
+
+@app.get("/api/zlecenia/{zid}/koszty", dependencies=[Depends(verify_key)])
+def koszty_zlecenia(zid: int):
+    with get_db() as conn:
+        wynik = _koszty_zlecenia_calc(conn, zid)
+        if wynik is None:
+            raise HTTPException(404, "Zlecenie nie znalezione")
+        return wynik
+
+
+# ─── Marża zleceń – wkład pracowników ─────────────────────────────────────────
+@app.get("/api/stats/marza_pracownikow", dependencies=[Depends(verify_key)])
+def stats_marza_pracownikow(okres: str = "tydzien"):
+    """
+    Dla wybranego okresu: zlecenia, w których ktoś pracował, wraz z ich marżą
+    (przychód - wszystkie koszty), rozdzieloną pomiędzy pracowników proporcjonalnie
+    do ich udziału w koszcie pracy (koszt_pracy_pracownika / suma_koszt_pracy_zlecenia).
+    Pokazuje, ile marży „wypracował" każdy pracownik dla firmy.
+    """
+    if okres == "dzis":
+        filter_sql = "date(s.end_time) = date('now')"
+    elif okres == "miesiac":
+        filter_sql = "s.end_time >= datetime('now', '-30 days')"
+    else:
+        filter_sql = "s.end_time >= datetime('now', '-7 days')"
+
+    with get_db() as conn:
+        zl_rows = conn.execute(f"""
+            SELECT DISTINCT o.zlecenie_id, z.numer, z.nazwa
+            FROM sesje_pracy s
+            JOIN operacje o ON s.operacja_id = o.id
+            JOIN zlecenia z ON o.zlecenie_id = z.id
+            WHERE s.status='zakonczona' AND s.typ IN ('operacja','zbrojenie','inne_zlecenie')
+              AND o.zlecenie_id IS NOT NULL AND {filter_sql}
+        """).fetchall()
+
+        pracownicy: dict = {}  # user_id -> {full_name, marza_total, zlecenia: [...]}
+
+        for zr in zl_rows:
+            zid = zr["zlecenie_id"]
+            k = _koszty_zlecenia_calc(conn, zid)
+            if not k:
+                continue
+            marza = k["marza"]
+
+            # Udział kosztu pracy każdego pracownika w łącznym koszcie pracy zlecenia
+            udzialy: dict = {}
+            total_koszt_pracy = 0.0
+            for s in k["sesje"]:
+                total_koszt_pracy += s["koszt"]
+                uid = s["pracownik_id"]
+                if uid not in udzialy:
+                    udzialy[uid] = {"full_name": s["pracownik"], "koszt": 0.0}
+                udzialy[uid]["koszt"] += s["koszt"]
+            if total_koszt_pracy <= 0:
+                continue
+
+            for uid, info in udzialy.items():
+                udzial_pct = info["koszt"] / total_koszt_pracy
+                marza_p = marza * udzial_pct
+                if uid not in pracownicy:
+                    pracownicy[uid] = {"user_id": uid, "full_name": info["full_name"],
+                                        "marza_total": 0.0, "zlecenia": []}
+                pracownicy[uid]["marza_total"] += marza_p
+                pracownicy[uid]["zlecenia"].append({
+                    "zlecenie_id": zid,
+                    "numer": zr["numer"],
+                    "nazwa": zr["nazwa"],
+                    "przychod": k["przychod"],
+                    "marza_zlecenia": round(marza, 2),
+                    "udzial_pct": round(udzial_pct * 100, 1),
+                    "marza_pracownika": round(marza_p, 2),
+                })
+
+        wyniki = sorted(pracownicy.values(), key=lambda x: x["marza_total"], reverse=True)
+        for w in wyniki:
+            w["marza_total"] = round(w["marza_total"], 2)
+            w["zlecenia"].sort(key=lambda z: z["marza_pracownika"], reverse=True)
+
+        return {"okres": okres, "pracownicy": wyniki}
+
 
 # ─── Powiadomienia ────────────────────────────────────────────────────────────
 @app.get("/api/powiadomienia/{rola}", dependencies=[Depends(verify_key)])

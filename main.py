@@ -4665,6 +4665,12 @@ _TABLES_TO_BACKUP = [
     "mag_rezerwacje",       # rezerwacje materialow magazynowych (dawniej localStorage)
     "zlecenie_polprodukty", # półprodukty P podpięte pod zlecenie G
     "zlecenie_materialy",   # materiały M podpięte pod zlecenie G
+    "action_log",           # logi akcji użytkowników (logowania, zmiany, sesje)
+    "import_log",           # logi importów (PDF, xlsx)
+    "app_feedback",         # opinie/oceny użytkowników
+    "kontrahenci",          # baza kontrahentów (fakturowanie)
+    "faktury",              # wystawione faktury
+    "pozycje_faktury",      # pozycje faktur
 ]
 
 # ─── GitHub Gist helpers ────────────────────────────────────────────────────────

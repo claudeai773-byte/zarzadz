@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
@@ -107,6 +108,8 @@ app.add_middleware(
     allow_headers=["Content-Type", "x-api-key", "x-session-token"],
 )
 app.add_middleware(BaseHTTPMiddleware, dispatch=SecurityHeadersMiddleware())
+# Kompresja odpowiedzi (JSON list zleceń, JS/CSS) – mniejszy transfer na słabszym Wi-Fi/4G
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -385,6 +388,11 @@ def scan_qr(qr: str):
         raise HTTPException(404, "Nie znaleziono kodu QR: " + qr)
 
 # ─── Zlecenia CRUD ────────────────────────────────────────────────────────────
+def _batched(seq, size=500):
+    """Dzieli listę na kawałki (dla zapytań SQL IN(...) z limitem zmiennych)."""
+    for i in range(0, len(seq), size):
+        yield seq[i:i+size]
+
 @app.get("/api/zlecenia", dependencies=[Depends(verify_key)])
 def get_zlecenia(status: Optional[str] = None):
     with get_db() as conn:
@@ -394,12 +402,44 @@ def get_zlecenia(status: Optional[str] = None):
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM zlecenia ORDER BY created_at DESC").fetchall()
+
+        zlecenia_ids = [z["id"] for z in rows]
+
+        # ── Zbiorczo pobierz operacje wszystkich zleceń (zamiast 1 zapytania na zlecenie) ──
+        ops_by_zlecenie: dict = {}
+        all_ops = []
+        for chunk in _batched(zlecenia_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            all_ops.extend(conn.execute(
+                f"""SELECT id, zlecenie_id, status, czas_norma, ilosc_wykonana, czas_zbrojenia_min
+                    FROM operacje WHERE zlecenie_id IN ({placeholders})""",
+                chunk
+            ).fetchall())
+        for op in all_ops:
+            ops_by_zlecenie.setdefault(op["zlecenie_id"], []).append(op)
+
+        # ── Zbiorczo sprawdź, dla których operacji zbrojenie jest już zakończone ──
+        # (zamiast 1 zapytania COUNT na każdą operację z czasem zbrojenia)
+        op_ids_zbrojenie = [
+            op["id"] for op in all_ops
+            if (op["czas_zbrojenia_min"] or 0) and op["status"] != "zakonczona"
+        ]
+        zbrojenie_done_by_op: dict = {}
+        for chunk in _batched(op_ids_zbrojenie):
+            placeholders = ",".join("?" for _ in chunk)
+            zbr_rows = conn.execute(
+                f"""SELECT operacja_id, COUNT(*) as cnt FROM sesje_pracy
+                    WHERE operacja_id IN ({placeholders}) AND typ='zbrojenie' AND status='zakonczona'
+                    GROUP BY operacja_id""",
+                chunk
+            ).fetchall()
+            for r in zbr_rows:
+                zbrojenie_done_by_op[r["operacja_id"]] = r["cnt"]
+
         result = []
         for z in rows:
             zd = dict(z)
-            ops = conn.execute("""
-                SELECT id, status, czas_norma, ilosc_wykonana, czas_zbrojenia_min FROM operacje WHERE zlecenie_id=?
-            """, (z["id"],)).fetchall()
+            ops = ops_by_zlecenie.get(z["id"], [])
             ilosc = z["ilosc_sztuk"] or 1
             pozostale_min = 0
             for op in ops:
@@ -410,10 +450,7 @@ def get_zlecenia(status: Optional[str] = None):
                 if norma:
                     pozostale_min += norma * max(0, ilosc - wykonano)
                 if zbrojenie:
-                    zbr_done = conn.execute(
-                        "SELECT COUNT(*) FROM sesje_pracy WHERE operacja_id=? AND typ='zbrojenie' AND status='zakonczona'",
-                        (op["id"],)
-                    ).fetchone()[0]
+                    zbr_done = zbrojenie_done_by_op.get(op["id"], 0)
                     if not zbr_done:
                         pozostale_min += zbrojenie
             zd["pozostale_min"] = round(pozostale_min, 1)
@@ -728,7 +765,7 @@ def patch_model3d(zid: int, body: dict = Body(...)):
     url = body.get("model_3d_url")
     with get_db() as conn:
         conn.execute("UPDATE zlecenia SET model_3d_url=? WHERE id=?", (url, zid))
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         return {"ok": True}
 
 @app.patch("/api/zlecenia/{zid}/status", dependencies=[Depends(verify_key)])
@@ -825,7 +862,7 @@ def zapisz_wynik_kj(oid: int, req: KJRequest):
                 "UPDATE zlecenia SET status='wstrzymane' WHERE id=(SELECT zlecenie_id FROM operacje WHERE id=?)",
                 (oid,)
             )
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         return {"ok": True, "wynik": req.wynik}
 
 def _detect_steel_grade(opis: str) -> str:
@@ -1309,7 +1346,7 @@ async def import_technologia(file: UploadFile = File(...), force: bool = False, 
             except Exception as e:
                 errors.append(f"Błąd przetwarzania BOM: {e}")
 
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         return {
             "zlecenie_id": zlecenie_id,
             "numer": parsed["numer"],
@@ -1438,7 +1475,7 @@ def start_sesja(req: StartSesjaRequest):
                 "UPDATE operacje SET status='w_toku' WHERE id=? AND status='oczekuje'",
                 (req.operacja_id,)
             )
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         # Loguj start sesji
         user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (req.user_id,)).fetchone()
         u_name = user_row["username"] if user_row else str(req.user_id)
@@ -1470,7 +1507,7 @@ def pauza_start(req: PauzaRequest):
         pauzy.append({"start": now, "koniec": None, "powod": req.powod or ""})
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         # Loguj start pauzy
         user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
         u_name = user_row["username"] if user_row else str(sesja["user_id"])
@@ -1505,7 +1542,7 @@ def pauza_stop(req: PauzaRequest):
         pauzy[-1]["koniec"] = now
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         # Loguj koniec pauzy
         user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
         u_name = user_row["username"] if user_row else str(sesja["user_id"])
@@ -1555,7 +1592,7 @@ def stop_sesja(req: StopSesjaRequest):
                         (zl_id,)
                     )
 
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         # Loguj stop sesji
         user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
         u_name = user_row["username"] if user_row else str(sesja["user_id"])
@@ -1780,7 +1817,7 @@ def update_stawka_zlecenia(zid: int, sid: int, req: StawkaZleceniaRequest):
                WHERE id=? AND zlecenie_id=?""",
             (req.stawka_godz, req.zbrojenie_stawka_godz or 0.0, sid, zid)
         )
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         return {"ok": True}
 
 
@@ -1838,7 +1875,7 @@ def sync_stawki_zlecenia(zid: int, force: bool = False):
         else:
             conn.execute("DELETE FROM stawki_zlecen WHERE zlecenie_id=?", (zid,))
 
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         return {"ok": True, "updated": updated, "force": force}
 
 
@@ -2147,7 +2184,7 @@ def patch_wyrob_model3d(wid: int, body: dict = Body(...)):
         if not w:
             raise HTTPException(404, "Wyrób nie znaleziony")
         conn.execute("UPDATE wyroby SET model_3d_url=? WHERE id=?", (url, wid))
-        _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        _schedule_backup()
         return {"ok": True}
 
 
@@ -2728,7 +2765,7 @@ async def import_drzewo_gp(file: UploadFile = File(...)):
              _json.dumps(errors[:50], ensure_ascii=False))
         )
 
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {
         "ok":             True,
         "symbol_glowny":  glowny_symbol,
@@ -4861,6 +4898,42 @@ def _db_backup_to_json(path: str = None) -> dict:
         print(f"✗ Błąd backupu: {e}")
     return data
 
+# ─── Throttling backupu ────────────────────────────────────────────────────────
+# Wcześniej każda akcja (start/stop sesji, pauza, nowe zlecenie, ...) odpalała
+# OD RAZU nowy wątek robiący pełny backup: odczyt WSZYSTKICH tabel z bazy +
+# zapis pliku JSON + PATCH do GitHub Gist. Przy kilku akcjach pod rząd (np. kilku
+# pracowników klikających "stop" w tym samym czasie) to ryzyko kolizji zapisu do
+# tego samego pliku i zalewania GitHub API żądaniami.
+# _schedule_backup() ogranicza to do max. jednego faktycznego backupu na
+# _BACKUP_MIN_INTERVAL sekund i gwarantuje, że ostatnia zmiana i tak zostanie
+# zapisana (trailing call) bez nawarstwiania wątków.
+_BACKUP_MIN_INTERVAL = 5.0   # sekundy
+_backup_lock = _threading.Lock()
+_backup_last_run = 0.0
+_backup_pending = False
+
+def _schedule_backup():
+    global _backup_pending
+    with _backup_lock:
+        if _backup_pending:
+            return  # backup już zaplanowany – kolejne wywołanie nic nie robi
+        _backup_pending = True
+
+    def _runner():
+        global _backup_last_run, _backup_pending
+        wait = _BACKUP_MIN_INTERVAL - (time.time() - _backup_last_run)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            _db_backup_to_json()
+        finally:
+            _backup_last_run = time.time()
+            with _backup_lock:
+                _backup_pending = False
+
+    _threading.Thread(target=_runner, daemon=True).start()
+
+
 def _db_restore_from_json(path: str = None) -> bool:
     path = path or BACKUP_PATH
     if not os.path.exists(path):
@@ -5184,7 +5257,7 @@ def create_material(req: MaterialIn):
              req.rezerwacja or 0, req.kod_paskowy or "", now)
         )
         new_id = cur.lastrowid
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True, "id": new_id}
 
 @app.put("/api/materialy/{mid}", dependencies=[Depends(verify_key)])
@@ -5205,7 +5278,7 @@ def update_material(mid: int, req: MaterialIn):
              req.do_dyspozycji or 0, req.stan_rzeczywisty or 0,
              req.rezerwacja or 0, req.kod_paskowy or "", now, mid)
         )
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True}
 
 @app.delete("/api/materialy/{mid}", dependencies=[Depends(verify_key)])
@@ -5218,7 +5291,7 @@ def delete_material(mid: int):
         conn.execute("DELETE FROM mag_rezerwacje WHERE material_id=?", (mid,))
         conn.execute("DELETE FROM bom_pozycje WHERE material_id=?", (mid,))
         conn.execute("DELETE FROM materialy WHERE id=?", (mid,))
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True}
 
 # ─── Rezerwacje magazynowe (przeniesione z localStorage na serwer) ─────────────
@@ -5262,7 +5335,7 @@ def create_mag_rezerwacja(body: dict):
             "UPDATE materialy SET do_dyspozycji = do_dyspozycji - ? WHERE id=?",
             (ilosc, material_id)
         )
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True, "id": rez_id}
 
 @app.patch("/api/mag-rezerwacje/{rid}/zwolnij", dependencies=[Depends(verify_key)])
@@ -5282,7 +5355,7 @@ def zwolnij_mag_rezerwacje(rid: str):
             "UPDATE materialy SET do_dyspozycji = do_dyspozycji + ? WHERE id=?",
             (rez["ilosc"], rez["material_id"])
         )
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True}
 
 @app.delete("/api/mag-rezerwacje/{rid}", dependencies=[Depends(verify_key)])
@@ -5299,7 +5372,7 @@ def delete_mag_rezerwacja(rid: str):
                 (rez["ilosc"], rez["material_id"])
             )
         conn.execute("DELETE FROM mag_rezerwacje WHERE id=?", (rid,))
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True}
 
 # ─── Import rezerwacji z localStorage (migracja jednorazowa) ──────────────────
@@ -5337,7 +5410,7 @@ def import_mag_rezerwacje_from_local(body: dict):
                 imported += 1
             except Exception:
                 pass
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True, "imported": imported}
 
 
@@ -6218,7 +6291,7 @@ def admin_clear_logi(request: Request, x_session_token: Optional[str] = Header(N
             "INSERT INTO action_log (user_id, username, typ, akcja, szczegoly, ip) VALUES (?,?,?,?,?,?)",
             (None, admin_name, "ADMIN", "Wyczyszczenie logów", f"Usunięto {count} wpisów", ip)
         )
-    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    _schedule_backup()
     return {"ok": True, "usunieto": count}
 
 # ─── WebSocket endpoint ────────────────────────────────────────────────────────

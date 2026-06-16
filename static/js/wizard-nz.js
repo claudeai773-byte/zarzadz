@@ -1416,8 +1416,6 @@ function nzFocusAfterAdd(kind) {
 }
 
 function nzShortcutKeydown(e) {
-  // Działa tylko gdy wizard jest na kroku 2 (struktura G→P) i nic się nie zapisuje
-  if (!state.nzModal || state.nzStep !== 2 || !state.nzTree || state.nzSaving) return;
   // Nigdy nie przechwytuj kombinacji z Ctrl/Cmd/Alt (np. Ctrl+P = drukuj)
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const key = (e.key || '').toLowerCase();
@@ -1426,20 +1424,59 @@ function nzShortcutKeydown(e) {
   const tag = e.target && e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
 
-  const container = nzGetActiveContainer();
-  if (!container) return;
+  // Tryb 1: wizard nowego zlecenia (krok 2)
+  const inWizard = state.nzModal && state.nzStep === 2 && state.nzTree && !state.nzSaving;
+  // Tryb 2: zakładka Struktura G/P z wybranym wyrobem G
+  const inDrzewo = !inWizard && state.activeTab === 'drzewoGP' && state.drzewoSelectedG;
+
+  if (!inWizard && !inDrzewo) return;
   e.preventDefault();
 
-  if (key === 'o') {
-    nzAddOp(container._id);
-    nzFocusAfterAdd('op');
-  } else if (key === 'm') {
-    nzAddM(container._id);
-    nzFocusAfterAdd('mat');
-  } else if (key === 'p') {
-    const targetId = e.shiftKey ? state.nzTree._id : container._id;
-    nzAddP(targetId);
-    nzFocusAfterAdd('p');
+  // ── Tryb wizard ──────────────────────────────────────────────────────────────
+  if (inWizard) {
+    const container = nzGetActiveContainer();
+    if (!container) return;
+    if (key === 'o') {
+      nzAddOp(container._id);
+      nzFocusAfterAdd('op');
+    } else if (key === 'm') {
+      nzAddM(container._id);
+      nzFocusAfterAdd('mat');
+    } else if (key === 'p') {
+      const targetId = e.shiftKey ? state.nzTree._id : container._id;
+      nzAddP(targetId);
+      nzFocusAfterAdd('p');
+    }
+    return;
+  }
+
+  // ── Tryb Struktura G/P ───────────────────────────────────────────────────────
+  // O i M – otwórz panel nowego wyrobu z odpowiednim typem
+  // P       – nowy półprodukt P
+  // Shift+P – nowy wyrób G (poziom główny)
+  if (key === 'p') {
+    const typ = e.shiftKey ? 'G' : 'P';
+    setState({
+      drzewoPanel: 'nowy',
+      drzewoNowyForm: { symbol: '', nazwa: '', typ, jednostka: 'szt', numer_rysunku: '' }
+    });
+    render();
+    // Ustaw focus na pole Symbol
+    requestAnimationFrame(() => {
+      const input = document.querySelector('[placeholder="np. G.100.001"], [placeholder="np. P-001"]');
+      if (input) { input.focus(); input.select(); }
+    });
+  } else if (key === 'o' || key === 'm') {
+    // O/M w kontekście G/P – otwórz panel nowego wyrobu (P dla operacji/materiałów)
+    setState({
+      drzewoPanel: 'nowy',
+      drzewoNowyForm: { symbol: '', nazwa: '', typ: 'P', jednostka: 'szt', numer_rysunku: '' }
+    });
+    render();
+    requestAnimationFrame(() => {
+      const input = document.querySelector('[placeholder="np. G.100.001"], [placeholder="np. P-001"]');
+      if (input) { input.focus(); input.select(); }
+    });
   }
 }
 

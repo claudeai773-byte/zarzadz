@@ -273,9 +273,10 @@ SECURITY_HEADERS = {
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob: https://res.cloudinary.com; "
-        "connect-src 'self' wss: ws:; "
+        "connect-src 'self' wss: ws: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://res.cloudinary.com; "
         "font-src 'self'; "
         "object-src 'none'; "
+        "worker-src blob:; "
         "frame-ancestors 'none';"
     ),
 }

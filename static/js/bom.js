@@ -236,9 +236,21 @@ async function toggleMajsterZlecenie(zid) {
     ]);
     if (!drzewo.materialy || drzewo.materialy.length === 0) drzewo.materialy = matsM || [];
     const newCache = {...(state.majsterOpsCache || {}), [zid]: drzewo.operacje || []};
+
+    // Zaktualizuj podzlecenieIds – ukryj podzlecenia P z głównej listy (tak jak w toggleZlecenieExpand)
+    const updatedPodzlecenieIds = new Set(state.podzlecenieIds || []);
+    (drzewo.podzlecenia_drzewo || []).forEach(pd => {
+      if (pd.zlecenie_p_id) updatedPodzlecenieIds.add(pd.zlecenie_p_id);
+      (pd.podzlecenia || []).forEach(sub => {
+        const subId = sub.zap?.zlecenie_p_id || sub.zap?.zp_id;
+        if (subId) updatedPodzlecenieIds.add(subId);
+      });
+    });
+
     setState({
       majsterOpsCache: newCache,
       zlecenieDrzewa: { ...(state.zlecenieDrzewa || {}), [zid]: drzewo },
+      podzlecenieIds: updatedPodzlecenieIds,
     });
   } catch(e) {
     const newCache = {...(state.majsterOpsCache || {}), [zid]: []};

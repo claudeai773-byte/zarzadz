@@ -86,29 +86,168 @@ function renderMajster() {
       });
       html += `<div class="section-hdr" style="margin-top:10px">📋 Postęp zleceń</div>`;
     }
-    if (!stats.zlecenia.length) {
+
+    // Filtruj podzlecenia P – pokazuj tylko zlecenia główne G (tak jak w zakładce Zlecenia)
+    const majsterPodzlecenieIds = state.podzlecenieIds instanceof Set ? state.podzlecenieIds : new Set(state.podzlecenieIds || []);
+    const zleceniaGlowne = (stats.zlecenia || []).filter(z => !majsterPodzlecenieIds.has(z.id));
+
+    if (!zleceniaGlowne.length) {
       html += `<div class="empty">Brak aktywnych zleceń</div>`;
     } else {
-      stats.zlecenia.forEach(z => {
+      zleceniaGlowne.forEach(z => {
         const prog = z.op_total > 0 ? Math.round((z.op_done/z.op_total)*100) : 0;
         const sztProg = z.ilosc_sztuk > 0 ? Math.round(((z.sztuki_wykonane||0)/z.ilosc_sztuk)*100) : 0;
         const przeterminowane = z.termin && new Date(z.termin) < new Date();
         const expanded = state.majsterExpandedZlecenie === z.id;
-        // Pobierz operacje z cache
-        const ops = (state.majsterOpsCache && state.majsterOpsCache[z.id] !== undefined)
-          ? state.majsterOpsCache[z.id] : null;
+        const drzewo = (state.zlecenieDrzewa || {})[z.id];
+
+        // Drzewko G→P inline – identyczne jak w zakładce Zlecenia
+        let drzewoHtml = '';
+        if (expanded) {
+          if (!drzewo) {
+            drzewoHtml = `<div style="padding:10px;text-align:center;color:var(--dim);font-size:12px">⏳ Ładowanie...</div>`;
+          } else {
+            const operacje    = drzewo.operacje || [];
+            const materialy   = drzewo.materialy || [];
+            const polprodukty = drzewo.polprodukty || [];
+            const podzlecenia = drzewo.podzlecenia_drzewo || [];
+
+            const renderOp = (op, indent) => {
+              const stColor = op.status==='zakonczona'?'var(--green)':op.status==='oczekuje'?'var(--dim)':'var(--accent)';
+              const done = op.status==='zakonczona';
+              return `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px ${indent}px;border-bottom:1px solid rgba(46,53,72,0.4);${done?'opacity:.6':''}">
+                <span style="color:${stColor};font-size:10px">●</span>
+                <span style="font-size:12px;flex:1;${done?'text-decoration:line-through':''}">${op.kolejnosc}. ${op.nazwa}</span>
+                ${op.stanowisko?`<span style="font-size:10px;color:var(--blue);background:rgba(52,152,219,.1);border-radius:3px;padding:1px 5px">${op.stanowisko}</span>`:''}
+                ${op.czas_norma?`<span style="font-size:10px;color:var(--accent)">⏱${op.czas_norma}min</span>`:''}
+                <span style="font-size:12px;font-weight:700;color:${stColor}">${op.ilosc_wykonana||0}/${z.ilosc_sztuk}</span>
+              </div>`;
+            };
+
+            const renderMat = (m, indent) => `<div style="display:flex;align-items:center;gap:8px;padding:3px 10px 3px ${indent}px;border-bottom:1px solid rgba(46,53,72,0.3);background:rgba(243,156,18,0.03)">
+              <span style="font-size:10px;color:var(--orange)">■</span>
+              <span style="font-size:11px;font-weight:600;color:var(--orange);min-width:60px">${m.indeks||''}</span>
+              <span style="font-size:11px;flex:1">${m.opis||''}</span>
+              <span style="font-size:10px;color:var(--dim)">${m.ilosc} ${m.jednostka||''}</span>
+            </div>`;
+
+            const hdr = (icon, label, indent, color) => `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:${color||'var(--dim)'};letter-spacing:.7px;padding:5px 10px 2px ${indent}px;background:rgba(0,0,0,.12)">${icon} ${label}</div>`;
+
+            let treeRows = '';
+
+            if (operacje.length) {
+              treeRows += hdr('🔧', `Operacje G (${operacje.length})`, 10, 'var(--dim)');
+              operacje.forEach(op => { treeRows += renderOp(op, 22); });
+            }
+
+            podzlecenia.forEach(pd => {
+              const zap = pd.zap || {};
+              const pid = pd.zlecenie_p_id;
+              const pNumer = zap.zp_numer || zap.zlecenie_p_numer || '';
+              const pNazwa = zap.zp_nazwa || zap.wyrob_nazwa || zap.wyrob_p_symbol || '';
+              const pStatus = zap.zp_status || zap.zlecenie_p_status || '—';
+              const pIlosc = zap.ilosc_wymagana || '';
+              const pSymbol = zap.wyrob_p_symbol || pNumer;
+              const stCol = pStatus==='zakonczone'?'var(--green)':pStatus==='w_toku'?'var(--accent)':'var(--dim)';
+              const pOps = pd.operacje || [];
+              const pMats = pd.materialy || [];
+              const pSubs = pd.podzlecenia || [];
+
+              treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px 6px 14px;border-bottom:1px solid rgba(139,92,246,0.2);border-top:1px solid rgba(139,92,246,0.15);background:rgba(139,92,246,0.08);margin-top:2px">
+                <span style="font-size:13px">◆</span>
+                <span style="font-size:13px;font-weight:700;color:#a78bfa;flex:1">
+                  ${pNumer ? `<span style="color:#a78bfa">${pNumer}</span>` : `<span style="color:#a78bfa">${pSymbol}</span>`}
+                  ${pNazwa ? `<span style="color:var(--dim);font-weight:400;font-size:12px"> – ${pNazwa}</span>` : ''}
+                </span>
+                ${pIlosc ? `<span style="font-size:10px;color:var(--dim)">${pIlosc} szt.</span>` : ''}
+                <span style="font-size:10px;padding:1px 7px;border-radius:4px;background:rgba(139,92,246,0.15);color:${stCol};font-weight:700">${pStatus}</span>
+              </div>`;
+
+              if (pOps.length) {
+                treeRows += hdr('🔧', `Operacje (${pOps.length})`, 28, '#8b7fd0');
+                pOps.forEach(op => { treeRows += renderOp(op, 36); });
+              } else if (pid) {
+                treeRows += `<div style="padding:4px 10px 4px 28px;font-size:11px;color:var(--dim);font-style:italic">Brak operacji</div>`;
+              }
+
+              if (pMats.length) {
+                treeRows += hdr('📦', `Materiały (${pMats.length})`, 28, '#8b7fd0');
+                pMats.forEach(m => { treeRows += renderMat(m, 36); });
+              }
+
+              pSubs.forEach(sub => {
+                const szap = sub.zap || {};
+                const sNumer = szap.zp_numer || szap.zlecenie_p_numer || '';
+                const sNazwa = szap.zp_nazwa || szap.wyrob_nazwa || szap.wyrob_p_symbol || '';
+                const sStatus = szap.zp_status || szap.zlecenie_p_status || '—';
+                const sSymbol = szap.wyrob_p_symbol || sNumer;
+                const sCol = sStatus==='zakonczone'?'var(--green)':sStatus==='w_toku'?'var(--accent)':'var(--dim)';
+                const sOps = sub.operacje || [];
+                const sMats = sub.materialy || [];
+
+                treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:5px 10px 5px 28px;border-bottom:1px solid rgba(139,92,246,0.12);background:rgba(139,92,246,0.04)">
+                  <span style="font-size:11px;color:#7c68c8">◆</span>
+                  <span style="font-size:12px;font-weight:700;color:#9b8be8;flex:1">
+                    ${sNumer ? sNumer : sSymbol}
+                    ${sNazwa ? `<span style="color:var(--dim);font-weight:400;font-size:11px"> – ${sNazwa}</span>` : ''}
+                  </span>
+                  <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,92,246,0.1);color:${sCol};font-weight:700">${sStatus}</span>
+                </div>`;
+                if (sOps.length) {
+                  treeRows += hdr('🔧', `Operacje (${sOps.length})`, 42, '#6b5fa0');
+                  sOps.forEach(op => { treeRows += renderOp(op, 50); });
+                }
+                if (sMats.length) {
+                  treeRows += hdr('📦', `Materiały (${sMats.length})`, 42, '#6b5fa0');
+                  sMats.forEach(m => { treeRows += renderMat(m, 50); });
+                }
+              });
+            });
+
+            if (polprodukty.length) {
+              treeRows += hdr('🔩', `Półprodukty P (${polprodukty.length})`, 10, 'var(--dim)');
+              polprodukty.forEach(p => {
+                treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px 22px;border-bottom:1px solid rgba(46,53,72,0.5)">
+                  <span style="font-size:11px;color:#a78bfa">◆</span>
+                  <span style="font-size:12px;flex:1"><b style="color:#a78bfa">${p.symbol}</b> – ${p.nazwa}</span>
+                  <span style="font-size:11px;color:var(--dim)">${p.ilosc} ${p.jednostka}</span>
+                </div>`;
+              });
+            }
+
+            if (materialy.length) {
+              treeRows += hdr('📦', `Materiały G (${materialy.length})`, 10, 'var(--dim)');
+              materialy.forEach(m => {
+                treeRows += `<div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px 22px;border-bottom:1px solid rgba(46,53,72,0.5)">
+                  <span style="font-size:11px;color:var(--orange)">■</span>
+                  <span style="font-size:12px;flex:1"><b style="color:var(--orange)">${m.indeks}</b> – ${m.opis}</span>
+                  <span style="font-size:11px;color:var(--dim)">${m.ilosc} ${m.jednostka}</span>
+                </div>`;
+              });
+            }
+
+            if (!treeRows) {
+              treeRows = `<div style="text-align:center;padding:12px;color:var(--dim);font-size:12px">Brak operacji, podzleceń ani materiałów.</div>`;
+            }
+
+            drzewoHtml = `<div style="background:var(--entry);border-radius:0 0 8px 8px;border-top:1px solid var(--border);margin-top:4px">${treeRows}</div>`;
+          }
+        }
+
         html += `
-        <div class="card" style="${przeterminowane?'border-color:var(--red)':''}">
+        <div class="card" style="${przeterminowane?'border-color:var(--red)':''}padding-bottom:${expanded?'0':''}">
           <div class="card-header" style="cursor:pointer" onclick="toggleMajsterZlecenie(${z.id})">
             <div style="flex:1">
-              <div class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</div>
-              <div class="card-sub">${z.nazwa}</div>
-              ${z.termin?`<div class="card-sub">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
-              ${(() => { const estOps = (state.majsterOpsCache&&state.majsterOpsCache[z.id])||null; const est=szacowanyKoniec(z,estOps); return est?`<div class="card-sub" style="color:var(--blue)">🕐 Szac. koniec: ${fmtEstimatedKoniec(est)}</div>`:''; })()}
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:13px;color:var(--dim);transition:transform .2s;display:inline-block;transform:${expanded?'rotate(90deg)':'rotate(0deg)'}">▶</span>
+                <span class="card-title">${z.numer} ${przeterminowane?'<span class="badge badge-red">TERMIN!</span>':''}</span>
+              </div>
+              <div class="card-sub" style="margin-left:21px">${z.nazwa}</div>
+              ${z.termin?`<div class="card-sub" style="margin-left:21px">📅 Termin: ${fmtDate(z.termin)}</div>`:''}
+              ${(() => { const estOps = (state.majsterOpsCache&&state.majsterOpsCache[z.id])||null; const est=szacowanyKoniec(z,estOps); return est?`<div class="card-sub" style="color:var(--blue);margin-left:21px">🕐 Szac. koniec: ${fmtEstimatedKoniec(est)}</div>`:''; })()}
             </div>
             <div style="display:flex;align-items:center;gap:8px">
               ${statusBadge(z.status)}
-              <span style="color:var(--dim);font-size:16px">${expanded?'▲':'▼'}</span>
             </div>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:4px">
@@ -120,95 +259,13 @@ function renderMajster() {
           <div style="font-size:12px;color:var(--dim);margin-top:4px">
             📦 Sztuki: <b style="color:${sztProg>=100?'var(--green)':'var(--text)'}">${z.sztuki_wykonane||0}/${z.ilosc_sztuk}</b> (${sztProg}%)
           </div>
-          ${expanded ? `
-          <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
-            ${(() => {
-              const drzewo = (state.zlecenieDrzewa || {})[z.id];
-              if (!drzewo) return '<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">⏳ Ładowanie...</div>';
-
-              const renderOpRow = (op, indent) => {
-                const stColor = op.status==='zakonczona'?'var(--green)':op.status==='w_toku'?'var(--accent)':'var(--dim)';
-                const stIcon = op.status==='zakonczona'?'✅':op.status==='w_toku'?'▶':'⏳';
-                const opProg = z.ilosc_sztuk > 0 ? Math.round((op.ilosc_wykonana||0)/z.ilosc_sztuk*100) : 0;
-                const done = op.status==='zakonczona';
-                return `<div style="padding:5px 4px 5px ${indent}px;border-bottom:1px solid rgba(46,53,72,.3)">
-                  <div style="display:flex;align-items:center;gap:8px">
-                    <span style="font-size:13px">${stIcon}</span>
-                    <div style="flex:1;min-width:0">
-                      <div style="font-size:12px;font-weight:600;${done?'color:var(--dim);text-decoration:line-through':''}">${op.kolejnosc}. ${op.nazwa}</div>
-                      <div style="font-size:11px;color:var(--dim)">${op.stanowisko||'—'}${op.czas_norma?' · norma: '+op.czas_norma+' min':''}</div>
-                    </div>
-                    <div style="text-align:right;flex-shrink:0">
-                      <div style="font-size:12px;font-weight:700;color:${stColor}">${op.ilosc_wykonana||0}/${z.ilosc_sztuk}</div>
-                      <div style="font-size:10px;color:var(--dim)">${opProg}%</div>
-                    </div>
-                  </div>
-                  <div class="progress-wrap" style="height:3px;margin:4px 0 0">
-                    <div class="progress-bar" style="width:${Math.min(100,opProg)}%;background:${stColor}"></div>
-                  </div>
-                </div>`;
-              };
-
-              let html2 = '';
-              const gOps = drzewo.operacje || [];
-              const pdzl = drzewo.podzlecenia_drzewo || [];
-
-              // Operacje G
-              if (gOps.length) {
-                html2 += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--dim);letter-spacing:.7px;padding:3px 4px">🔧 Operacje G (${gOps.length})</div>`;
-                gOps.forEach(op => { html2 += renderOpRow(op, 4); });
-              }
-
-              // Podzlecenia P z ich operacjami i sub-podzleceniami
-              pdzl.forEach(pd => {
-                const zap = pd.zap || {};
-                const pNumer = zap.zp_numer || zap.zlecenie_p_numer || '';
-                const pNazwa = zap.zp_nazwa || zap.wyrob_nazwa || zap.wyrob_p_symbol || '';
-                const pStatus = zap.zp_status || zap.zlecenie_p_status || '—';
-                const stCol = pStatus==='zakonczone'?'var(--green)':pStatus==='w_toku'?'var(--accent)':'var(--dim)';
-                const pOps = pd.operacje || [];
-                const pSubs = pd.podzlecenia || [];
-                const pOpsDone = pOps.filter(o=>o.status==='zakonczona').length;
-
-                html2 += `<div style="display:flex;align-items:center;gap:6px;padding:6px 4px 4px;border-top:1px solid rgba(139,92,246,0.2);margin-top:4px;background:rgba(139,92,246,0.05)">
-                  <span style="font-size:12px">◆</span>
-                  <span style="font-size:12px;font-weight:700;color:#a78bfa;flex:1">${pNumer||zap.wyrob_p_symbol||'P'}${pNazwa?` <span style="color:var(--dim);font-weight:400;font-size:11px">– ${pNazwa}</span>`:''}</span>
-                  <span style="font-size:10px;color:var(--dim)">${pOpsDone}/${pOps.length} op.</span>
-                  <span style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(139,92,246,0.15);color:${stCol};font-weight:700">${pStatus}</span>
-                </div>`;
-
-                pOps.forEach(op => { html2 += renderOpRow(op, 16); });
-
-                // Sub-podzlecenia
-                pSubs.forEach(sub => {
-                  const szap = sub.zap || {};
-                  const sNumer = szap.zp_numer || szap.zlecenie_p_numer || '';
-                  const sNazwa = szap.zp_nazwa || szap.wyrob_nazwa || szap.wyrob_p_symbol || '';
-                  const sStatus = szap.zp_status || szap.zlecenie_p_status || '—';
-                  const sCol = sStatus==='zakonczone'?'var(--green)':sStatus==='w_toku'?'var(--accent)':'var(--dim)';
-                  const sOps = sub.operacje || [];
-                  const sOpsDone = sOps.filter(o=>o.status==='zakonczona').length;
-
-                  html2 += `<div style="display:flex;align-items:center;gap:6px;padding:4px 4px 4px 20px;border-top:1px solid rgba(139,92,246,0.12);background:rgba(139,92,246,0.03)">
-                    <span style="font-size:11px;color:#7c68c8">◆</span>
-                    <span style="font-size:11px;font-weight:700;color:#9b8be8;flex:1">${sNumer||szap.wyrob_p_symbol||'P'}${sNazwa?` <span style="color:var(--dim);font-weight:400">– ${sNazwa}</span>`:''}</span>
-                    <span style="font-size:10px;color:var(--dim)">${sOpsDone}/${sOps.length} op.</span>
-                    <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(139,92,246,0.1);color:${sCol};font-weight:700">${sStatus}</span>
-                  </div>`;
-                  sOps.forEach(op => { html2 += renderOpRow(op, 28); });
-                });
-              });
-
-              if (!html2) return '<div style="font-size:12px;color:var(--dim);text-align:center;padding:8px">Brak operacji</div>';
-              return html2;
-            })()}
-          </div>` : ''}
+          ${drzewoHtml}
         </div>`;
       });
     }
   }
 
-  if (state.majsterSubTab === 'koszty') {
+    if (state.majsterSubTab === 'koszty') {
     html += `<div class="section-hdr">💰 Koszty pracowników dziś</div>`;
     const koszty = stats.koszty_dzis || [];
     if (!koszty.length) {

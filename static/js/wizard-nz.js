@@ -301,12 +301,7 @@ function nzUpdateOp(nodeId, opId, field, value) {
   const op = node.ops.find(o => o._id === opId);
   if (!op) return;
   op[field] = value;
-  // Pola tekstowe (textarea) – nie re-renderuj, żeby nie tracić focusu i pozycji kursora
-  if (field === 'opis_czynnosci') {
-    setState({ nzTree: root }, true);
-  } else {
-    setState({ nzTree: root });
-  }
+  setState({ nzTree: root });
 }
 
 function nzAddM(parentId) {
@@ -998,9 +993,9 @@ function renderNzWizard() {
                        onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
-              <textarea placeholder="Opis czynności (opcjonalnie)"
-                     oninput="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
-                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:52px;font-family:inherit">${(op.opis_czynnosci||'').replace(/</g,'&lt;')}</textarea>
+              <input type="text" placeholder="Opis czynności (opcjonalnie)" value="${op.opis_czynnosci||''}"
+                     onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
             </div>
           </div>`).join('');
       editPanel = `
@@ -1057,9 +1052,9 @@ function renderNzWizard() {
                        onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
-              <textarea placeholder="Opis czynności (opcjonalnie)"
-                     oninput="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
-                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:52px;font-family:inherit">${(op.opis_czynnosci||'').replace(/</g,'&lt;')}</textarea>
+              <input type="text" placeholder="Opis czynności (opcjonalnie)" value="${op.opis_czynnosci||''}"
+                     onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
             </div>
           </div>`).join('');
       editPanel = `
@@ -1421,6 +1416,8 @@ function nzFocusAfterAdd(kind) {
 }
 
 function nzShortcutKeydown(e) {
+  // Działa tylko gdy wizard jest na kroku 2 (struktura G→P) i nic się nie zapisuje
+  if (!state.nzModal || state.nzStep !== 2 || !state.nzTree || state.nzSaving) return;
   // Nigdy nie przechwytuj kombinacji z Ctrl/Cmd/Alt (np. Ctrl+P = drukuj)
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const key = (e.key || '').toLowerCase();
@@ -1429,66 +1426,75 @@ function nzShortcutKeydown(e) {
   const tag = e.target && e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
 
-  // Tryb 1: wizard nowego/edytowanego zlecenia (jedna strona z drzewem G→P)
-  // UWAGA: nzStep nie jest już używany do przełączania widoku (renderNzWizard
-  // renderuje od razu cały układ, niezależnie od nzStep) – sprawdzanie
-  // nzStep === 2 powodowało, że skróty nigdy się nie aktywowały.
-  const inWizard = state.nzModal && state.nzTree && !state.nzSaving;
-  // Tryb 2: zakładka Struktura G/P z wybranym wyrobem G
-  const inDrzewo = !inWizard && state.activeTab === 'drzewo' && state.drzewoSelectedG;
-
-  if (!inWizard && !inDrzewo) return;
+  const container = nzGetActiveContainer();
+  if (!container) return;
   e.preventDefault();
 
-  // ── Tryb wizard ──────────────────────────────────────────────────────────────
-  if (inWizard) {
-    const container = nzGetActiveContainer();
-    if (!container) return;
-    if (key === 'o') {
-      nzAddOp(container._id);
-      nzFocusAfterAdd('op');
-    } else if (key === 'm') {
-      nzAddM(container._id);
-      nzFocusAfterAdd('mat');
-    } else if (key === 'p') {
-      const targetId = e.shiftKey ? state.nzTree._id : container._id;
-      nzAddP(targetId);
-      nzFocusAfterAdd('p');
-    }
-    return;
-  }
-
-  // ── Tryb Struktura G/P ───────────────────────────────────────────────────────
-  // O i M – otwórz panel nowego wyrobu z odpowiednim typem
-  // P       – nowy półprodukt P
-  // Shift+P – nowy wyrób G (poziom główny)
-  if (key === 'p') {
-    const typ = e.shiftKey ? 'G' : 'P';
-    setState({
-      drzewoPanel: 'nowy',
-      drzewoNowyForm: { symbol: '', nazwa: '', typ, jednostka: 'szt', numer_rysunku: '' }
-    });
-    render();
-    // Ustaw focus na pole Symbol
-    requestAnimationFrame(() => {
-      const input = document.querySelector('[placeholder="np. G.100.001"], [placeholder="np. P-001"]');
-      if (input) { input.focus(); input.select(); }
-    });
-  } else if (key === 'o' || key === 'm') {
-    // O/M w kontekście G/P – otwórz panel nowego wyrobu (P dla operacji/materiałów)
-    setState({
-      drzewoPanel: 'nowy',
-      drzewoNowyForm: { symbol: '', nazwa: '', typ: 'P', jednostka: 'szt', numer_rysunku: '' }
-    });
-    render();
-    requestAnimationFrame(() => {
-      const input = document.querySelector('[placeholder="np. G.100.001"], [placeholder="np. P-001"]');
-      if (input) { input.focus(); input.select(); }
-    });
+  if (key === 'o') {
+    nzAddOp(container._id);
+    nzFocusAfterAdd('op');
+  } else if (key === 'm') {
+    nzAddM(container._id);
+    nzFocusAfterAdd('mat');
+  } else if (key === 'p') {
+    const targetId = e.shiftKey ? state.nzTree._id : container._id;
+    nzAddP(targetId);
+    nzFocusAfterAdd('p');
   }
 }
 
 document.addEventListener('keydown', nzShortcutKeydown);
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TAB NAVIGATION – zapobiega skokowi do góry przy naciśnięciu TAB w modalu wizarda
+// ═══════════════════════════════════════════════════════════════════════════════
+// Problem: onchange na inputach powoduje setState → re-render → scroll do góry.
+// Rozwiązanie: przechwytujemy TAB zanim przeglądarka zmieni focus, sami ustawiamy
+// focus na kolejnym/poprzednim elemencie fokalnym w obrębie modalu.
+document.addEventListener('keydown', function nzTabHandler(e) {
+  if (e.key !== 'Tab') return;
+  if (!state.nzModal) return;
+
+  // Znajdź modal wizarda
+  const modal = document.querySelector('.nz-modal-wide');
+  if (!modal) return;
+
+  // Wszystkie focusowalne elementy w modalu (widoczne, nie wyłączone)
+  const focusable = Array.from(modal.querySelectorAll(
+    'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter(el => {
+    if (el.offsetParent === null) return false; // ukryty
+    if (el.closest('[style*="display:none"]') || el.closest('[style*="display: none"]')) return false;
+    return true;
+  });
+
+  if (focusable.length === 0) return;
+
+  const active = document.activeElement;
+  const idx = focusable.indexOf(active);
+
+  if (idx === -1) return; // aktywny element nie jest w modalu – nie przeszkadzaj
+
+  e.preventDefault(); // zatrzymaj domyślne przełączanie focus (które może scrollować)
+
+  let next;
+  if (e.shiftKey) {
+    next = focusable[(idx - 1 + focusable.length) % focusable.length];
+  } else {
+    next = focusable[(idx + 1) % focusable.length];
+  }
+
+  // Zachowaj pozycję scroll panelu edycji
+  const editPanel = document.getElementById('nz-edit-panel');
+  const editScrollTop = editPanel ? editPanel.scrollTop : 0;
+
+  next.focus();
+
+  // Przywróć scroll panelu po ewentualnym skoku
+  if (editPanel) {
+    requestAnimationFrame(() => { editPanel.scrollTop = editScrollTop; });
+  }
+}, true); // capture phase – przed innymi handlerami
 
 // Helper: zbiera dane z formularza jednej strony i wywołuje nzSave
 function nzSaveFromSinglePage() {

@@ -301,7 +301,12 @@ function nzUpdateOp(nodeId, opId, field, value) {
   const op = node.ops.find(o => o._id === opId);
   if (!op) return;
   op[field] = value;
-  setState({ nzTree: root });
+  // Pola tekstowe (textarea) – nie re-renderuj, żeby nie tracić focusu i pozycji kursora
+  if (field === 'opis_czynnosci') {
+    setState({ nzTree: root }, false);
+  } else {
+    setState({ nzTree: root });
+  }
 }
 
 function nzAddM(parentId) {
@@ -1427,7 +1432,7 @@ function nzShortcutKeydown(e) {
   // Tryb 1: wizard nowego zlecenia (krok 2)
   const inWizard = state.nzModal && state.nzStep === 2 && state.nzTree && !state.nzSaving;
   // Tryb 2: zakładka Struktura G/P z wybranym wyrobem G
-  const inDrzewo = !inWizard && state.activeTab === 'drzewoGP' && state.drzewoSelectedG;
+  const inDrzewo = !inWizard && state.activeTab === 'drzewo' && state.drzewoSelectedG;
 
   if (!inWizard && !inDrzewo) return;
   e.preventDefault();

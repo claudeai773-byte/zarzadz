@@ -5776,24 +5776,11 @@ async def step_proxy(url: str):
         sep = '&' if '?' in url else '?'
         url = url + sep + 'download=1'
 
-    # Cloudinary: jeśli URL jest z res.cloudinary.com, wygeneruj signed URL
-    # żeby ominąć błąd 401 dla plików raw bez access_mode=public
-    cld_match = _re.match(r'https://res\.cloudinary\.com/([^/]+)/raw/upload/(?:v\d+/)?(.+)', url)
-    if cld_match and CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET:
-        import hashlib as _hl, time as _time
-        cloud_name = cld_match.group(1)
-        public_id  = cld_match.group(2)
-        # Usuń rozszerzenie z public_id (Cloudinary przechowuje raw assets bez
-        # rozszerzenia w public_id, ale dołącza je w delivery URL – bez tego
-        # podpis się nie zgadza i /raw/download zwraca 401 -> 502 tutaj)
-        public_id = _re.sub(r'\.[A-Za-z0-9]{1,10}$', '', public_id)
-        ts = str(int(_time.time()) + 3600)  # expires 1h
-        sign_str = f"public_id={public_id}&timestamp={ts}{CLOUDINARY_SECRET}"
-        sig = _hl.sha1(sign_str.encode()).hexdigest()
-        url = (
-            f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD}/raw/download"
-            f"?public_id={public_id}&timestamp={ts}&api_key={CLOUDINARY_KEY}&signature={sig}"
-        )
+    # Cloudinary: pliki uploadowane z access_mode=public są publicznie dostępne
+    # – wystarczy pobrać oryginalny URL bezpośrednio bez generowania signed URL.
+    # (Poprzednia próba generowania /raw/download z podpisem była niepotrzebna
+    #  i często dawała 401, stąd błąd 502.)
+    # Nic nie robimy – url zostaje bez zmian i poniżej pobieramy go normalnie.
 
     ssl_ctx = _ssl.create_default_context()
     try:

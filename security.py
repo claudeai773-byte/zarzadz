@@ -270,13 +270,14 @@ SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob: https://res.cloudinary.com; "
-        "connect-src 'self' wss: ws: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://res.cloudinary.com; "
+        "connect-src 'self' wss: ws: blob: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://res.cloudinary.com; "
         "font-src 'self'; "
         "object-src 'none'; "
-        "worker-src blob:; "
+        "worker-src blob: 'self'; "
+        "child-src blob: 'self'; "
         "frame-ancestors 'none';"
     ),
 }

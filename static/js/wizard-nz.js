@@ -1331,8 +1331,15 @@ function renderNzWizard() {
             <span style="color:#a78bfa">P</span> = operacja/półprodukt &nbsp;
             <span style="color:#6b7280">M</span> = materiał
           </div>
+          <div style="font-size:.68rem;color:#334155;line-height:1.6;border-top:1px solid #1e293b;padding-top:6px">
+            ⌨ Skróty (gdy żadne pole tekstowe nie jest aktywne):
+            <b style="color:#60a5fa">O</b> dodaj operację ·
+            <b style="color:#6b7280">M</b> dodaj materiał ·
+            <b style="color:#a78bfa">P</b> dodaj P do aktywnego węzła ·
+            <b style="color:#a78bfa">Shift+P</b> dodaj P do głównego G
+          </div>
         </div>
-        <div style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;overflow-y:auto;max-height:420px">
+        <div id="nz-edit-panel" style="background:#0f172a;border:1px solid #1e293b;border-radius:8px;padding:12px;overflow-y:auto;max-height:420px">
           ${editPanel}
         </div>
       </div>
@@ -1362,6 +1369,81 @@ function renderNzWizard() {
       </div>
     </div>`;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SKRÓTY KLAWISZOWE – szybkie tworzenie O / M / P w drzewie wizarda
+// ═══════════════════════════════════════════════════════════════════════════════
+// O → dodaj operację do aktywnego węzła (G lub P)
+// M → dodaj materiał do aktywnego węzła (G lub P)
+// P → dodaj podzlecenie P do aktywnego węzła:
+//      - jeśli aktywny węzeł to G → nowe P na poziomie głównym
+//      - jeśli aktywny węzeł to P → nowe P zagnieżdżone w tym P
+// Shift+P → zawsze dodaj P na poziomie głównym (do korzenia G),
+//           niezależnie od tego, który węzeł jest aktywnie edytowany
+//
+// Aktywny węzeł = ten, którego panel edycji jest aktualnie otwarty (state.nzEditNode).
+// Jeśli aktywny jest węzeł M (materiał), kontenerem jest jego rodzic (G/P).
+// Jeśli nic nie jest jeszcze wybrane, kontenerem jest korzeń G.
+
+function nzGetActiveContainer() {
+  const tree = state.nzTree;
+  if (!tree) return null;
+  const node = state.nzEditNode ? nzFindNode(tree, state.nzEditNode) : null;
+  if (!node) return tree;
+  if (node.typ === 'M') {
+    return nzFindParent(tree, node._id) || tree;
+  }
+  return node; // G lub P
+}
+
+// Po dodaniu O/M/P od razu ustaw focus na pierwszym polu do wypełnienia,
+// żeby można pisać dalej bez sięgania po mysz.
+function nzFocusAfterAdd(kind) {
+  requestAnimationFrame(() => {
+    const panel = document.getElementById('nz-edit-panel');
+    if (!panel) return;
+    let el = null;
+    if (kind === 'op') {
+      const inputs = panel.querySelectorAll('input[placeholder="Nazwa operacji"]');
+      el = inputs[inputs.length - 1] || null;
+    } else if (kind === 'mat') {
+      el = document.getElementById('nz-mat-search');
+    } else if (kind === 'p') {
+      el = panel.querySelector('input[placeholder="np. P-001"]');
+    }
+    if (el) { el.focus(); if (el.select) el.select(); }
+  });
+}
+
+function nzShortcutKeydown(e) {
+  // Działa tylko gdy wizard jest na kroku 2 (struktura G→P) i nic się nie zapisuje
+  if (!state.nzModal || state.nzStep !== 2 || !state.nzTree || state.nzSaving) return;
+  // Nigdy nie przechwytuj kombinacji z Ctrl/Cmd/Alt (np. Ctrl+P = drukuj)
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const key = (e.key || '').toLowerCase();
+  if (key !== 'o' && key !== 'm' && key !== 'p') return;
+  // Nie przeszkadzaj w pisaniu w polach tekstowych
+  const tag = e.target && e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+
+  const container = nzGetActiveContainer();
+  if (!container) return;
+  e.preventDefault();
+
+  if (key === 'o') {
+    nzAddOp(container._id);
+    nzFocusAfterAdd('op');
+  } else if (key === 'm') {
+    nzAddM(container._id);
+    nzFocusAfterAdd('mat');
+  } else if (key === 'p') {
+    const targetId = e.shiftKey ? state.nzTree._id : container._id;
+    nzAddP(targetId);
+    nzFocusAfterAdd('p');
+  }
+}
+
+document.addEventListener('keydown', nzShortcutKeydown);
 
 // Helper: zbiera dane z formularza jednej strony i wywołuje nzSave
 function nzSaveFromSinglePage() {

@@ -299,53 +299,78 @@ function renderAdmin() {
   if (state.adminTab === 'logi') {
     const logi = state.adminLogi;
     const logiFiltr = state.adminLogiFiltr || '';
+    const logiTypFiltr = state.adminLogiTypFiltr || '';
+
+    // Typy logów z ikonami i kolorami
+    const TYPY = {
+      'LOGIN_OK':    { ikona: '🟢', kolor: 'var(--green)',   label: 'Login OK' },
+      'LOGIN_FAIL':  { ikona: '🔴', kolor: 'var(--red)',     label: 'Login FAIL' },
+      'LOGOUT':      { ikona: '⚪', kolor: 'var(--dim)',     label: 'Logout' },
+      'SESJA_START': { ikona: '▶️',  kolor: 'var(--green)',  label: 'Start sesji' },
+      'SESJA_STOP':  { ikona: '⏹️',  kolor: 'var(--blue)',   label: 'Stop sesji' },
+      'PAUZA_START': { ikona: '⏸️',  kolor: 'var(--orange)', label: 'Pauza start' },
+      'PAUZA_STOP':  { ikona: '▶️',  kolor: 'var(--accent)', label: 'Pauza stop' },
+      'ADMIN':       { ikona: '🔐', kolor: '#8e44ad',        label: 'Admin' },
+    };
+    const ikonaTypu = t => (TYPY[t]||{ikona:'📌'}).ikona;
+    const kolorTypu = t => (TYPY[t]||{kolor:'var(--dim)'}).kolor;
+
+    // Przyciski filtrowania po typie
+    const allTypes = logi ? [...new Set(logi.map(l=>l.typ))].sort() : [];
+    const typBtns = allTypes.map(t => {
+      const active = logiTypFiltr === t;
+      const info = TYPY[t] || {ikona:'📌', kolor:'var(--dim)', label: t};
+      return `<button onclick="setState({adminLogiTypFiltr:'${active ? '' : t}'})"
+        style="padding:4px 10px;border-radius:14px;border:1px solid ${active ? info.kolor : 'var(--border)'};
+               background:${active ? info.kolor+'22' : 'var(--panel)'};color:${active ? info.kolor : 'var(--dim)'};
+               cursor:pointer;font-size:11px;font-weight:${active?700:400};white-space:nowrap">
+        ${info.ikona} ${info.label}
+      </button>`;
+    }).join('');
+
     html += `
-    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-      <input id="logi-filtr" type="text" placeholder="Szukaj w logach (użytkownik, akcja...)"
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+      <input id="logi-filtr" type="text" placeholder="Szukaj (użytkownik, akcja, szczegóły...)"
         value="${logiFiltr}"
         style="flex:1;min-width:180px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px"
         onkeyup="setState({adminLogiFiltr:this.value})">
       <button class="btn btn-accent" style="padding:7px 14px" onclick="loadAdminLogi()">🔄 Odśwież</button>
-    </div>`;
+      <button class="btn btn-red" style="padding:7px 14px" onclick="clearAdminLogi()">🗑 Wyczyść</button>
+    </div>
+    ${allTypes.length ? `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px">${typBtns}</div>` : ''}`;
+
     if (!logi) {
       html += `<div class="empty">⏳ Ładowanie logów...</div>`;
     } else if (!logi.length) {
       html += `<div class="empty">Brak wpisów w logach.</div>`;
     } else {
       const filtr = (state.adminLogiFiltr||'').toLowerCase();
-      const filtered = filtr ? logi.filter(l =>
+      let filtered = logi;
+      if (logiTypFiltr) filtered = filtered.filter(l => l.typ === logiTypFiltr);
+      if (filtr) filtered = filtered.filter(l =>
         (l.username||'').toLowerCase().includes(filtr) ||
         (l.akcja||'').toLowerCase().includes(filtr) ||
-        (l.szczegoly||'').toLowerCase().includes(filtr)
-      ) : logi;
-      const ikonaTypu = (typ) => {
-        if (typ==='LOGIN_OK') return '🟢';
-        if (typ==='LOGIN_FAIL') return '🔴';
-        if (typ==='LOGOUT') return '⚪';
-        if (typ==='ADMIN') return '🔐';
-        if (typ==='SESJA_START') return '▶️';
-        if (typ==='SESJA_STOP') return '⏹️';
-        if (typ==='PAUZA') return '⏸️';
-        return '📌';
-      };
-      const kolorTypu = (typ) => {
-        if (typ==='LOGIN_OK'||typ==='SESJA_START') return 'var(--green)';
-        if (typ==='LOGIN_FAIL') return 'var(--red)';
-        if (typ==='ADMIN') return '#8e44ad';
-        return 'var(--dim)';
-      };
+        (l.szczegoly||'').toLowerCase().includes(filtr) ||
+        (l.typ||'').toLowerCase().includes(filtr)
+      );
+
       html += `<div style="font-size:11px;color:var(--dim);margin-bottom:8px">Pokazano ${filtered.length} z ${logi.length} wpisów</div>`;
       filtered.forEach(l => {
-        const dt = l.czas ? new Date(l.czas.replace('Z','+00:00')).toLocaleString('pl-PL',{timeZone:'Europe/Warsaw',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+        const dt = l.czas ? new Date(l.czas.replace(' ','T')+'Z').toLocaleString('pl-PL',{timeZone:'Europe/Warsaw',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+        const kolor = kolorTypu(l.typ);
         html += `
-        <div class="card" style="padding:8px 12px;margin-bottom:6px;border-left:3px solid ${kolorTypu(l.typ)}">
+        <div class="card" style="padding:8px 12px;margin-bottom:5px;border-left:3px solid ${kolor}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
             <div style="flex:1;min-width:0">
-              <div style="font-size:12px;font-weight:700">${ikonaTypu(l.typ)} <span style="color:${kolorTypu(l.typ)}">${l.typ}</span> &nbsp;<span style="color:var(--text)">👤 ${l.username||'—'}</span></div>
+              <div style="font-size:12px;font-weight:700">
+                ${ikonaTypu(l.typ)} <span style="color:${kolor}">${l.typ}</span>
+                &nbsp;<span style="color:var(--text)">👤 ${l.username||'—'}</span>
+                ${l.ip ? `<span style="color:var(--dim);font-size:10px;margin-left:6px">🌐 ${l.ip}</span>` : ''}
+              </div>
               <div style="font-size:12px;color:var(--text);margin-top:3px">${l.akcja||''}</div>
-              ${l.szczegoly ? `<div style="font-size:11px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${l.szczegoly}</div>` : ''}
+              ${l.szczegoly ? `<div style="font-size:11px;color:var(--dim);margin-top:2px;line-height:1.5;word-break:break-word">${l.szczegoly}</div>` : ''}
             </div>
-            <div style="font-size:10px;color:var(--dim);white-space:nowrap;margin-top:2px">${dt}</div>
+            <div style="font-size:10px;color:var(--dim);white-space:nowrap;margin-top:2px;text-align:right">${dt}</div>
           </div>
         </div>`;
       });
@@ -671,11 +696,21 @@ async function loadAdminLogi() {
   setState({adminLogi: null});
   render();
   try {
-    const data = await get('/api/admin/logi');
+    const data = await get('/api/admin/logi?limit=2000');
     setState({adminLogi: data.logi || []});
   } catch(e) {
     setState({adminLogi: []});
     console.error('Błąd ładowania logów:', e);
   }
   render();
+}
+
+async function clearAdminLogi() {
+  if (!confirm('Czy na pewno chcesz wyczyścić wszystkie logi? Tej operacji nie można cofnąć.')) return;
+  try {
+    await del('/api/admin/logi');
+    await loadAdminLogi();
+  } catch(e) {
+    alert('Błąd czyszczenia logów: ' + e.message);
+  }
 }

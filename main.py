@@ -1444,7 +1444,17 @@ def start_sesja(req: StartSesjaRequest):
         u_name = user_row["username"] if user_row else str(req.user_id)
         op_row = conn.execute("SELECT o.nazwa, z.numer FROM operacje o LEFT JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?", (req.operacja_id,)).fetchone() if req.operacja_id else None
         szczeg = f"op={op_row['nazwa'] if op_row else '-'}, zlecenie={op_row['numer'] if op_row else '-'}, typ={req.typ}" if op_row else f"typ={req.typ}"
-        db_log(req.user_id, u_name, "SESJA_START", "Start sesji pracy", szczeg)
+        full_name_s = user_row["full_name"] if user_row else u_name
+        op_name_s = op_row['nazwa'] if op_row else '-'
+        zl_numer_s = op_row['numer'] if op_row else '-'
+        szczeg_full = szczeg + f", pracownik={full_name_s}"
+        if req.typ == "operacja":
+            szczeg_full = f"pracownik={full_name_s}, operacja={op_name_s}, zlecenie={zl_numer_s}, typ={req.typ}"
+        elif req.typ in ("zbrojenie", "inne_zlecenie", "nieprodukcyjna"):
+            szczeg_full = f"pracownik={full_name_s}, typ={req.typ}, zlecenie={zl_numer_s if zl_numer_s != '-' else (req.uwagi or '-')}"
+        else:
+            szczeg_full = f"pracownik={full_name_s}, typ={req.typ}"
+        db_log(req.user_id, u_name, "SESJA_START", f"Start sesji – {req.typ} ({full_name_s})", szczeg_full)
         return {"sesja_id": sesja_id, "start_time": now}
 
 @app.post("/api/sesje/pauza/start", dependencies=[Depends(verify_key)])
@@ -1461,6 +1471,15 @@ def pauza_start(req: PauzaRequest):
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        # Loguj start pauzy
+        user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
+        u_name = user_row["username"] if user_row else str(sesja["user_id"])
+        full_name = user_row["full_name"] if user_row else u_name
+        op_row = conn.execute("SELECT o.nazwa, z.numer FROM operacje o LEFT JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?", (sesja["operacja_id"],)).fetchone() if sesja["operacja_id"] else None
+        szczeg = f"sesja_id={req.sesja_id}, powod={req.powod or '-'}"
+        if op_row:
+            szczeg += f", op={op_row['nazwa']}, zlecenie={op_row['numer']}"
+        db_log(sesja["user_id"], u_name, "PAUZA_START", f"Pauza – start ({full_name})", szczeg)
         return {"ok": True, "pauza_start": now}
 
 @app.post("/api/sesje/pauza/stop", dependencies=[Depends(verify_key)])
@@ -1473,10 +1492,29 @@ def pauza_stop(req: PauzaRequest):
         pauzy = json.loads(sesja["pauzy"] or "[]")
         if not pauzy or pauzy[-1].get("koniec") is not None:
             raise HTTPException(400, "Brak aktywnej pauzy")
+        # Oblicz czas trwania pauzy
+        p_start = pauzy[-1].get("start","")
+        czas_pauzy_min = 0
+        try:
+            czas_pauzy_min = round((
+                _dt.datetime.fromisoformat(now.replace("Z","")) -
+                _dt.datetime.fromisoformat(p_start.replace("Z",""))
+            ).total_seconds() / 60, 1)
+        except Exception:
+            pass
         pauzy[-1]["koniec"] = now
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+        # Loguj koniec pauzy
+        user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
+        u_name = user_row["username"] if user_row else str(sesja["user_id"])
+        full_name = user_row["full_name"] if user_row else u_name
+        op_row = conn.execute("SELECT o.nazwa, z.numer FROM operacje o LEFT JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?", (sesja["operacja_id"],)).fetchone() if sesja["operacja_id"] else None
+        szczeg = f"sesja_id={req.sesja_id}, czas_pauzy={czas_pauzy_min} min, powod={pauzy[-1].get('powod') or '-'}"
+        if op_row:
+            szczeg += f", op={op_row['nazwa']}, zlecenie={op_row['numer']}"
+        db_log(sesja["user_id"], u_name, "PAUZA_STOP", f"Pauza – koniec ({full_name})", szczeg)
         return {"ok": True, "pauza_koniec": now}
 
 @app.post("/api/sesje/stop", dependencies=[Depends(verify_key)])
@@ -1519,9 +1557,33 @@ def stop_sesja(req: StopSesjaRequest):
 
         _threading.Thread(target=_db_backup_to_json, daemon=True).start()
         # Loguj stop sesji
-        user_row = conn.execute("SELECT username FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
+        user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
         u_name = user_row["username"] if user_row else str(sesja["user_id"])
-        db_log(sesja["user_id"], u_name, "SESJA_STOP", "Zatrzymanie sesji pracy", f"sztuk={req.ilosc_sztuk}, uwagi={req.uwagi or '-'}")
+        full_name_stop = user_row["full_name"] if user_row else u_name
+        # Oblicz czas trwania sesji (bez pauz)
+        czas_sesji_min = 0
+        try:
+            t_start = _dt.datetime.fromisoformat(sesja["start_time"].replace("Z",""))
+            t_end   = _dt.datetime.fromisoformat(now.replace("Z",""))
+            total_sec = (t_end - t_start).total_seconds()
+            for p in pauzy:
+                if p.get("start") and p.get("koniec"):
+                    try:
+                        ps = _dt.datetime.fromisoformat(p["start"].replace("Z",""))
+                        pe = _dt.datetime.fromisoformat(p["koniec"].replace("Z",""))
+                        total_sec -= (pe - ps).total_seconds()
+                    except Exception:
+                        pass
+            czas_sesji_min = round(max(0, total_sec) / 60, 1)
+        except Exception:
+            pass
+        op_row_stop = conn.execute("SELECT o.nazwa, z.numer FROM operacje o LEFT JOIN zlecenia z ON o.zlecenie_id=z.id WHERE o.id=?", (sesja["operacja_id"],)).fetchone() if sesja["operacja_id"] else None
+        szczeg_stop = f"pracownik={full_name_stop}, czas={czas_sesji_min} min, sztuk={req.ilosc_sztuk}"
+        if op_row_stop:
+            szczeg_stop += f", operacja={op_row_stop['nazwa']}, zlecenie={op_row_stop['numer']}"
+        if req.uwagi:
+            szczeg_stop += f", uwagi={req.uwagi}"
+        db_log(sesja["user_id"], u_name, "SESJA_STOP", f"Stop sesji – {sesja['typ']} ({full_name_stop})", szczeg_stop)
         return {"status": "ok", "end_time": now}
 
 class EditSesjaTimeRequest(BaseModel):
@@ -6141,6 +6203,23 @@ def admin_get_logi(limit: int = 500):
             (min(limit, 2000),)
         ).fetchall()
         return {"logi": [dict(r) for r in rows]}
+
+@app.delete("/api/admin/logi", dependencies=[Depends(verify_admin)])
+def admin_clear_logi(request: Request, x_session_token: Optional[str] = Header(None, alias="x-session-token")):
+    """Czyści wszystkie wpisy z dziennika akcji (tylko admin)."""
+    admin_user = get_session_user(x_session_token)
+    admin_name = admin_user.get("username", "admin") if admin_user else "admin"
+    with get_db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM action_log").fetchone()[0]
+        conn.execute("DELETE FROM action_log")
+        # Wstaw wpis o wyczyszczeniu logów
+        ip = get_client_ip(request)
+        conn.execute(
+            "INSERT INTO action_log (user_id, username, typ, akcja, szczegoly, ip) VALUES (?,?,?,?,?,?)",
+            (None, admin_name, "ADMIN", "Wyczyszczenie logów", f"Usunięto {count} wpisów", ip)
+        )
+    _threading.Thread(target=_db_backup_to_json, daemon=True).start()
+    return {"ok": True, "usunieto": count}
 
 # ─── WebSocket endpoint ────────────────────────────────────────────────────────
 @app.websocket("/ws/powiadomienia")

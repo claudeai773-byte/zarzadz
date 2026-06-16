@@ -303,7 +303,7 @@ function nzUpdateOp(nodeId, opId, field, value) {
   op[field] = value;
   // Pola tekstowe (textarea) – nie re-renderuj, żeby nie tracić focusu i pozycji kursora
   if (field === 'opis_czynnosci') {
-    setState({ nzTree: root }, false);
+    setState({ nzTree: root }, true);
   } else {
     setState({ nzTree: root });
   }
@@ -1429,8 +1429,11 @@ function nzShortcutKeydown(e) {
   const tag = e.target && e.target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
 
-  // Tryb 1: wizard nowego zlecenia (krok 2)
-  const inWizard = state.nzModal && state.nzStep === 2 && state.nzTree && !state.nzSaving;
+  // Tryb 1: wizard nowego/edytowanego zlecenia (jedna strona z drzewem G→P)
+  // UWAGA: nzStep nie jest już używany do przełączania widoku (renderNzWizard
+  // renderuje od razu cały układ, niezależnie od nzStep) – sprawdzanie
+  // nzStep === 2 powodowało, że skróty nigdy się nie aktywowały.
+  const inWizard = state.nzModal && state.nzTree && !state.nzSaving;
   // Tryb 2: zakładka Struktura G/P z wybranym wyrobem G
   const inDrzewo = !inWizard && state.activeTab === 'drzewo' && state.drzewoSelectedG;
 

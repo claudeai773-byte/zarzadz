@@ -1416,8 +1416,8 @@ function nzFocusAfterAdd(kind) {
 }
 
 function nzShortcutKeydown(e) {
-  // Działa tylko gdy wizard jest na kroku 2 (struktura G→P) i nic się nie zapisuje
-  if (!state.nzModal || state.nzStep !== 2 || !state.nzTree || state.nzSaving) return;
+  // Działa gdy wizard jest otwarty i nic się nie zapisuje (modal jest single-page)
+  if (!state.nzModal || !state.nzTree || state.nzSaving) return;
   // Nigdy nie przechwytuj kombinacji z Ctrl/Cmd/Alt (np. Ctrl+P = drukuj)
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const key = (e.key || '').toLowerCase();

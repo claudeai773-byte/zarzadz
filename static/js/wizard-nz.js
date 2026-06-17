@@ -993,9 +993,10 @@ function renderNzWizard() {
                        onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
-              <input type="text" placeholder="Opis czynności (opcjonalnie)" value="${op.opis_czynnosci||''}"
+              <textarea placeholder="Opis czynności (opcjonalnie)"
                      onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
-                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:56px;font-family:inherit"
+                     >${op.opis_czynnosci||''}</textarea>
             </div>
           </div>`).join('');
       editPanel = `
@@ -1052,9 +1053,10 @@ function renderNzWizard() {
                        onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
-              <input type="text" placeholder="Opis czynności (opcjonalnie)" value="${op.opis_czynnosci||''}"
+              <textarea placeholder="Opis czynności (opcjonalnie)"
                      onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
-                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
+                     style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:56px;font-family:inherit"
+                     >${op.opis_czynnosci||''}</textarea>
             </div>
           </div>`).join('');
       editPanel = `

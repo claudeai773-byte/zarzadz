@@ -111,6 +111,27 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=SecurityHeadersMiddleware())
 # Kompresja odpowiedzi (JSON list zleceń, JS/CSS) – mniejszy transfer na słabszym Wi-Fi/4G
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
+# ── Auto-backup middleware – wywołuje _schedule_backup() po każdej operacji zapisu ──
+# Dzięki temu KAŻDY endpoint POST/PUT/PATCH/DELETE automatycznie triggeruje backup
+# bez konieczności ręcznego dodawania _schedule_backup() w każdej funkcji.
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_NO_BACKUP_PATHS = {"/api/login", "/api/logout", "/health",
+                    "/api/import-technologia/parse",   # tylko parsuje, nie zapisuje
+                    "/api/powiadomienia"}               # odczyty powiadomień
+
+async def _auto_backup_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if (request.method in _WRITE_METHODS
+            and response.status_code < 400
+            and not any(request.url.path.startswith(p) for p in _NO_BACKUP_PATHS)):
+        try:
+            _schedule_backup()
+        except Exception:
+            pass
+    return response
+
+app.add_middleware(BaseHTTPMiddleware, dispatch=_auto_backup_middleware)
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()

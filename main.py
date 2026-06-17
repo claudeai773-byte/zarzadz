@@ -6280,7 +6280,7 @@ def admin_get_logi(limit: int = 500):
 @app.delete("/api/admin/logi", dependencies=[Depends(verify_admin)])
 def admin_clear_logi(request: Request, x_session_token: Optional[str] = Header(None, alias="x-session-token")):
     """Czyści wszystkie wpisy z dziennika akcji (tylko admin)."""
-    admin_user = get_session_user(x_session_token)
+    admin_user = verify_session(x_session_token) if x_session_token else None
     admin_name = admin_user.get("username", "admin") if admin_user else "admin"
     with get_db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM action_log").fetchone()[0]

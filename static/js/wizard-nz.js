@@ -978,23 +978,23 @@ function renderNzWizard() {
             </div>
             <div style="display:flex;flex-direction:column;gap:5px">
               <input type="text" placeholder="Nazwa operacji" value="${op.nazwa||''}"
-                     onchange="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
+                     onblur="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
-              <select onchange="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
+              <select onblur="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
                 <option value="">— stanowisko —</option>
                 ${stanOptionsForOp(op.stanowisko)}
               </select>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
                 <input type="number" step="0.5" min="0" placeholder="Czas min/szt" value="${op.czas_norma||0}"
-                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_norma',+this.value)"
+                       onblur="nzUpdateOp('${editNode._id}','${op._id}','czas_norma',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
                 <input type="number" step="1" min="0" placeholder="Zbrojenie min" value="${op.czas_zbrojenia||0}"
-                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
+                       onblur="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
               <textarea placeholder="Opis czynności (opcjonalnie)"
-                     onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
+                     onblur="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:56px;font-family:inherit"
                      >${op.opis_czynnosci||''}</textarea>
             </div>
@@ -1038,23 +1038,23 @@ function renderNzWizard() {
             </div>
             <div style="display:flex;flex-direction:column;gap:5px">
               <input type="text" placeholder="Nazwa operacji" value="${op.nazwa||''}"
-                     onchange="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
+                     onblur="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
-              <select onchange="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
+              <select onblur="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
                       style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
                 <option value="">— stanowisko —</option>
                 ${stanOptsP(op.stanowisko)}
               </select>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
                 <input type="number" step="0.5" min="0" placeholder="Czas min/szt" value="${op.czas_norma||0}"
-                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_norma',+this.value)"
+                       onblur="nzUpdateOp('${editNode._id}','${op._id}','czas_norma',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
                 <input type="number" step="1" min="0" placeholder="Zbrojenie min" value="${op.czas_zbrojenia||0}"
-                       onchange="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
+                       onblur="nzUpdateOp('${editNode._id}','${op._id}','czas_zbrojenia',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
               <textarea placeholder="Opis czynności (opcjonalnie)"
-                     onchange="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
+                     onblur="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:56px;font-family:inherit"
                      >${op.opis_czynnosci||''}</textarea>
             </div>
@@ -1065,28 +1065,28 @@ function renderNzWizard() {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
               <div>
                 <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Symbol (BOM)</label>
-                <input type="text" placeholder="np. P-001" value="${editNode.symbol||''}"
-                       onchange="nzUpdateField('${editNode._id}','symbol',this.value)"
+                <input id="nz-p-symbol" type="text" placeholder="np. P-001" value="${editNode.symbol||''}"
+                       onblur="nzUpdateField('${editNode._id}','symbol',this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
               </div>
               <div>
                 <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Nazwa</label>
-                <input type="text" placeholder="np. Wał Ø50" value="${editNode.nazwa||''}"
-                       onchange="nzUpdateField('${editNode._id}','nazwa',this.value)"
+                <input id="nz-p-nazwa" type="text" placeholder="np. Wał Ø50" value="${editNode.nazwa||''}"
+                       onblur="nzUpdateField('${editNode._id}','nazwa',this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
               <div>
                 <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość (BOM)</label>
-                <input type="number" step="0.01" min="0.01" value="${editNode.ilosc||1}"
-                       onchange="nzUpdateField('${editNode._id}','ilosc',+this.value)"
+                <input id="nz-p-ilosc" type="number" step="0.01" min="0.01" value="${editNode.ilosc||1}"
+                       onblur="nzUpdateField('${editNode._id}','ilosc',+this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
               </div>
               <div>
                 <label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Jednostka</label>
-                <input type="text" value="${editNode.jednostka||'szt'}"
-                       onchange="nzUpdateField('${editNode._id}','jednostka',this.value)"
+                <input id="nz-p-jednostka" type="text" value="${editNode.jednostka||'szt'}"
+                       onblur="nzUpdateField('${editNode._id}','jednostka',this.value)"
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem">
               </div>
             </div>
@@ -1130,32 +1130,32 @@ function renderNzWizard() {
         trybFields = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
           <div><label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Długość na 1 szt (mm)</label>
             <input type="number" step="0.1" min="0" value="${editNode.mat_dlugosc||0}"
-                   onchange="nzUpdateField('${editNode._id}','mat_dlugosc',+this.value)"
+                   onblur="nzUpdateField('${editNode._id}','mat_dlugosc',+this.value)"
                    style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem"></div>
           <div><label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość pręt./el. na wyrób</label>
             <input type="number" step="0.01" min="0.01" value="${editNode.mat_ilosc_szt||1}"
-                   onchange="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
+                   onblur="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
                    style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem"></div>
         </div>`;
       } else if (tryb === 'wymiary') {
         trybFields = `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
           <div><label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Długość (mm)</label>
             <input type="number" step="0.1" min="0" value="${editNode.mat_wys||0}"
-                   onchange="nzUpdateField('${editNode._id}','mat_wys',+this.value)"
+                   onblur="nzUpdateField('${editNode._id}','mat_wys',+this.value)"
                    style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem"></div>
           <div><label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Szerokość (mm)</label>
             <input type="number" step="0.1" min="0" value="${editNode.mat_szer||0}"
-                   onchange="nzUpdateField('${editNode._id}','mat_szer',+this.value)"
+                   onblur="nzUpdateField('${editNode._id}','mat_szer',+this.value)"
                    style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem"></div>
           <div><label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Szt na wyrób</label>
             <input type="number" step="0.01" min="0.01" value="${editNode.mat_ilosc_szt||1}"
-                   onchange="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
+                   onblur="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
                    style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem"></div>
         </div>`;
       } else {
         trybFields = `<div><label style="font-size:.72rem;color:#64748b;display:block;margin-bottom:3px">Ilość sztuk na 1 wyrób</label>
           <input type="number" step="0.01" min="0.01" value="${editNode.mat_ilosc_szt||1}"
-                 onchange="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
+                 onblur="nzUpdateField('${editNode._id}','mat_ilosc_szt',+this.value)"
                  style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:5px;padding:6px 8px;width:100%;box-sizing:border-box;font-size:.8rem"></div>`;
       }
       editPanel = `

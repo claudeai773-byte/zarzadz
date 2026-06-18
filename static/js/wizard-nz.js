@@ -1281,34 +1281,41 @@ function renderNzWizard() {
       <div class="field"><label>Numer zlecenia *</label>
         <div style="position:relative">
           <input id="nz-numer" type="text" placeholder="np. ZL-2024/001" value="${s.nzNumer}"
+                 oninput="setState({nzNumer:this.value},false)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
         </div>
       </div>
       <div class="field"><label>Nazwa zlecenia *</label>
         <input id="nz-nazwa" type="text" placeholder="np. Wał napędowy Ø50" value="${s.nzNazwa}"
+               oninput="setState({nzNazwa:this.value},false)"
                style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
       </div>
       <div class="field"><label>Opis</label>
         <textarea id="nz-opis" rows="2"
+                  oninput="setState({nzOpis:this.value},false)"
                   style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px;resize:vertical">${s.nzOpis||''}</textarea>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="field"><label>Termin</label>
           <input id="nz-termin" type="date" value="${s.nzTermin||''}"
+                 onchange="setState({nzTermin:this.value},false)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
         </div>
         <div class="field"><label>Ilość sztuk</label>
           <input id="nz-ilosc" type="number" value="${s.nzIlosc||1}" min="1"
+                 oninput="setState({nzIlosc:+this.value||1},false)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="field"><label>Cena brutto/szt (zł)</label>
           <input id="nz-cena" type="number" step="0.01" value="${s.nzCena||0}"
+                 oninput="setState({nzCena:+this.value||0},false)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
         </div>
         <div class="field"><label>Materiał od klienta</label>
           <select id="nz-mat"
+                  onchange="setState({nzMatKlienta:this.value==='1'},false)"
                   style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
             <option value="0" ${!s.nzMatKlienta?'selected':''}>Nie – definiuję materiały</option>
             <option value="1" ${s.nzMatKlienta?'selected':''}>Tak – klient dostarcza</option>
@@ -1477,7 +1484,9 @@ document.addEventListener('keydown', function nzTabHandler(e) {
 
   if (idx === -1) return; // aktywny element nie jest w modalu – nie przeszkadzaj
 
-  e.preventDefault(); // zatrzymaj domyślne przełączanie focus (które może scrollować)
+  // Zatrzymaj event – render.js NIE może go zobaczyć (zapobiega konfliktowi _tabState)
+  e.preventDefault();
+  e.stopImmediatePropagation();
 
   let next;
   if (e.shiftKey) {
@@ -1486,16 +1495,25 @@ document.addEventListener('keydown', function nzTabHandler(e) {
     next = focusable[(idx + 1) % focusable.length];
   }
 
-  // Zachowaj pozycję scroll panelu edycji
+  // Zachowaj pozycje scroll (panel edycji + overlay modala + strona)
   const editPanel = document.getElementById('nz-edit-panel');
   const editScrollTop = editPanel ? editPanel.scrollTop : 0;
+  const overlay = modal.closest('.modal-overlay');
+  const overlayScrollTop = overlay ? overlay.scrollTop : 0;
+  const pageScrollY = window.scrollY;
+  const pageScrollX = window.scrollX;
 
-  next.focus();
+  next.focus({ preventScroll: true });
 
-  // Przywróć scroll panelu po ewentualnym skoku
-  if (editPanel) {
-    requestAnimationFrame(() => { editPanel.scrollTop = editScrollTop; });
-  }
+  // Jeśli następny to <select>, automatycznie go otwórz (Enter symuluje click)
+  // NIE robimy tego automatycznie – użytkownik sam naciska Enter/Space aby otworzyć listę
+
+  // Przywróć scroll po fokusie
+  requestAnimationFrame(() => {
+    if (editPanel) editPanel.scrollTop = editScrollTop;
+    if (overlay) overlay.scrollTop = overlayScrollTop;
+    if (pageScrollY !== 0 || pageScrollX !== 0) window.scrollTo(pageScrollX, pageScrollY);
+  });
 }, true); // capture phase – przed innymi handlerami
 
 // Helper: zbiera dane z formularza jednej strony i wywołuje nzSave

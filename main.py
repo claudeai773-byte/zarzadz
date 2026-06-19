@@ -314,19 +314,21 @@ def login(req: LoginRequest, request: Request):
                 (hash_password(req.password), row["id"])
             )
 
-        # Utwórz sesję serwerową
-        token = create_session(row["id"], row["username"], row["role"], ip)
-        log_login(row["username"], True, ip)
-        db_log(row["id"], row["username"], "LOGIN_OK", "Zalogowanie do systemu", "", ip)
+    # create_session i db_log otwierają własne połączenie do tej samej bazy SQLite,
+    # więc muszą nastąpić PO zamknięciu/zatwierdzeniu powyższego `with get_db()`,
+    # inaczej czekają do 10s na zwolnienie blokady zapisu (database is locked).
+    token = create_session(row["id"], row["username"], row["role"], ip)
+    log_login(row["username"], True, ip)
+    db_log(row["id"], row["username"], "LOGIN_OK", "Zalogowanie do systemu", "", ip)
 
-        return {
-            "token": token,
-            "id": row["id"],
-            "username": row["username"],
-            "full_name": row["full_name"],
-            "role": row["role"],
-            "is_kj": row["is_kj"],
-        }
+    return {
+        "token": token,
+        "id": row["id"],
+        "username": row["username"],
+        "full_name": row["full_name"],
+        "role": row["role"],
+        "is_kj": row["is_kj"],
+    }
 
 @app.post("/api/logout")
 def logout(x_session_token: Optional[str] = Header(None, alias="x-session-token")):
@@ -1548,7 +1550,6 @@ def pauza_start(req: PauzaRequest):
         pauzy.append({"start": now, "koniec": None, "powod": req.powod or ""})
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
-        _schedule_backup()
         # Loguj start pauzy
         user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
         u_name = user_row["username"] if user_row else str(sesja["user_id"])
@@ -1557,8 +1558,11 @@ def pauza_start(req: PauzaRequest):
         szczeg = f"sesja_id={req.sesja_id}, powod={req.powod or '-'}"
         if op_row:
             szczeg += f", op={op_row['nazwa']}, zlecenie={op_row['numer']}"
-        db_log(sesja["user_id"], u_name, "PAUZA_START", f"Pauza – start ({full_name})", szczeg)
-        return {"ok": True, "pauza_start": now}
+    # _schedule_backup i db_log otwierają własne połączenia/zadania w tle —
+    # wywoływane PO zatwierdzeniu transakcji powyżej, by nie czekać na blokadę zapisu.
+    _schedule_backup()
+    db_log(sesja["user_id"], u_name, "PAUZA_START", f"Pauza – start ({full_name})", szczeg)
+    return {"ok": True, "pauza_start": now}
 
 @app.post("/api/sesje/pauza/stop", dependencies=[Depends(verify_key)])
 def pauza_stop(req: PauzaRequest):
@@ -1583,7 +1587,6 @@ def pauza_stop(req: PauzaRequest):
         pauzy[-1]["koniec"] = now
         conn.execute("UPDATE sesje_pracy SET pauzy=? WHERE id=?",
                      (json.dumps(pauzy), req.sesja_id))
-        _schedule_backup()
         # Loguj koniec pauzy
         user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
         u_name = user_row["username"] if user_row else str(sesja["user_id"])
@@ -1592,8 +1595,9 @@ def pauza_stop(req: PauzaRequest):
         szczeg = f"sesja_id={req.sesja_id}, czas_pauzy={czas_pauzy_min} min, powod={pauzy[-1].get('powod') or '-'}"
         if op_row:
             szczeg += f", op={op_row['nazwa']}, zlecenie={op_row['numer']}"
-        db_log(sesja["user_id"], u_name, "PAUZA_STOP", f"Pauza – koniec ({full_name})", szczeg)
-        return {"ok": True, "pauza_koniec": now}
+    _schedule_backup()
+    db_log(sesja["user_id"], u_name, "PAUZA_STOP", f"Pauza – koniec ({full_name})", szczeg)
+    return {"ok": True, "pauza_koniec": now}
 
 @app.post("/api/sesje/stop", dependencies=[Depends(verify_key)])
 def stop_sesja(req: StopSesjaRequest):
@@ -1633,7 +1637,6 @@ def stop_sesja(req: StopSesjaRequest):
                         (zl_id,)
                     )
 
-        _schedule_backup()
         # Loguj stop sesji
         user_row = conn.execute("SELECT username, full_name FROM users WHERE id=?", (sesja["user_id"],)).fetchone()
         u_name = user_row["username"] if user_row else str(sesja["user_id"])
@@ -1661,8 +1664,9 @@ def stop_sesja(req: StopSesjaRequest):
             szczeg_stop += f", operacja={op_row_stop['nazwa']}, zlecenie={op_row_stop['numer']}"
         if req.uwagi:
             szczeg_stop += f", uwagi={req.uwagi}"
-        db_log(sesja["user_id"], u_name, "SESJA_STOP", f"Stop sesji – {sesja['typ']} ({full_name_stop})", szczeg_stop)
-        return {"status": "ok", "end_time": now}
+    _schedule_backup()
+    db_log(sesja["user_id"], u_name, "SESJA_STOP", f"Stop sesji – {sesja['typ']} ({full_name_stop})", szczeg_stop)
+    return {"status": "ok", "end_time": now}
 
 class EditSesjaTimeRequest(BaseModel):
     start_time: Optional[str] = None
@@ -1954,11 +1958,12 @@ def create_user(req: NewUserRequest):
                 "INSERT INTO users (username, password, full_name, role, is_kj) VALUES (?,?,?,?,?)",
                 (req.username, hash_password(req.password), req.full_name, req.role, req.is_kj or 0)
             )
-            log_admin("system", "create_user", req.username)
-            db_log(cur.lastrowid, req.username, "ADMIN", "Utworzenie użytkownika", f"rola={req.role}")
-            return {"id": cur.lastrowid}
+            new_id = cur.lastrowid
         except sqlite3.IntegrityError:
             raise HTTPException(400, "Użytkownik już istnieje")
+    log_admin("system", "create_user", req.username)
+    db_log(new_id, req.username, "ADMIN", "Utworzenie użytkownika", f"rola={req.role}")
+    return {"id": new_id}
 
 class EditUserRequest(BaseModel):
     full_name: str
@@ -1968,6 +1973,7 @@ class EditUserRequest(BaseModel):
 
 @app.put("/api/users/{uid}", dependencies=[Depends(verify_admin)])
 def update_user(uid: int, req: EditUserRequest):
+    password_changed = bool(req.password)
     with get_db() as conn:
         if req.password:
             ok, msg = validate_password_strength(req.password)
@@ -1977,15 +1983,20 @@ def update_user(uid: int, req: EditUserRequest):
                 "UPDATE users SET full_name=?,role=?,password=?,is_kj=? WHERE id=?",
                 (req.full_name, req.role, hash_password(req.password), req.is_kj or 0, uid)
             )
-            revoke_all_user_sessions(uid)
         else:
             conn.execute(
                 "UPDATE users SET full_name=?,role=?,is_kj=? WHERE id=?",
                 (req.full_name, req.role, req.is_kj or 0, uid)
             )
-        log_admin("system", "update_user", str(uid))
-        db_log(uid, req.full_name, "ADMIN", "Aktualizacja danych użytkownika", f"rola={req.role}")
-        return {"ok": True}
+    # Poniższe wywołania otwierają WŁASNE połączenie do tej samej bazy SQLite.
+    # Muszą nastąpić PO zamknięciu/zatwierdzeniu powyższego `with get_db()`,
+    # inaczej drugie połączenie czeka do 10s na zwolnienie blokady zapisu
+    # ("database is locked") — stąd opóźnienia i błędy 500.
+    if password_changed:
+        revoke_all_user_sessions(uid)
+    log_admin("system", "update_user", str(uid))
+    db_log(uid, req.full_name, "ADMIN", "Aktualizacja danych użytkownika", f"rola={req.role}")
+    return {"ok": True}
 
 @app.post("/api/users/{uid}/change-password", dependencies=[Depends(verify_key)])
 def change_password(uid: int, req: dict = Body(...)):
@@ -2013,10 +2024,10 @@ def reset_password(uid: int):
         if not user:
             raise HTTPException(404, "Użytkownik nie znaleziony")
         conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(new_pass), uid))
-        log_admin("system", "reset_password", str(uid))
-        db_log(uid, user["full_name"], "ADMIN", "Reset hasła użytkownika", f"uid={uid}")
         full_name = user["full_name"]
     revoke_all_user_sessions(uid)
+    log_admin("system", "reset_password", str(uid))
+    db_log(uid, full_name, "ADMIN", "Reset hasła użytkownika", f"uid={uid}")
     return {"ok": True, "new_password": new_pass, "full_name": full_name}
 
 @app.delete("/api/users/{uid}", dependencies=[Depends(verify_admin)])
@@ -2026,10 +2037,10 @@ def delete_user(uid: int):
         conn.execute("DELETE FROM sesje_pracy WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM user_permissions WHERE user_id=?", (uid,))
         conn.execute("DELETE FROM users WHERE id=?", (uid,))
-        revoke_all_user_sessions(uid)
-        log_admin("system", "delete_user", str(uid))
-        db_log(uid, str(uid), "ADMIN", "Usunięcie użytkownika", f"uid={uid}")
-        return {"ok": True}
+    revoke_all_user_sessions(uid)
+    log_admin("system", "delete_user", str(uid))
+    db_log(uid, str(uid), "ADMIN", "Usunięcie użytkownika", f"uid={uid}")
+    return {"ok": True}
 
 # ─── Uprawnienia użytkowników ────────────────────────────────────────────────
 @app.get("/api/users/{uid}/permissions", dependencies=[Depends(verify_admin)])

@@ -6,7 +6,7 @@ Zastępuje/uzupełnia mechanizmy bezpieczeństwa w main.py.
 UŻYCIE W main.py:
   from security import (
       hash_password, verify_password,
-      create_session, verify_session, revoke_session,
+      init_session_store, create_session, verify_session, revoke_session,
       verify_key, verify_admin,
       RateLimiter, rate_limit_login,
       SecurityHeaders, get_allowed_origins,
@@ -14,12 +14,15 @@ UŻYCIE W main.py:
       sanitize_sql_readonly,
   )
 
+  # Przy starcie aplikacji (zaraz po wyliczeniu finalnej ścieżki DB_PATH):
+  init_session_store(DB_PATH)
+
 WYMAGANE PACZKI (dodaj do requirements.txt):
   bcrypt==4.1.3
   python-jose[cryptography]==3.3.0
 """
 
-import os, time, hashlib, secrets, json, logging, re
+import os, time, hashlib, secrets, json, logging, re, sqlite3
 from datetime import datetime, timedelta
 from collections import defaultdict
 from functools import wraps
@@ -79,24 +82,68 @@ def needs_rehash(stored: str) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. SESJE SERWEROWE (token w pamięci – zastępuje API_KEY w logins)
+# 3. SESJE SERWEROWE – trwałe w SQLite (przeżywają restart/deploy procesu)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# Wcześniej sesje trzymane były w dict w pamięci procesu – każdy restart/deploy
+# (np. na Railway) wylogowywał wszystkich użytkowników. Teraz sesje są zapisane
+# w tabeli SQLite w tej samej bazie co reszta danych aplikacji, więc przeżywają
+# restart. Wymaga jednorazowego wywołania init_session_store(DB_PATH) przy
+# starcie aplikacji (w main.py, zaraz po wyliczeniu finalnej ścieżki do bazy).
 
-# Format: { token: {"user_id": int, "role": str, "username": str, "expires": float, "ip": str} }
-_sessions: dict[str, dict] = {}
+_SESSION_DB_PATH: Optional[str] = None
+
+
+def init_session_store(db_path: str) -> None:
+    """Wywołać raz przy starcie aplikacji – ustawia ścieżkę do bazy i tworzy tabelę sesji."""
+    global _SESSION_DB_PATH
+    _SESSION_DB_PATH = db_path
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sesje_logowania (
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL,
+                username   TEXT NOT NULL,
+                role       TEXT NOT NULL,
+                ip         TEXT DEFAULT '',
+                created    REAL NOT NULL,
+                expires    REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sesje_user ON sesje_logowania(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sesje_expires ON sesje_logowania(expires)")
+        conn.commit()
+    finally:
+        conn.close()
+    _cleanup_sessions()
+
+
+def _session_db() -> sqlite3.Connection:
+    if not _SESSION_DB_PATH:
+        raise RuntimeError(
+            "Magazyn sesji nie został zainicjalizowany. "
+            "Wywołaj security.init_session_store(DB_PATH) przy starcie aplikacji."
+        )
+    conn = sqlite3.connect(_SESSION_DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def create_session(user_id: int, username: str, role: str, ip: str = "") -> str:
-    """Tworzy sesję i zwraca unikalny token (64-znakowy hex)."""
+    """Tworzy sesję w bazie i zwraca unikalny token (64-znakowy hex)."""
     token = secrets.token_hex(32)
-    _sessions[token] = {
-        "user_id":  user_id,
-        "username": username,
-        "role":     role,
-        "expires":  time.time() + SESSION_TTL_SEC,
-        "ip":       ip,
-        "created":  time.time(),
-    }
+    now = time.time()
+    conn = _session_db()
+    try:
+        conn.execute(
+            "INSERT INTO sesje_logowania (token, user_id, username, role, ip, created, expires) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (token, user_id, username, role, ip, now, now + SESSION_TTL_SEC)
+        )
+        conn.commit()
+    finally:
+        conn.close()
     _cleanup_sessions()
     return token
 
@@ -106,54 +153,92 @@ def verify_session(token: str, ip: str = "") -> dict:
     Weryfikuje token sesji. Rzuca HTTPException 401 jeśli nieważny.
     Zwraca dict z danymi użytkownika.
     """
-    sess = _sessions.get(token)
-    if not sess:
-        raise HTTPException(401, "Sesja wygasła lub nieważna. Zaloguj się ponownie.")
-    if time.time() > sess["expires"]:
-        del _sessions[token]
-        raise HTTPException(401, "Sesja wygasła. Zaloguj się ponownie.")
-    # Opcjonalne: sprawdź IP (wyłącz jeśli użytkownicy mają dynamic IP)
-    # if sess["ip"] and ip and sess["ip"] != ip:
-    #     raise HTTPException(401, "Sesja unieważniona (zmiana IP).")
-    # Przedłuż sesję przy aktywności
-    sess["expires"] = time.time() + SESSION_TTL_SEC
-    return sess
+    conn = _session_db()
+    try:
+        row = conn.execute(
+            "SELECT user_id, username, role, ip, created, expires FROM sesje_logowania WHERE token=?",
+            (token,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(401, "Sesja wygasła lub nieważna. Zaloguj się ponownie.")
+        now = time.time()
+        if now > row["expires"]:
+            conn.execute("DELETE FROM sesje_logowania WHERE token=?", (token,))
+            conn.commit()
+            raise HTTPException(401, "Sesja wygasła. Zaloguj się ponownie.")
+        # Opcjonalne: sprawdź IP (wyłącz jeśli użytkownicy mają dynamic IP)
+        # if row["ip"] and ip and row["ip"] != ip:
+        #     raise HTTPException(401, "Sesja unieważniona (zmiana IP).")
+        # Przedłuż sesję przy aktywności
+        new_expires = now + SESSION_TTL_SEC
+        conn.execute("UPDATE sesje_logowania SET expires=? WHERE token=?", (new_expires, token))
+        conn.commit()
+        return {
+            "user_id":  row["user_id"],
+            "username": row["username"],
+            "role":     row["role"],
+            "ip":       row["ip"],
+            "expires":  new_expires,
+            "created":  row["created"],
+        }
+    finally:
+        conn.close()
 
 
 def revoke_session(token: str):
     """Wylogowanie – usuwa sesję."""
-    _sessions.pop(token, None)
+    conn = _session_db()
+    try:
+        conn.execute("DELETE FROM sesje_logowania WHERE token=?", (token,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def revoke_all_user_sessions(user_id: int):
     """Unieważnia wszystkie sesje danego użytkownika (np. po resecie hasła)."""
-    to_del = [t for t, s in _sessions.items() if s["user_id"] == user_id]
-    for t in to_del:
-        del _sessions[t]
+    conn = _session_db()
+    try:
+        conn.execute("DELETE FROM sesje_logowania WHERE user_id=?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_active_sessions() -> list[dict]:
     """Zwraca listę aktywnych sesji (dla admina)."""
-    now = time.time()
-    return [
-        {
-            "username":  s["username"],
-            "role":      s["role"],
-            "ip":        s.get("ip", ""),
-            "created":   datetime.fromtimestamp(s["created"]).isoformat(),
-            "expires_in_min": round((s["expires"] - now) / 60, 1),
-        }
-        for t, s in _sessions.items()
-        if s["expires"] > now
-    ]
+    conn = _session_db()
+    try:
+        now = time.time()
+        rows = conn.execute(
+            "SELECT username, role, ip, created, expires FROM sesje_logowania WHERE expires > ? "
+            "ORDER BY created DESC",
+            (now,)
+        ).fetchall()
+        return [
+            {
+                "username":  r["username"],
+                "role":      r["role"],
+                "ip":        r["ip"] or "",
+                "created":   datetime.fromtimestamp(r["created"]).isoformat(),
+                "expires_in_min": round((r["expires"] - now) / 60, 1),
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
 
 
 def _cleanup_sessions():
-    """Usuwa wygasłe sesje (wołana przy każdym tworzeniu nowej)."""
-    now = time.time()
-    expired = [t for t, s in _sessions.items() if s["expires"] <= now]
-    for t in expired:
-        del _sessions[t]
+    """Usuwa wygasłe sesje z bazy (wołana przy każdym tworzeniu/inicjalizacji)."""
+    if not _SESSION_DB_PATH:
+        return
+    conn = _session_db()
+    try:
+        conn.execute("DELETE FROM sesje_logowania WHERE expires <= ?", (time.time(),))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

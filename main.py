@@ -10,12 +10,27 @@ from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Optional
-import sqlite3, os, json, hashlib, time, io, datetime as _dt, traceback, urllib.request, urllib.error
+import sqlite3, os, json, hashlib, time, io, logging, datetime as _dt, traceback, urllib.request, urllib.error
 import openpyxl as _openpyxl
 from contextlib import contextmanager
+
+# ─── Logger aplikacji (startup/backup/błędy) – osobny od `audit` w security.py ──
+# Dzięki temu logi bezpieczeństwa (LOGIN/ADMIN/RATE_LIMIT) i logi operacyjne
+# (backup, restore, init bazy) można filtrować po nazwie loggera ("app" vs "audit"),
+# a nie po treści linii.
+logger = logging.getLogger("app")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _app_handler = logging.StreamHandler()
+    _app_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [APP] %(levelname)s %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ"
+    ))
+    logger.addHandler(_app_handler)
+    logger.propagate = False
+
 from security import (
     hash_password, verify_password, needs_rehash,
-    create_session, verify_session, revoke_session, revoke_all_user_sessions,
+    init_session_store, create_session, verify_session, revoke_session, revoke_all_user_sessions,
     get_active_sessions,
     verify_key, get_session_user, require_role, verify_admin,
     rate_limit_login,
@@ -99,6 +114,11 @@ if not os.path.exists(os.path.dirname(DB_PATH)):
     DB_PATH     = os.path.join(_local, "produkcja.db")
     BACKUP_PATH = os.path.join(_local, "backup.json")
 
+# Sesje logowania trzymane w tej samej bazie SQLite co dane aplikacji –
+# przeżywają restart/deploy procesu (np. na Railway), w przeciwieństwie
+# do wcześniejszego magazynu w pamięci.
+init_session_store(DB_PATH)
+
 app = FastAPI(title="Produkcja API", version="4.1")
 app.add_middleware(
     CORSMiddleware,
@@ -135,7 +155,7 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=_auto_backup_middleware)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
-    print(f"[500] {request.method} {request.url.path}\n{tb}", flush=True)
+    logger.error(f"[500] {request.method} {request.url.path}\n{tb}")
     # NIE ujawniamy szczegółów wyjątku klientowi (information disclosure)
     return JSONResponse(
         status_code=500,
@@ -4389,11 +4409,11 @@ def init_db_on_start():
             ('majster.k', hash_password(_init_passwords['majster.k']), 'Krzysztof Majster', 'majster'),
         ]
         c.executemany("INSERT INTO users (username,password,full_name,role) VALUES (?,?,?,?)", users)
-        print("\n" + "="*60, flush=True)
-        print("[INIT] Hasła początkowe użytkowników (zapisz je teraz!):", flush=True)
+        logger.warning("=" * 60)
+        logger.warning("[INIT] Hasła początkowe użytkowników (zapisz je teraz!):")
         for user, pwd in _init_passwords.items():
-            print(f"  {user:15s}: {pwd}", flush=True)
-        print("="*60 + "\n", flush=True)
+            logger.warning(f"  {user:15s}: {pwd}")
+        logger.warning("=" * 60)
 
     c.execute("SELECT id FROM stawki LIMIT 1")
     if not c.fetchone():
@@ -4634,7 +4654,7 @@ def init_db_on_start():
                     (zid, st, g[0], g[1])
                 )
         except Exception as e:
-            print(f"  Migracja stawek zlecenia {zl_row[0]}: {e}")
+            logger.warning(f"Migracja stawek zlecenia {zl_row[0]}: {e}")
 
 
     # ─── Drzewo G/P (struktura wyrobów z ERP) ────────────────────────────────
@@ -4765,7 +4785,7 @@ def init_db_on_start():
 
     conn.commit()
     conn.close()
-    print(f"✓ Baza danych gotowa: {DB_PATH}")
+    logger.info(f"Baza danych gotowa: {DB_PATH}")
 
 # ─── System backupu i przywracania danych ─────────────────────────────────────
 import threading as _threading
@@ -4815,10 +4835,10 @@ def _gist_get_id() -> str:
                 if "produkcja_backup.json" in g.get("files", {}):
                     gid = g["id"]
                     open(GIST_ID_FILE, "w").write(gid)
-                    print(f"✓ Znaleziono istniejący Gist: {gid}")
+                    logger.info(f"Znaleziono istniejący Gist: {gid}")
                     return gid
     except Exception as e:
-        print(f"✗ Gist search error: {e}")
+        logger.warning(f"Gist search error: {e}")
         return ""
 
 def _gist_save(data: dict) -> bool:
@@ -4859,11 +4879,11 @@ def _gist_save(data: dict) -> bool:
             new_id = resp.get("id", gist_id)
             if new_id and new_id != gist_id:
                 open(GIST_ID_FILE, "w").write(new_id)
-                print(f"✓ Gist utworzony: {new_id}")
-            print(f"✓ Gist backup zapisany ({len(content)} B, {data.get('_ts','?')})")
+                logger.info(f"Gist utworzony: {new_id}")
+            logger.info(f"Gist backup zapisany ({len(content)} B, {data.get('_ts','?')})")
             return True
     except Exception as e:
-        print(f"✗ Błąd zapisu Gist: {e}")
+        logger.error(f"Błąd zapisu Gist: {e}")
         return False
 
 def _gist_load() -> dict | None:
@@ -4871,7 +4891,7 @@ def _gist_load() -> dict | None:
         return None
     gist_id = _gist_get_id()
     if not gist_id:
-        print("✗ Gist: brak ID – nie można pobrać backupu")
+        logger.warning("Gist: brak ID – nie można pobrać backupu")
         return None
     try:
         req = urllib.request.Request(
@@ -4883,14 +4903,14 @@ def _gist_load() -> dict | None:
             file_info = resp.get("files", {}).get("produkcja_backup.json", {})
             raw_url = file_info.get("raw_url")
             if not raw_url:
-                print("✗ Gist: brak pliku produkcja_backup.json")
+                logger.warning("Gist: brak pliku produkcja_backup.json")
                 return None
             with urllib.request.urlopen(raw_url, timeout=15) as r:
                 data = json.loads(r.read())
-                print(f"✓ Gist backup pobrany (ts: {data.get('_ts','?')})")
+                logger.info(f"Gist backup pobrany (ts: {data.get('_ts','?')})")
                 return data
     except Exception as e:
-        print(f"✗ Błąd odczytu Gist: {e}")
+        logger.error(f"Błąd odczytu Gist: {e}")
         return None
 
 # ─── Główne funkcje backup/restore ─────────────────────────────────────────────
@@ -4911,12 +4931,12 @@ def _db_backup_to_json(path: str = None) -> dict:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, default=str)
-            print(f"✓ Backup lokalny: {path}")
+            logger.info(f"Backup lokalny: {path}")
         except Exception as e:
-            print(f"✗ Backup lokalny nieudany: {e}")
+            logger.error(f"Backup lokalny nieudany: {e}")
         _gist_save(data)
     except Exception as e:
-        print(f"✗ Błąd backupu: {e}")
+        logger.error(f"Błąd backupu: {e}")
     return data
 
 # ─── Throttling backupu ────────────────────────────────────────────────────────
@@ -4958,14 +4978,14 @@ def _schedule_backup():
 def _db_restore_from_json(path: str = None) -> bool:
     path = path or BACKUP_PATH
     if not os.path.exists(path):
-        print(f"✗ Brak pliku backupu: {path}")
+        logger.warning(f"Brak pliku backupu: {path}")
         return False
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return _db_restore_from_dict(data)
     except Exception as e:
-        print(f"✗ Błąd przywracania z pliku: {e}")
+        logger.error(f"Błąd przywracania z pliku: {e}")
         return False
 
 def _db_restore_from_dict(data: dict) -> bool:
@@ -4985,18 +5005,18 @@ def _db_restore_from_dict(data: dict) -> bool:
                     [[r.get(c) for c in cols] for r in rows]
                 )
             except Exception as e:
-                print(f"✗ Błąd przywracania tabeli {tbl}: {e}")
+                logger.error(f"Błąd przywracania tabeli {tbl}: {e}")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.commit()
         conn.close()
         total = sum(len(v) for v in tables.values())
         aktywne = len([r for r in tables.get("sesje_pracy", []) if r.get("status") == "aktywna"])
-        print(f"✓ Przywrócono {total} rekordów (ts: {data.get('_ts','?')})")
+        logger.info(f"Przywrócono {total} rekordów (ts: {data.get('_ts','?')})")
         if aktywne:
-            print(f"  ↳ W tym {aktywne} aktywnych sesji pracy")
+            logger.info(f"  ↳ W tym {aktywne} aktywnych sesji pracy")
         return True
     except Exception as e:
-        print(f"✗ Błąd przywracania: {e}")
+        logger.error(f"Błąd przywracania: {e}")
         return False
 
 def _auto_backup_loop():
@@ -5011,7 +5031,7 @@ def _auto_backup_loop():
             elif db_mtime > 0 and (_time.time() - bak_mtime > 3600):
                 _db_backup_to_json()
         except Exception as e:
-            print(f"auto-backup loop error: {e}")
+            logger.error(f"auto-backup loop error: {e}")
         _time.sleep(BACKUP_INTERVAL)
 
 # ─── Endpointy backupu ────────────────────────────────────────────────────────
@@ -5579,7 +5599,7 @@ async def import_narzedzia_xlsx(file: UploadFile = File(...)):
                       _now()))
                 imported += 1
             except Exception as e:
-                print(f"Narzędzie skip {indeks}: {e}")
+                logger.warning(f"Narzędzie skip {indeks}: {e}")
                 skipped += 1
     return {"ok": True, "imported": imported, "skipped": skipped}
 
@@ -5780,17 +5800,6 @@ def add_narzedzie(req: NarzedzieIn):
 
 
 # ─── Narzędziownia: historia pobrań (zastępuje rezerwacje dla materiałów eksploatacyjnych) ──
-
-@app.get("/api/narzedzia/niskie-stany", dependencies=[Depends(verify_key)])
-def narzedzia_niskie_stany_v2():
-    """Narzędzia, których stan < stan_min."""
-    with get_db() as conn:
-        rows = conn.execute("""
-            SELECT * FROM narzedzia
-            WHERE stan < stan_min
-            ORDER BY (stan * 1.0 / NULLIF(stan_min,0)) ASC
-        """).fetchall()
-        return [dict(r) for r in rows]
 
 class NarzedzePobranieIn(BaseModel):
     narzedzie_id: int
@@ -6041,7 +6050,7 @@ try:
     _row_count = _conn_chk.execute("SELECT COUNT(*) FROM zlecenia").fetchone()[0]
     _conn_chk.close()
     if _row_count == 0:
-        print("⚠ Baza pusta – próbuję przywrócić dane...")
+        logger.warning("Baza pusta – próbuję przywrócić dane...")
         _restored = False
         if GIST_TOKEN:
             _gist_data = _gist_load()
@@ -6054,21 +6063,21 @@ try:
                             json.dump(_gist_data, _f, ensure_ascii=False, default=str)
                     except Exception:
                         pass
-                    print("✓ Dane przywrócone z GitHub Gist")
+                    logger.info("Dane przywrócone z GitHub Gist")
         if not _restored and os.path.exists(BACKUP_PATH):
             _restored = _db_restore_from_json()
             if _restored:
-                print("✓ Dane przywrócone z lokalnego backupu")
+                logger.info("Dane przywrócone z lokalnego backupu")
         if not _restored:
-            print("✗ Brak backupu – serwer startuje z pustą bazą")
+            logger.warning("Brak backupu – serwer startuje z pustą bazą")
     else:
-        print(f"✓ Baza zawiera {_row_count} zleceń – backup nie jest potrzebny")
+        logger.info(f"Baza zawiera {_row_count} zleceń – backup nie jest potrzebny")
 except Exception as _e:
-    print(f"⚠ Nie sprawdzono stanu bazy: {_e}")
+    logger.warning(f"Nie sprawdzono stanu bazy: {_e}")
 
 _bk_thread = _threading.Thread(target=_auto_backup_loop, daemon=True, name="auto-backup")
 _bk_thread.start()
-print(f"✓ Auto-backup uruchomiony co {BACKUP_INTERVAL}s → {BACKUP_PATH}")
+logger.info(f"Auto-backup uruchomiony co {BACKUP_INTERVAL}s → {BACKUP_PATH}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

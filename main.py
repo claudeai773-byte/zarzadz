@@ -4795,6 +4795,37 @@ def init_db_on_start():
         created_by INTEGER)""")
 
 
+    # ➤ Narzędzia skrawające – baza (Tool Manager: frezy, wytaczadła, głowice itp.)
+    c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_skrawajace (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        typ TEXT NOT NULL,
+        oznaczenie TEXT DEFAULT '',
+        srednica REAL,
+        ilosc INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'sprawne',
+        lokalizacja TEXT DEFAULT '',
+        uwagi TEXT DEFAULT '',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+
+    # ➤ Narzędzia skrawające – historia wypożyczeń/zwrotów (kto i kiedy)
+    c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_skrawajace_wypozyczenia (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        narzedzie_id INTEGER NOT NULL,
+        ilosc INTEGER NOT NULL DEFAULT 1,
+        wypozyczyl_user_id INTEGER,
+        wypozyczyl_imie TEXT NOT NULL,
+        data_wypozyczenia TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        zwrocil_user_id INTEGER,
+        zwrocil_imie TEXT DEFAULT '',
+        data_zwrotu TIMESTAMP,
+        zlecenie_nr TEXT DEFAULT '',
+        uwagi TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'wypozyczone',
+        FOREIGN KEY (narzedzie_id) REFERENCES narzedzia_skrawajace(id) ON DELETE CASCADE)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_narzedzie ON narzedzia_skrawajace_wypozyczenia(narzedzie_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_status ON narzedzia_skrawajace_wypozyczenia(status)")
+
     conn.commit()
     conn.close()
     logger.info(f"Baza danych gotowa: {DB_PATH}")
@@ -4823,6 +4854,8 @@ _TABLES_TO_BACKUP = [
     "kontrahenci",          # baza kontrahentów (fakturowanie)
     "faktury",              # wystawione faktury
     "pozycje_faktury",      # pozycje faktur
+    "narzedzia_skrawajace",              # baza narzedzi skrawajacych (Tool Manager)
+    "narzedzia_skrawajace_wypozyczenia", # historia wypozyczen/zwrotow narzedzi skrawajacych
 ]
 
 # ─── GitHub Gist helpers ────────────────────────────────────────────────────────
@@ -5861,6 +5894,252 @@ def zwrot_narzedzia_v2(pid: int):
         conn.execute("UPDATE narzedzia SET stan = stan + ?, updated_at=? WHERE id=?",
                      (p["ilosc"], _now(), p["narzedzie_id"]))
     return {"ok": True}
+
+
+# ─── Narzędzia skrawające – Tool Manager (frezy, wytaczadła, głowice itd.) ────
+# Osobny moduł od ogólnej "Narzędziowni" – tu zarządzamy konkretnymi narzędziami
+# skrawającymi: typ, średnica, ilość, stan (sprawne/zepsute/zamówione) oraz
+# wypożyczeniami na konkretną osobę z datą wypożyczenia i zwrotu.
+
+TYPY_NARZ_SKRAWAJACYCH = [
+    "Frez wykańczający", "Frez zgrubny", "Frez kulowy", "Frez do gwintów",
+    "Głowica frezarska", "Płytka do głowicy",
+    "Wytaczadło zgrubne", "Wytaczadło wykańczające",
+    "Nóż tokarski zgrubny", "Nóż tokarski wykańczający", "Nóż do gwintowania",
+    "Nóż do przecinania", "Płytka tokarska",
+    "Wiertło", "Wiertło centrujące", "Pogłębiacz",
+    "Gwintownik", "Narzynka", "Rozwiertak",
+    "Imadło / oprawka", "Tuleja zaciskowa", "Inne",
+]
+
+class NarzSkrawDodajRequest(BaseModel):
+    typ: str
+    oznaczenie: Optional[str] = ""
+    srednica: Optional[float] = None
+    ilosc: int = 1
+    status: Optional[str] = "sprawne"
+    lokalizacja: Optional[str] = ""
+    uwagi: Optional[str] = ""
+
+class NarzSkrawEditRequest(BaseModel):
+    typ: Optional[str] = None
+    oznaczenie: Optional[str] = None
+    srednica: Optional[float] = None
+    ilosc: Optional[int] = None
+    status: Optional[str] = None
+    lokalizacja: Optional[str] = None
+    uwagi: Optional[str] = None
+
+class NarzSkrawWypozyczRequest(BaseModel):
+    ilosc: int = 1
+    user_id: Optional[int] = None
+    user_name: str
+    zlecenie_nr: Optional[str] = ""
+    uwagi: Optional[str] = ""
+
+class NarzSkrawZwrotRequest(BaseModel):
+    user_id: Optional[int] = None
+    user_name: Optional[str] = ""
+    uwagi: Optional[str] = ""
+
+STATUSY_NARZ_SKRAW = ("sprawne", "zepsute", "zamowione")
+
+
+def _narz_skraw_dostepne(conn, narzedzie_id: int, ilosc_total: int) -> int:
+    """Ile sztuk danego narzędzia jest fizycznie dostępnych (nie wypożyczonych)."""
+    wyp = conn.execute(
+        "SELECT COALESCE(SUM(ilosc),0) FROM narzedzia_skrawajace_wypozyczenia "
+        "WHERE narzedzie_id=? AND status='wypozyczone'",
+        (narzedzie_id,)
+    ).fetchone()[0]
+    return max(0, ilosc_total - wyp)
+
+
+@app.get("/api/narzedzia-skrawajace/typy", dependencies=[Depends(verify_key)])
+def get_typy_narz_skrawajacych():
+    return TYPY_NARZ_SKRAWAJACYCH
+
+
+@app.get("/api/narzedzia-skrawajace", dependencies=[Depends(verify_key)])
+def get_narzedzia_skrawajace(q: str = "", typ: str = "", status: str = ""):
+    with get_db() as conn:
+        sql = "SELECT * FROM narzedzia_skrawajace WHERE 1=1"
+        params = []
+        if q:
+            sql += " AND (typ LIKE ? OR oznaczenie LIKE ? OR lokalizacja LIKE ?)"
+            like = f"%{q}%"
+            params += [like, like, like]
+        if typ:
+            sql += " AND typ=?"
+            params.append(typ)
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        sql += " ORDER BY typ, srednica"
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        for r in rows:
+            r["dostepne"] = _narz_skraw_dostepne(conn, r["id"], r["ilosc"])
+        return rows
+
+
+@app.get("/api/narzedzia-skrawajace/count", dependencies=[Depends(verify_key)])
+def count_narzedzia_skrawajace():
+    with get_db() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM narzedzia_skrawajace").fetchone()[0]
+        zepsute = conn.execute("SELECT COUNT(*) FROM narzedzia_skrawajace WHERE status='zepsute'").fetchone()[0]
+        zamowione = conn.execute("SELECT COUNT(*) FROM narzedzia_skrawajace WHERE status='zamowione'").fetchone()[0]
+        wypozyczone = conn.execute(
+            "SELECT COUNT(DISTINCT narzedzie_id) FROM narzedzia_skrawajace_wypozyczenia WHERE status='wypozyczone'"
+        ).fetchone()[0]
+        return {"total": total, "zepsute": zepsute, "zamowione": zamowione, "wypozyczone": wypozyczone}
+
+
+@app.post("/api/narzedzia-skrawajace", dependencies=[Depends(verify_key)])
+def create_narzedzie_skrawajace(req: NarzSkrawDodajRequest):
+    if not req.typ or not req.typ.strip():
+        raise HTTPException(400, "Typ narzędzia jest wymagany")
+    if req.ilosc < 1:
+        raise HTTPException(400, "Ilość musi być większa od 0")
+    status = (req.status or "sprawne").lower()
+    if status not in STATUSY_NARZ_SKRAW:
+        raise HTTPException(400, f"Nieprawidłowy status (dozwolone: {', '.join(STATUSY_NARZ_SKRAW)})")
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO narzedzia_skrawajace (typ, oznaczenie, srednica, ilosc, status, lokalizacja, uwagi, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (req.typ.strip(), (req.oznaczenie or "").strip(), req.srednica, req.ilosc,
+             status, (req.lokalizacja or "").strip(), (req.uwagi or "").strip(), _now())
+        )
+        new_id = cur.lastrowid
+    log_admin("system", "create_narzedzie_skrawajace", str(new_id))
+    return {"id": new_id}
+
+
+@app.put("/api/narzedzia-skrawajace/{nid}", dependencies=[Depends(verify_key)])
+def update_narzedzie_skrawajace(nid: int, req: NarzSkrawEditRequest):
+    fields, vals = [], []
+    if req.typ is not None:
+        fields.append("typ=?"); vals.append(req.typ.strip())
+    if req.oznaczenie is not None:
+        fields.append("oznaczenie=?"); vals.append(req.oznaczenie.strip())
+    if req.srednica is not None:
+        fields.append("srednica=?"); vals.append(req.srednica)
+    if req.ilosc is not None:
+        if req.ilosc < 0:
+            raise HTTPException(400, "Ilość nie może być ujemna")
+        fields.append("ilosc=?"); vals.append(req.ilosc)
+    if req.status is not None:
+        status = req.status.lower()
+        if status not in STATUSY_NARZ_SKRAW:
+            raise HTTPException(400, f"Nieprawidłowy status (dozwolone: {', '.join(STATUSY_NARZ_SKRAW)})")
+        fields.append("status=?"); vals.append(status)
+    if req.lokalizacja is not None:
+        fields.append("lokalizacja=?"); vals.append(req.lokalizacja.strip())
+    if req.uwagi is not None:
+        fields.append("uwagi=?"); vals.append(req.uwagi.strip())
+    if not fields:
+        return {"ok": True}
+    fields.append("updated_at=?"); vals.append(_now())
+    vals.append(nid)
+    with get_db() as conn:
+        exists = conn.execute("SELECT id FROM narzedzia_skrawajace WHERE id=?", (nid,)).fetchone()
+        if not exists:
+            raise HTTPException(404, "Narzędzie nie znalezione")
+        conn.execute(f"UPDATE narzedzia_skrawajace SET {', '.join(fields)} WHERE id=?", vals)
+    return {"ok": True}
+
+
+@app.delete("/api/narzedzia-skrawajace/{nid}", dependencies=[Depends(verify_key)])
+def delete_narzedzie_skrawajace(nid: int):
+    with get_db() as conn:
+        aktywne = conn.execute(
+            "SELECT COUNT(*) FROM narzedzia_skrawajace_wypozyczenia WHERE narzedzie_id=? AND status='wypozyczone'",
+            (nid,)
+        ).fetchone()[0]
+        if aktywne > 0:
+            raise HTTPException(400, "Nie można usunąć – narzędzie ma aktywne wypożyczenia")
+        conn.execute("DELETE FROM narzedzia_skrawajace WHERE id=?", (nid,))
+    log_admin("system", "delete_narzedzie_skrawajace", str(nid))
+    return {"ok": True}
+
+
+@app.post("/api/narzedzia-skrawajace/{nid}/wypozycz", dependencies=[Depends(verify_key)])
+def wypozycz_narzedzie_skrawajace(nid: int, req: NarzSkrawWypozyczRequest):
+    if req.ilosc < 1:
+        raise HTTPException(400, "Ilość musi być większa od 0")
+    if not req.user_name or not req.user_name.strip():
+        raise HTTPException(400, "Podaj kto wypożycza narzędzie")
+    with get_db() as conn:
+        n = conn.execute("SELECT * FROM narzedzia_skrawajace WHERE id=?", (nid,)).fetchone()
+        if not n:
+            raise HTTPException(404, "Narzędzie nie znalezione")
+        if n["status"] == "zepsute":
+            raise HTTPException(400, "Narzędzie oznaczone jako zepsute – nie można wypożyczyć")
+        dostepne = _narz_skraw_dostepne(conn, nid, n["ilosc"])
+        if req.ilosc > dostepne:
+            raise HTTPException(400, f"Dostępne tylko {dostepne} szt.")
+        cur = conn.execute(
+            "INSERT INTO narzedzia_skrawajace_wypozyczenia "
+            "(narzedzie_id, ilosc, wypozyczyl_user_id, wypozyczyl_imie, data_wypozyczenia, zlecenie_nr, uwagi, status) "
+            "VALUES (?,?,?,?,?,?,?,'wypozyczone')",
+            (nid, req.ilosc, req.user_id, req.user_name.strip(), _now(),
+             (req.zlecenie_nr or "").strip(), (req.uwagi or "").strip())
+        )
+        wid = cur.lastrowid
+    db_log(req.user_id, req.user_name.strip(), "NARZ_SKRAW_WYPOZYCZ",
+           f"Wypożyczono narzędzie skrawające ({n['typ']})",
+           f"narzedzie_id={nid}, ilosc={req.ilosc}, zlecenie={req.zlecenie_nr or '-'}")
+    return {"ok": True, "wypozyczenie_id": wid}
+
+
+@app.patch("/api/narzedzia-skrawajace-wypozyczenia/{wid}/zwrot", dependencies=[Depends(verify_key)])
+def zwrot_narzedzie_skrawajace(wid: int, req: NarzSkrawZwrotRequest):
+    with get_db() as conn:
+        w = conn.execute("SELECT * FROM narzedzia_skrawajace_wypozyczenia WHERE id=?", (wid,)).fetchone()
+        if not w:
+            raise HTTPException(404, "Wypożyczenie nie znalezione")
+        if w["status"] == "zwrocone":
+            raise HTTPException(409, "Już zwrócone")
+        conn.execute(
+            "UPDATE narzedzia_skrawajace_wypozyczenia SET status='zwrocone', data_zwrotu=?, "
+            "zwrocil_user_id=?, zwrocil_imie=?, uwagi=CASE WHEN ?='' THEN uwagi ELSE (uwagi || CASE WHEN uwagi='' THEN '' ELSE ' | ' END || ?) END "
+            "WHERE id=?",
+            (_now(), req.user_id, (req.user_name or "").strip(), (req.uwagi or "").strip(), (req.uwagi or "").strip(), wid)
+        )
+        narzedzie_id = w["narzedzie_id"]
+    db_log(req.user_id, req.user_name or "", "NARZ_SKRAW_ZWROT",
+           "Zwrócono narzędzie skrawające", f"wypozyczenie_id={wid}, narzedzie_id={narzedzie_id}")
+    return {"ok": True}
+
+
+@app.get("/api/narzedzia-skrawajace-wypozyczenia", dependencies=[Depends(verify_key)])
+def get_narzedzia_skrawajace_wypozyczenia(status: str = "", limit: int = 200):
+    with get_db() as conn:
+        sql = """
+            SELECT w.*, n.typ AS narzedzie_typ, n.oznaczenie AS narzedzie_oznaczenie,
+                   n.srednica AS narzedzie_srednica
+            FROM narzedzia_skrawajace_wypozyczenia w
+            JOIN narzedzia_skrawajace n ON w.narzedzie_id = n.id
+        """
+        params = []
+        if status:
+            sql += " WHERE w.status=?"
+            params.append(status)
+        sql += " ORDER BY w.data_wypozyczenia DESC LIMIT ?"
+        params.append(limit)
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+@app.get("/api/narzedzia-skrawajace/{nid}/historia", dependencies=[Depends(verify_key)])
+def get_historia_narzedzia_skrawajacego(nid: int):
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM narzedzia_skrawajace_wypozyczenia WHERE narzedzie_id=? ORDER BY data_wypozyczenia DESC",
+            (nid,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 
 
 class FeedbackIn(BaseModel):

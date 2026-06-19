@@ -397,7 +397,8 @@ function _ganttRow(st, rowIdx, viewStart, viewEnd, totalWorkMins) {
       onmouseenter="ganttBarHover(event,true)"
       onmouseleave="ganttBarHover(event,false)"
       ontouchstart="ganttTouchStart(event)"
-      onmousedown="ganttMouseDown(event)">
+      onmousedown="ganttMouseDown(event)"
+      ondblclick="event.stopPropagation();openOblozenieGanttModal(${o.zlecenie_id},'${_esc(st.stanowisko)}')">
       <!-- Pasek postępu -->
       ${prog > 0 ? `<div style="position:absolute;bottom:0;left:0;width:${prog}%;height:3px;background:rgba(255,255,255,.55);border-radius:0 0 0 4px"></div>` : ''}
       <!-- Wzór ukośny dla zbrojenia -->
@@ -750,4 +751,26 @@ function ganttAttachEvents() {
     if (_ganttDrag && _ganttDrag.dragging) return;
     _ganttPositionTooltip(e);
   });
+}
+
+// ── Dblclick na pasku Gantta → modal operacji zlecenia ────────
+function openOblozenieGanttModal(zlecenieId, stanowisko) {
+  const ob = state.oblozenie;
+  if (!ob) return;
+  // Znajdź stanowisko
+  const st = ob.find(s => s.stanowisko === stanowisko);
+  if (!st) return;
+  // Zbierz wszystkie operacje tego zlecenia na tym stanowisku
+  const ops = (st.operacje || []).filter(o => o.zlecenie_id === zlecenieId);
+  if (!ops.length) return;
+  const first = ops[0];
+  const g = {
+    zlecenie_numer: first.zlecenie_numer,
+    zlecenie_nazwa: first.zlecenie_nazwa,
+    termin: first.termin,
+    ilosc_sztuk: first.ilosc_sztuk,
+    zlecenie_status: first.zlecenie_status,
+    ops
+  };
+  setState({ oblozenieZlecenieModal: g });
 }

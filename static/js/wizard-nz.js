@@ -1281,41 +1281,41 @@ function renderNzWizard() {
       <div class="field"><label>Numer zlecenia *</label>
         <div style="position:relative">
           <input id="nz-numer" type="text" placeholder="np. ZL-2024/001" value="${s.nzNumer}"
-                 oninput="setState({nzNumer:this.value},false)"
+                 oninput="setState({nzNumer:this.value},true)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
         </div>
       </div>
       <div class="field"><label>Nazwa zlecenia *</label>
         <input id="nz-nazwa" type="text" placeholder="np. Wał napędowy Ø50" value="${s.nzNazwa}"
-               oninput="setState({nzNazwa:this.value},false)"
+               oninput="setState({nzNazwa:this.value},true)"
                style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:14px">
       </div>
       <div class="field"><label>Opis</label>
         <textarea id="nz-opis" rows="2"
-                  oninput="setState({nzOpis:this.value},false)"
+                  oninput="setState({nzOpis:this.value},true)"
                   style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px;resize:vertical">${s.nzOpis||''}</textarea>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="field"><label>Termin</label>
           <input id="nz-termin" type="date" value="${s.nzTermin||''}"
-                 onchange="setState({nzTermin:this.value},false)"
+                 onchange="setState({nzTermin:this.value},true)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
         </div>
         <div class="field"><label>Ilość sztuk</label>
           <input id="nz-ilosc" type="number" value="${s.nzIlosc||1}" min="1"
-                 oninput="setState({nzIlosc:+this.value||1},false)"
+                 oninput="setState({nzIlosc:+this.value||1},true)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <div class="field"><label>Cena brutto/szt (zł)</label>
           <input id="nz-cena" type="number" step="0.01" value="${s.nzCena||0}"
-                 oninput="setState({nzCena:+this.value||0},false)"
+                 oninput="setState({nzCena:+this.value||0},true)"
                  style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
         </div>
         <div class="field"><label>Materiał od klienta</label>
           <select id="nz-mat"
-                  onchange="setState({nzMatKlienta:this.value==='1'},false)"
+                  onchange="setState({nzMatKlienta:this.value==='1'},true)"
                   style="background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;width:100%;box-sizing:border-box;font-size:13px">
             <option value="0" ${!s.nzMatKlienta?'selected':''}>Nie – definiuję materiały</option>
             <option value="1" ${s.nzMatKlienta?'selected':''}>Tak – klient dostarcza</option>

@@ -89,4 +89,46 @@ setInterval(() => {
 
 render();
 
+// ── ESC zamyka otwarte okienka (modale) ───────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.key !== 'Escape') return;
+  // Lista kluczy stanu, które reprezentują modale – null/false = zamknięcie
+  const modalKeys = [
+    'zlecenieModal', 'operacjeModal', 'stopModal', 'pauzaModal',
+    'kjModal', 'kontynuacjaModal', 'sesjaGlownaModal', 'parallelModal',
+    'zmianaMaszynyModal', 'qrZleceniePickerModal', 'userModal',
+    'stawkaModal', 'produktModal', 'printModal', 'zlecenieDetailsModal',
+    'pmModal', 'podZlecenieModal', 'rezerwacjaModal', 'narzPobierzModal',
+    'narzEditModal', 'fakturaModal', 'kontrahentModal', 'kartaModal',
+    'editSesjaModal', 'zlDrzewoModal', 'zlModalDaneModal',
+    'oblozenieZlecenieModal',
+  ];
+  const boolModalKeys = ['nieprodukcyjnaModal', 'feedbackModal'];
+
+  // Sprawdź czy któryś modal jest otwarty
+  let closed = false;
+  for (const key of modalKeys) {
+    if (state[key]) {
+      const patch = {};
+      patch[key] = null;
+      // fakturaModal wymaga też wyczyszczenia fakturaForm
+      if (key === 'fakturaModal') patch.fakturaForm = null;
+      setState(patch);
+      closed = true;
+      break;
+    }
+  }
+  if (!closed) {
+    for (const key of boolModalKeys) {
+      if (state[key]) {
+        const patch = {};
+        patch[key] = false;
+        if (key === 'feedbackModal') { patch.feedbackMsg = ''; }
+        setState(patch);
+        break;
+      }
+    }
+  }
+});
+
 // ══════════════════════════════════════════════════════════════

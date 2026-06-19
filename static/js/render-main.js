@@ -26,7 +26,8 @@ function renderContent() {
     ${renderPrintModal()}
     ${renderKartaModal()}
     ${renderQRZleceniePickerModal()}
-    ${renderEditSesjaModalHtml()}`;
+    ${renderEditSesjaModalHtml()}
+    ${renderOblozenieZlecenieModal()}`;
 }
 
 

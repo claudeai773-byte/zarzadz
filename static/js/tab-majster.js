@@ -531,10 +531,17 @@ function renderOblozenie() {
     const statusColors = {nowe:'var(--blue)',w_realizacji:'var(--green)',zakonczone:'var(--dim)',anulowane:'var(--red)'};
     const zStatusColor = statusColors[g.zlecenie_status] || 'var(--dim)';
 
-    html += `<div style="background:var(--entry);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;border-left:3px solid ${terminColor}">
+    // Zbierz ID zlecenia z pierwszej operacji grupy
+    const zlecenieId = g.ops[0] ? g.ops[0].zlecenie_id : null;
+    const zlecenieDataJson = zlecenieId ? JSON.stringify(g).replace(/"/g,'&quot;') : '';
+
+    html += `<div style="background:var(--entry);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;border-left:3px solid ${terminColor};cursor:pointer;user-select:none"
+      title="Kliknij dwukrotnie aby zobaczyć operacje"
+      ondblclick="openOblozenieZlecenieModal(${JSON.stringify(g).replace(/"/g,'&quot;')})"
+      >
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
         <div>
-          <div style="font-weight:700;font-size:14px">${g.zlecenie_numer}</div>
+          <div style="font-weight:700;font-size:14px">${g.zlecenie_numer} <span style="font-size:10px;color:var(--dim);font-weight:400;margin-left:4px">↩ 2× klik = operacje</span></div>
           <div style="color:var(--dim);font-size:12px;margin-top:1px">${g.zlecenie_nazwa}</div>
         </div>
         <div style="text-align:right;font-size:11px">
@@ -605,6 +612,77 @@ function renderOblozenie() {
 
   html += `<button class="btn-outline" style="margin-top:4px" onclick="loadOblozenie()">🔄 Odśwież</button>`;
   return html;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  MODAL – Operacje zlecenia w obłożeniu (dblclick)
+// ══════════════════════════════════════════════════════════════
+function openOblozenieZlecenieModal(g) {
+  setState({ oblozenieZlecenieModal: g });
+}
+
+function renderOblozenieZlecenieModal() {
+  const g = state.oblozenieZlecenieModal;
+  if (!g) return '';
+
+  const opStatusColors = {oczekuje:'var(--dim)', w_toku:'var(--blue)', zakonczona:'var(--green)'};
+  const opStatusLabels = {oczekuje:'⏳ oczekuje', w_toku:'▶ w toku', zakonczona:'✅ zakończona'};
+
+  let opsHtml = '';
+  (g.ops || []).forEach(o => {
+    const prog = g.ilosc_sztuk > 0 ? Math.min(100, Math.round(((o.ilosc_wykonana||0) / g.ilosc_sztuk) * 100)) : 0;
+    const opColor = opStatusColors[o.op_status] || 'var(--dim)';
+    const czNorma = o.czas_norma || 0;
+    const czZbr = o.czas_zbrojenia_min || 0;
+    const ilosc = Math.max(1, (g.ilosc_sztuk||1) - (o.ilosc_wykonana||0));
+    const totalMin = czNorma * ilosc + czZbr;
+    const czLabel = totalMin > 0
+      ? (czNorma > 0 ? `${czNorma} min/szt` : '') + (czZbr > 0 ? (czNorma>0?' + ':'')+`zbr ${czZbr} min` : '')
+      : '';
+
+    opsHtml += `
+    <div style="background:var(--entry);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:13px">#${o.op_kolejnosc} ${o.op_nazwa}</div>
+          ${o.stanowisko ? `<div style="font-size:11px;color:var(--blue);margin-top:2px">🏭 ${o.stanowisko}</div>` : ''}
+          ${czLabel ? `<div style="font-size:10px;color:var(--dim);margin-top:2px">⏱ ${czLabel}</div>` : ''}
+          ${o.opis_czynnosci ? `<div style="font-size:10px;color:var(--dim);margin-top:3px;line-height:1.4">${o.opis_czynnosci.slice(0,150)}${o.opis_czynnosci.length>150?'…':''}</div>` : ''}
+        </div>
+        <span style="font-size:11px;color:${opColor};font-weight:700;margin-left:10px;white-space:nowrap">${opStatusLabels[o.op_status]||o.op_status}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="flex:1;background:var(--border);border-radius:4px;height:5px;overflow:hidden">
+          <div style="width:${prog}%;height:100%;border-radius:4px;background:${prog>=100?'var(--green)':prog>0?'var(--blue)':'var(--border)'}"></div>
+        </div>
+        <span style="font-size:10px;color:var(--dim);white-space:nowrap">${o.ilosc_wykonana||0}/${g.ilosc_sztuk} szt. (${prog}%)</span>
+      </div>
+    </div>`;
+  });
+
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)setState({oblozenieZlecenieModal:null})">
+    <div class="modal" style="max-width:520px;width:95%">
+      <div class="modal-header">
+        <div>
+          <div style="font-weight:700;font-size:15px">📋 ${g.zlecenie_numer}</div>
+          <div style="color:var(--dim);font-size:12px;margin-top:2px">${g.zlecenie_nazwa}</div>
+        </div>
+        <button class="modal-close" onclick="setState({oblozenieZlecenieModal:null})">×</button>
+      </div>
+      <div style="padding:14px 16px;max-height:70vh;overflow-y:auto">
+        <div style="font-size:12px;color:var(--dim);margin-bottom:12px">
+          Ilość: <b style="color:var(--text)">${g.ilosc_sztuk} szt.</b>
+          ${g.termin ? ` · Termin: <b style="color:var(--text)">${g.termin.slice(0,10)}</b>` : ''}
+          · Operacji: <b style="color:var(--text)">${(g.ops||[]).length}</b>
+        </div>
+        ${opsHtml || '<div class="empty">Brak operacji</div>'}
+      </div>
+      <div style="padding:10px 16px;border-top:1px solid var(--border)">
+        <button class="btn btn-outline" style="width:100%" onclick="setState({oblozenieZlecenieModal:null})">Zamknij</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════

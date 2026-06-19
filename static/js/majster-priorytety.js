@@ -76,6 +76,7 @@ function renderMajsterPriorytety() {
   const sesjeAkt  = state.majsterSesjeAktywne || [];
   const priorytety = state.majsterPriorytety || _mpLoad();
   const filter    = state.majsterPriorFilter || 'all';
+  const search    = (state.majsterPriorSearch || '').toLowerCase().trim();
   const teraz     = Date.now();
 
   // Wzbogać zlecenia o dane sesji
@@ -90,11 +91,19 @@ function renderMajsterPriorytety() {
     return { ...z, _operatorzy: operatorzy, _wykonano: wykonano, _dniDo: dniDo, _sesje: sesjeZl };
   });
 
-  // Filtrowanie
+  // Filtrowanie wg zakładki
   let lista = wzbogacone;
   if (filter === 'opoznione') lista = lista.filter(z => z._dniDo !== null && z._dniDo < 0);
   if (filter === 'dzis')      lista = lista.filter(z => z._dniDo !== null && z._dniDo >= 0 && z._dniDo < 1);
   if (filter === 'bez_op')    lista = lista.filter(z => z._sesje.length === 0);
+
+  // Filtrowanie wg wyszukiwania (numer / nazwa)
+  if (search) {
+    lista = lista.filter(z =>
+      (z.numer || '').toLowerCase().includes(search) ||
+      (z.nazwa || '').toLowerCase().includes(search)
+    );
+  }
 
   // Sortowanie: ręczny priorytet (pin) → auto score
   lista.sort((a, b) => {
@@ -156,11 +165,30 @@ function renderMajsterPriorytety() {
     </div>
 
     <!-- Filtry -->
-    <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
       ${fBtn('all',       'Wszystkie')}
       ${fBtn('opoznione', '🔴 Opóźnione', opoznioneN || '')}
       ${fBtn('dzis',      '🟡 Na dziś',   dzisN || '')}
       ${fBtn('bez_op',    '👤 Bez operatora', bezOpN || '')}
+    </div>
+
+    <!-- Wyszukiwarka -->
+    <div style="position:relative;margin-bottom:14px">
+      <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:14px;pointer-events:none">🔍</span>
+      <input
+        type="text"
+        placeholder="Szukaj zlecenia (numer / nazwa)…"
+        value="${(state.majsterPriorSearch||'').replace(/"/g,'&quot;')}"
+        oninput="setState({majsterPriorSearch:this.value})"
+        style="width:100%;box-sizing:border-box;padding:8px 10px 8px 34px;background:var(--entry);
+               border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;
+               outline:none;transition:border-color .2s"
+        onfocus="this.style.borderColor='var(--accent)'"
+        onblur="this.style.borderColor='var(--border)'"
+      >
+      ${state.majsterPriorSearch ? `<button onclick="setState({majsterPriorSearch:''})"
+        style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;
+               color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px">×</button>` : ''}
     </div>`;
 
   if (!lista.length) {

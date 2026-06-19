@@ -74,6 +74,7 @@ let state = {
   oblozenie: null,
   oblozenieLading: false,
   oblozenieSelected: null,
+  oblozenieZlecenieModal: null, // {zlecenie_numer, zlecenie_nazwa, ilosc_sztuk, termin, ops:[]} | null
   majsterOpsCache: {},            // {zid: [operacje]} - cache operacji dla majstra
   raportOkres: {od:"", do:""},
   raportWydOkres: {od:"", do:""},
@@ -210,6 +211,7 @@ let state = {
   // ── Patch 3: widok priorytetów dla majstra ───────────────────────────────────
   majsterPriorytety: (function(){ try{ return JSON.parse(localStorage.getItem('majster_priorytety')||'{}'); }catch(e){return {};} })(),
   majsterPriorFilter: 'all',      // 'all' | 'opoznione' | 'dzis' | 'bez_op'
+  majsterPriorSearch: '',         // tekst wyszukiwania w zakładce Priorytety
   majsterSesjeAktywne: [],        // cache sesji wszystkich pracowników dla widoku priorytetów
 };
 

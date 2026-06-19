@@ -176,17 +176,18 @@ function renderMajsterPriorytety() {
     <div style="position:relative;margin-bottom:14px">
       <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:14px;pointer-events:none">🔍</span>
       <input
+        id="mp-search-input"
         type="text"
         placeholder="Szukaj zlecenia (numer / nazwa)…"
         value="${(state.majsterPriorSearch||'').replace(/"/g,'&quot;')}"
-        oninput="setState({majsterPriorSearch:this.value})"
+        oninput="state.majsterPriorSearch=this.value; render(); requestAnimationFrame(()=>{ const el=document.getElementById('mp-search-input'); if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);} })"
         style="width:100%;box-sizing:border-box;padding:8px 10px 8px 34px;background:var(--entry);
                border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;
                outline:none;transition:border-color .2s"
         onfocus="this.style.borderColor='var(--accent)'"
         onblur="this.style.borderColor='var(--border)'"
       >
-      ${state.majsterPriorSearch ? `<button onclick="setState({majsterPriorSearch:''})"
+      ${state.majsterPriorSearch ? `<button onclick="state.majsterPriorSearch=''; render();"
         style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;
                color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px">×</button>` : ''}
     </div>`;

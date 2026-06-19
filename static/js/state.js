@@ -212,6 +212,7 @@ let state = {
   majsterPriorytety: (function(){ try{ return JSON.parse(localStorage.getItem('majster_priorytety')||'{}'); }catch(e){return {};} })(),
   majsterPriorFilter: 'all',      // 'all' | 'opoznione' | 'dzis' | 'bez_op'
   majsterPriorSearch: '',         // tekst wyszukiwania w zakładce Priorytety
+  majsterZleceniaSearch: '',      // tekst wyszukiwania w zakładce Zlecenia
   majsterSesjeAktywne: [],        // cache sesji wszystkich pracowników dla widoku priorytetów
 };
 

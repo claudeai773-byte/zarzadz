@@ -66,6 +66,28 @@ function renderMajster() {
 
   if (state.majsterSubTab === 'zlecenia') {
     html += `<div class="section-hdr">📋 Zlecenia w toku</div>`;
+
+    // Wyszukiwarka
+    const zlSearch = (state.majsterZleceniaSearch || '').toLowerCase().trim();
+    html += `
+    <div style="position:relative;margin-bottom:12px">
+      <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:14px;pointer-events:none">🔍</span>
+      <input
+        id="mz-search-input"
+        type="text"
+        placeholder="Szukaj zlecenia (numer / nazwa)…"
+        value="${(state.majsterZleceniaSearch||'').replace(/"/g,'&quot;')}"
+        oninput="state.majsterZleceniaSearch=this.value; render(); requestAnimationFrame(()=>{ const el=document.getElementById('mz-search-input'); if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);} })"
+        style="width:100%;box-sizing:border-box;padding:8px 10px 8px 34px;background:var(--entry);
+               border:1.5px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none"
+        onfocus="this.style.borderColor='var(--accent)'"
+        onblur="this.style.borderColor='var(--border)'"
+      >
+      ${state.majsterZleceniaSearch ? `<button onclick="state.majsterZleceniaSearch=''; render();"
+        style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;
+               color:var(--dim);cursor:pointer;font-size:16px;line-height:1;padding:2px 4px">×</button>` : ''}
+    </div>`;
+
     // Show all started operations (even multiple from same zlecenie)
     const wTokuOps = (stats.aktywne_sesje || []).filter(s => s.op_nazwa);
     if (wTokuOps.length) {
@@ -89,7 +111,15 @@ function renderMajster() {
 
     // Filtruj podzlecenia P – pokazuj tylko zlecenia główne G (tak jak w zakładce Zlecenia)
     const majsterPodzlecenieIds = state.podzlecenieIds instanceof Set ? state.podzlecenieIds : new Set(state.podzlecenieIds || []);
-    const zleceniaGlowne = (stats.zlecenia || []).filter(z => !majsterPodzlecenieIds.has(z.id));
+    let zleceniaGlowne = (stats.zlecenia || []).filter(z => !majsterPodzlecenieIds.has(z.id));
+
+    // Filtr wyszukiwania
+    if (zlSearch) {
+      zleceniaGlowne = zleceniaGlowne.filter(z =>
+        (z.numer || '').toLowerCase().includes(zlSearch) ||
+        (z.nazwa || '').toLowerCase().includes(zlSearch)
+      );
+    }
 
     if (!zleceniaGlowne.length) {
       html += `<div class="empty">Brak aktywnych zleceń</div>`;
@@ -515,7 +545,10 @@ function renderOblozenie() {
     return new Date(a.termin) - new Date(b.termin);
   });
 
-  groups.forEach(g => {
+  // Przechowaj grupy globalnie – dblclick odwołuje się przez indeks
+  window._oblozenieGroups = groups;
+
+  groups.forEach((g, gIdx) => {
     const today = new Date(); today.setHours(0,0,0,0);
     const termin = g.termin ? new Date(g.termin) : null;
     const daysLeft = termin ? Math.ceil((termin - today) / 86400000) : null;
@@ -531,13 +564,9 @@ function renderOblozenie() {
     const statusColors = {nowe:'var(--blue)',w_realizacji:'var(--green)',zakonczone:'var(--dim)',anulowane:'var(--red)'};
     const zStatusColor = statusColors[g.zlecenie_status] || 'var(--dim)';
 
-    // Zbierz ID zlecenia z pierwszej operacji grupy
-    const zlecenieId = g.ops[0] ? g.ops[0].zlecenie_id : null;
-    const zlecenieDataJson = zlecenieId ? JSON.stringify(g).replace(/"/g,'&quot;') : '';
-
     html += `<div style="background:var(--entry);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px;border-left:3px solid ${terminColor};cursor:pointer;user-select:none"
       title="Kliknij dwukrotnie aby zobaczyć operacje"
-      ondblclick="openOblozenieZlecenieModal(${JSON.stringify(g).replace(/"/g,'&quot;')})"
+      ondblclick="openOblozenieZlecenieModal(${gIdx})"
       >
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
         <div>
@@ -617,7 +646,9 @@ function renderOblozenie() {
 // ══════════════════════════════════════════════════════════════
 //  MODAL – Operacje zlecenia w obłożeniu (dblclick)
 // ══════════════════════════════════════════════════════════════
-function openOblozenieZlecenieModal(g) {
+function openOblozenieZlecenieModal(gIdx) {
+  const g = (window._oblozenieGroups || [])[gIdx];
+  if (!g) return;
   setState({ oblozenieZlecenieModal: g });
 }
 

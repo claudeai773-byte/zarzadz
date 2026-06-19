@@ -2001,8 +2001,8 @@ def change_password(uid: int, req: dict = Body(...)):
         if not user or not verify_password(old_pass, user["password"]):
             raise HTTPException(400, "Aktualne hasło jest nieprawidłowe")
         conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(new_pass), uid))
-        revoke_all_user_sessions(uid)
-        return {"ok": True}
+    revoke_all_user_sessions(uid)
+    return {"ok": True}
 
 @app.post("/api/users/{uid}/reset-password", dependencies=[Depends(verify_admin)])
 def reset_password(uid: int):
@@ -2013,10 +2013,11 @@ def reset_password(uid: int):
         if not user:
             raise HTTPException(404, "Użytkownik nie znaleziony")
         conn.execute("UPDATE users SET password=? WHERE id=?", (hash_password(new_pass), uid))
-        revoke_all_user_sessions(uid)
         log_admin("system", "reset_password", str(uid))
         db_log(uid, user["full_name"], "ADMIN", "Reset hasła użytkownika", f"uid={uid}")
-        return {"ok": True, "new_password": new_pass, "full_name": user["full_name"]}
+        full_name = user["full_name"]
+    revoke_all_user_sessions(uid)
+    return {"ok": True, "new_password": new_pass, "full_name": full_name}
 
 @app.delete("/api/users/{uid}", dependencies=[Depends(verify_admin)])
 def delete_user(uid: int):

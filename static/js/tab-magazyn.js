@@ -10,6 +10,7 @@ function renderMagazyn() {
     {id:'rezerwacje',      label:'🔒 Rez. mat.'},
     {id:'zapotrzebowanie', label:'📋 Zapotrz.'},
     {id:'narzedzialnia',   label:'🔧 Narzędziownia'},
+    {id:'narzskraw',       label:'⚙ Narz. skrawające'},
   ];
 
   const refreshTime = state.magazynLastRefresh;
@@ -35,6 +36,8 @@ function renderMagazyn() {
     html += renderMagazynZapotrzebowanie();
   } else if (subTab === 'narzedzialnia') {
     html += renderNarzedzialnia();
+  } else if (subTab === 'narzskraw') {
+    html += renderNarzSkraw();
   }
 
   // Modal rezerwacji
@@ -52,6 +55,7 @@ function switchMagazynTab(tab) {
     loadMagazynZapotrzebowanie();
   }
   if (tab === 'narzedzialnia' && !state.narzResults?.length) { loadNarzCount(); loadNarzAll(); }
+  if (tab === 'narzskraw' && !state.narzSkrawResults) { loadNarzSkrawAll(); loadNarzSkrawCount(); }
   render();
 }
 

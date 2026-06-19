@@ -301,7 +301,7 @@ function nzUpdateOp(nodeId, opId, field, value) {
   const op = node.ops.find(o => o._id === opId);
   if (!op) return;
   op[field] = value;
-  setState({ nzTree: root });
+  setState({ nzTree: root }, true);
 }
 
 function nzAddM(parentId) {
@@ -352,7 +352,7 @@ function nzUpdateField(id, field, value) {
   const node = nzFindNode(root, id);
   if (!node) return;
   node[field] = value;
-  setState({ nzTree: root });
+  setState({ nzTree: root }, true);
 }
 
 // ── Plik STEP przypisany do węzła G/P ────────────────────────────────────────

@@ -1,8 +1,9 @@
 //  TAB: NARZĘDZIA SKRAWAJĄCE (Tool Manager)
 // ══════════════════════════════════════════════════════════════
 // Baza narzędzi skrawających (frezy, wytaczadła, głowice itd.) z ilością,
-// średnicą, stanem (sprawne/zepsute/zamówione) i pełną historią
-// wypożyczeń/zwrotów (kto i kiedy).
+// średnicą, stanem (sprawne/zepsute/zamówione), zdjęciem i pełną historią
+// wypożyczeń/zwrotów (kto i kiedy). Typy narzędzi są w pełni edytowalne
+// (dodawanie / zmiana nazwy / usuwanie) z poziomu interfejsu.
 
 const NARZ_SKRAW_TYPY_FALLBACK = [
   "Frez wykańczający", "Frez zgrubny", "Frez kulowy", "Frez do gwintów",
@@ -13,7 +14,7 @@ const NARZ_SKRAW_TYPY_FALLBACK = [
   "Wiertło", "Wiertło centrujące", "Pogłębiacz",
   "Gwintownik", "Narzynka", "Rozwiertak",
   "Imadło / oprawka", "Tuleja zaciskowa", "Inne",
-];
+].map((nazwa, i) => ({id: -(i + 1), nazwa}));
 
 function narzSkrawStatusMeta(status) {
   if (status === 'zepsute')   return {label: 'Zepsute',   color: 'var(--red)',    bg: 'rgba(231,76,60,.12)',  icon: '🔴'};
@@ -21,9 +22,16 @@ function narzSkrawStatusMeta(status) {
   return {label: 'Sprawne', color: 'var(--green)', bg: 'rgba(39,174,96,.12)', icon: '🟢'};
 }
 
+// Lista nazw typów (string[]) – do <select> i filtrowania, niezależnie od tego
+// czy state.narzSkrawTypy to obiekty {id,nazwa} (z bazy) czy fallback.
+function narzSkrawTypyNazwy() {
+  const typy = state.narzSkrawTypy || NARZ_SKRAW_TYPY_FALLBACK;
+  return typy.map(t => (typeof t === 'string' ? t : t.nazwa));
+}
+
 // ─── Loaders ────────────────────────────────────────────────────────────────
-async function loadNarzSkrawTypy() {
-  if (state.narzSkrawTypy) return;
+async function loadNarzSkrawTypy(force) {
+  if (state.narzSkrawTypy && !force) return;
   try {
     const r = await get('/api/narzedzia-skrawajace/typy');
     setState({narzSkrawTypy: r}, true);
@@ -34,15 +42,17 @@ async function loadNarzSkrawTypy() {
 
 async function loadNarzSkrawAll() {
   setState({narzSkrawSearching: true}, true);
+  _renderNarzSkrawListaWrap();
   try {
     const q = state.narzSkrawSearch || '';
     const typ = state.narzSkrawFiltrTyp || '';
     const status = state.narzSkrawFiltrStatus || '';
     const r = await get(`/api/narzedzia-skrawajace?q=${encodeURIComponent(q)}&typ=${encodeURIComponent(typ)}&status=${encodeURIComponent(status)}`);
-    setState({narzSkrawResults: r, narzSkrawSearching: false});
+    setState({narzSkrawResults: r, narzSkrawSearching: false}, true);
   } catch (e) {
-    setState({narzSkrawResults: [], narzSkrawSearching: false});
+    setState({narzSkrawResults: [], narzSkrawSearching: false}, true);
   }
+  _renderNarzSkrawListaWrap();
 }
 
 async function loadNarzSkrawCount() {
@@ -70,6 +80,19 @@ async function loadNarzSkrawHistoria() {
   } catch (e) {
     setState({narzSkrawHistoria: [], narzSkrawHistLoading: false});
   }
+}
+
+// ── Wyszukiwanie: aktualizujemy TYLKO kontener wyników, nigdy cały input ──────
+// To jest kluczowa naprawa: poprzednio każdy znak wpisany w polu szukania
+// wywoływał setState(...) BEZ noRender, co przebudowywało cały <input> w DOM
+// (przez app.innerHTML = ...) i na telefonie to natychmiast chowa klawiaturę /
+// "wyrzuca" z pola. Teraz pole tekstowe nigdy nie jest przerysowywane podczas
+// pisania – tylko karty wyników pod nim, przez bezpośrednie innerHTML małego
+// kontenera.
+function _renderNarzSkrawListaWrap() {
+  const wrap = document.getElementById('nskr-lista-wrap');
+  if (!wrap) return; // np. user zmienił widok w międzyczasie – nic nie robimy
+  wrap.innerHTML = renderNarzSkrawListaWynikow();
 }
 
 function searchNarzSkraw() {
@@ -115,15 +138,18 @@ function renderNarzSkraw() {
   if (state.narzSkrawWypozyczModal) html += renderNarzSkrawWypozyczModal();
   if (state.narzSkrawEditModal)     html += renderNarzSkrawEditModal();
   if (state.narzSkrawHistModal)     html += renderNarzSkrawHistModal();
+  if (state.narzSkrawTypyModal)     html += renderNarzSkrawTypyModal();
   html += renderNarzSkrawDodajModal();
 
   return html;
 }
 
 // ─── Widok: Baza narzędzi ───────────────────────────────────────────────────
+// Podzielony na: stały "szkielet" (search input + filtry, renderowany tylko
+// przez główny render()) i renderNarzSkrawListaWynikow() (tylko karty wyników,
+// odświeżane samodzielnie przez _renderNarzSkrawListaWrap() bez ruszania inputa).
 function renderNarzSkrawLista() {
-  const items = state.narzSkrawResults || [];
-  const typy = state.narzSkrawTypy || NARZ_SKRAW_TYPY_FALLBACK;
+  const typyNazwy = narzSkrawTypyNazwy();
 
   let html = `
   <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
@@ -138,7 +164,7 @@ function renderNarzSkrawLista() {
     <select onchange="setState({narzSkrawFiltrTyp:this.value},true);loadNarzSkrawAll()"
       style="flex:1;min-width:140px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 8px;font-size:12px">
       <option value="">Wszystkie typy</option>
-      ${typy.map(t => `<option value="${t}" ${state.narzSkrawFiltrTyp===t?'selected':''}>${t}</option>`).join('')}
+      ${typyNazwy.map(t => `<option value="${t}" ${state.narzSkrawFiltrTyp===t?'selected':''}>${t}</option>`).join('')}
     </select>
     <select onchange="setState({narzSkrawFiltrStatus:this.value},true);loadNarzSkrawAll()"
       style="flex:1;min-width:140px;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 8px;font-size:12px">
@@ -147,13 +173,21 @@ function renderNarzSkrawLista() {
       <option value="zepsute" ${state.narzSkrawFiltrStatus==='zepsute'?'selected':''}>🔴 Zepsute</option>
       <option value="zamowione" ${state.narzSkrawFiltrStatus==='zamowione'?'selected':''}>🟠 Zamówione</option>
     </select>
-  </div>`;
+    <button class="btn-sm btn-outline" style="white-space:nowrap" onclick="setState({narzSkrawTypyModal:true})">🏷 Typy narzędzi</button>
+  </div>
+  <div id="nskr-lista-wrap">${renderNarzSkrawListaWynikow()}</div>`;
+
+  return html;
+}
+
+function renderNarzSkrawListaWynikow() {
+  const items = state.narzSkrawResults || [];
 
   if (state.narzSkrawSearching) {
-    return html + `<div style="text-align:center;padding:30px;color:var(--dim)">⏳</div>`;
+    return `<div style="text-align:center;padding:30px;color:var(--dim)">⏳</div>`;
   }
   if (!items.length) {
-    return html + `<div class="card" style="text-align:center;padding:30px">
+    return `<div class="card" style="text-align:center;padding:30px">
       <div style="font-size:36px;margin-bottom:8px">📭</div>
       <div style="color:var(--dim)">Brak narzędzi – dodaj pierwszą pozycję</div>
     </div>`;
@@ -162,6 +196,7 @@ function renderNarzSkrawLista() {
   const byTyp = {};
   items.forEach(n => { (byTyp[n.typ] = byTyp[n.typ] || []).push(n); });
 
+  let html = '';
   Object.keys(byTyp).sort().forEach(typ => {
     html += `<div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;
       letter-spacing:.06em;margin:14px 0 6px;padding-left:4px">${typ}</div>`;
@@ -171,6 +206,7 @@ function renderNarzSkrawLista() {
       html += `
       <div class="card" style="padding:10px 12px;margin-bottom:6px;${n.status==='zepsute'?'border-left:3px solid var(--red)':n.status==='zamowione'?'border-left:3px solid var(--orange)':''}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          ${n.zdjecie_url ? `<img src="${n.zdjecie_url}" alt="" style="width:46px;height:46px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid var(--border);cursor:pointer" onclick="window.open('${n.zdjecie_url}','_blank')">` : ''}
           <div style="min-width:0;flex:1">
             <div style="font-weight:700;font-size:13px">
               ${meta.icon} ${n.oznaczenie ? n.oznaczenie : n.typ}${n.srednica ? ` · ⌀${n.srednica}mm` : ''}
@@ -352,7 +388,8 @@ function renderNarzSkrawWypozyczModal() {
 function renderNarzSkrawEditModal() {
   const n = state.narzSkrawEditModal;
   if (!n) return '';
-  const typy = state.narzSkrawTypy || NARZ_SKRAW_TYPY_FALLBACK;
+  const typyNazwy = narzSkrawTypyNazwy();
+  const zdjecieUrl = n._zdjecieNoweUrl !== undefined ? n._zdjecieNoweUrl : (n.zdjecie_url || '');
   return `
   <div class="modal-overlay" onclick="if(event.target===this)setState({narzSkrawEditModal:null})">
     <div class="modal">
@@ -361,7 +398,7 @@ function renderNarzSkrawEditModal() {
       <div class="field">
         <label>Typ</label>
         <select id="nske-typ" style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
-          ${typy.map(t=>`<option ${t===n.typ?'selected':''}>${t}</option>`).join('')}
+          ${typyNazwy.map(t=>`<option ${t===n.typ?'selected':''}>${t}</option>`).join('')}
         </select>
       </div>
       <div class="field">
@@ -399,6 +436,19 @@ function renderNarzSkrawEditModal() {
         <input id="nske-uwagi" type="text" value="${n.uwagi||''}"
           style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
+      <div class="field">
+        <label>Zdjęcie</label>
+        <input type="hidden" id="nske-zdjecie-url" value="${zdjecieUrl}">
+        <div id="nske-zdjecie-preview" style="margin-bottom:8px;${zdjecieUrl?'':'display:none'}">
+          <img src="${zdjecieUrl}" style="max-width:100%;max-height:160px;border-radius:8px;border:1px solid var(--border);display:block">
+        </div>
+        <div style="display:flex;gap:6px">
+          <button type="button" class="btn-sm btn-outline" style="flex:1" onclick="document.getElementById('nske-foto-input').click()">📷 ${zdjecieUrl?'Zmień':'Dodaj'} zdjęcie</button>
+          ${zdjecieUrl ? `<button type="button" class="btn-sm btn-red" onclick="narzSkrawUsunZdjecieEdit()">🗑</button>` : ''}
+        </div>
+        <input type="file" id="nske-foto-input" accept="image/*" capture="environment" style="display:none" onchange="narzSkrawZdjecieWybrane(this,'nske')">
+        <div id="nske-foto-status" style="font-size:11px;color:var(--dim);margin-top:4px"></div>
+      </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-accent" style="flex:1" onclick="saveNarzSkrawEdit(${n.id})">💾 Zapisz</button>
         <button class="btn btn-outline" style="padding:14px 18px" onclick="setState({narzSkrawEditModal:null})">Anuluj</button>
@@ -407,9 +457,178 @@ function renderNarzSkrawEditModal() {
   </div>`;
 }
 
+function narzSkrawUsunZdjecieEdit() {
+  document.getElementById('nske-zdjecie-url').value = '';
+  document.getElementById('nske-zdjecie-preview').style.display = 'none';
+  const status = document.getElementById('nske-foto-status');
+  if (status) status.textContent = '';
+  // odśwież przycisk z "Zmień" na "Dodaj"
+  const btn = document.querySelector('#nske-foto-input').parentElement.querySelector('button');
+  if (btn) btn.textContent = '📷 Dodaj zdjęcie';
+}
+
+// ─── Modal: Zarządzanie typami narzędzi ─────────────────────────────────────
+function renderNarzSkrawTypyModal() {
+  const typy = state.narzSkrawTypy || NARZ_SKRAW_TYPY_FALLBACK;
+  const editId = state.narzSkrawTypEditId;
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this)setState({narzSkrawTypyModal:null,narzSkrawTypEditId:null})">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({narzSkrawTypyModal:null,narzSkrawTypEditId:null})">×</button>
+      <h3>🏷 Typy narzędzi</h3>
+      <div style="display:flex;gap:6px;margin-bottom:14px">
+        <input id="nskt-nowy" type="text" placeholder="Nazwa nowego typu, np. Frez fazujący"
+          style="flex:1;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px"
+          onkeyup="if(event.key==='Enter')dodajTypNarzSkraw()">
+        <button class="btn-sm btn-accent" onclick="dodajTypNarzSkraw()">＋</button>
+      </div>
+      <div style="max-height:340px;overflow-y:auto">
+        ${typy.map(t => {
+          const isFallback = t.id < 0;
+          const isEditing = editId === t.id;
+          if (isEditing) {
+            return `
+            <div style="display:flex;gap:6px;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
+              <input id="nskt-edit-${t.id}" type="text" value="${t.nazwa}"
+                style="flex:1;background:var(--entry);color:var(--text);border:1px solid var(--accent);border-radius:8px;padding:8px 10px;font-size:13px"
+                onkeyup="if(event.key==='Enter')zapiszTypNarzSkraw(${t.id})">
+              <button class="btn-sm btn-accent" onclick="zapiszTypNarzSkraw(${t.id})">💾</button>
+              <button class="btn-sm btn-outline" onclick="setState({narzSkrawTypEditId:null})">✕</button>
+            </div>`;
+          }
+          return `
+          <div style="display:flex;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+            <span style="flex:1;font-size:13px">${t.nazwa}</span>
+            ${isFallback ? `<span style="font-size:10px;color:var(--dim)">domyślny</span>` : `
+              <button class="btn-sm" style="background:rgba(52,152,219,.12);color:var(--blue);border-color:var(--blue)" onclick="setState({narzSkrawTypEditId:${t.id}})">✏</button>
+              <button class="btn-sm btn-red" onclick="usunTypNarzSkraw(${t.id},'${t.nazwa.replace(/'/g,"&#39;")}')">🗑</button>
+            `}
+          </div>`;
+        }).join('')}
+      </div>
+      ${typy.some(t => t.id < 0) ? `<div style="font-size:11px;color:var(--dim);margin-top:10px">
+        ⚠ Lista typów nie wczytała się z serwera – pokazano wartości domyślne (tylko do odczytu). Sprawdź połączenie i otwórz to okno ponownie.
+      </div>` : ''}
+      <button class="btn btn-outline" style="margin-top:14px" onclick="setState({narzSkrawTypyModal:null,narzSkrawTypEditId:null})">Zamknij</button>
+    </div>
+  </div>`;
+}
+
+async function dodajTypNarzSkraw() {
+  const el = document.getElementById('nskt-nowy');
+  const nazwa = el ? el.value.trim() : '';
+  if (!nazwa) { alert('Podaj nazwę typu'); return; }
+  try {
+    await post('/api/narzedzia-skrawajace/typy', {nazwa});
+    if (el) el.value = '';
+    await loadNarzSkrawTypy(true);
+    render();
+  } catch (e) {
+    alert('Błąd dodawania typu: ' + e.message);
+  }
+}
+
+async function zapiszTypNarzSkraw(id) {
+  const el = document.getElementById('nskt-edit-' + id);
+  const nazwa = el ? el.value.trim() : '';
+  if (!nazwa) { alert('Podaj nazwę typu'); return; }
+  try {
+    await put('/api/narzedzia-skrawajace/typy/' + id, {nazwa});
+    setState({narzSkrawTypEditId: null}, true);
+    await loadNarzSkrawTypy(true);
+    await loadNarzSkrawAll();
+    render();
+  } catch (e) {
+    alert('Błąd zapisu typu: ' + e.message);
+  }
+}
+
+async function usunTypNarzSkraw(id, nazwa) {
+  if (!confirm(`Usunąć typ "${nazwa}"? Możliwe tylko jeśli żadne narzędzie nie ma już tego typu.`)) return;
+  try {
+    await del('/api/narzedzia-skrawajace/typy/' + id);
+    await loadNarzSkrawTypy(true);
+    render();
+  } catch (e) {
+    alert('Błąd usuwania typu: ' + e.message);
+  }
+}
+
+// ─── Zdjęcie z aparatu / galerii (wspólne dla "Dodaj" i "Edytuj") ───────────
+// input[type=file][accept="image/*"][capture="environment"] na telefonie
+// otwiera bezpośrednio aparat (zamiast okna wyboru pliku) – capture="environment"
+// wybiera tylną kamerę. Po zrobieniu zdjęcia plik jest od razu wgrywany na
+// Cloudinary przez nasz backend (multipart -> /api/zdjecie-upload), a w pole
+// hidden wpisujemy zwrócony URL.
+async function narzSkrawZdjecieWybrane(input, prefix) {
+  const file = input.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById(prefix + '-foto-status');
+  const urlInput = document.getElementById(prefix + '-zdjecie-url');
+  const previewWrap = document.getElementById(prefix + '-zdjecie-preview');
+
+  const MAX = 15 * 1024 * 1024;
+  if (file.size > MAX) {
+    if (statusEl) { statusEl.textContent = '✗ Plik za duży (maks. 15 MB)'; statusEl.style.color = 'var(--red)'; }
+    return;
+  }
+
+  if (statusEl) { statusEl.textContent = '⏳ Wgrywanie zdjęcia...'; statusEl.style.color = 'var(--dim)'; }
+  input.disabled = true;
+
+  try {
+    const buf = await file.arrayBuffer();
+    const result = await new Promise((res, rej) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', SERVER_URL.replace(/\/$/, '') + '/api/zdjecie-upload');
+      xhr.setRequestHeader('x-api-key', API_KEY);
+      xhr.setRequestHeader('Content-Type', file.type || 'image/jpeg');
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable && statusEl)
+          statusEl.textContent = '⏳ Wgrywanie... ' + Math.round(e.loaded/e.total*100) + '%';
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) res(JSON.parse(xhr.responseText));
+        else rej(new Error(xhr.responseText || 'HTTP ' + xhr.status));
+      };
+      xhr.onerror = () => rej(new Error('Błąd sieci'));
+      xhr.send(buf);
+    });
+
+    if (result.ok && result.url) {
+      if (urlInput) urlInput.value = result.url;
+      if (previewWrap) {
+        previewWrap.style.display = '';
+        const img = previewWrap.querySelector('img');
+        if (img) img.src = result.url;
+      }
+      if (statusEl) { statusEl.textContent = '✅ Zdjęcie dodane'; statusEl.style.color = 'var(--green)'; }
+      // Zmień etykietę przycisku na "Zmień zdjęcie" jeśli to pierwsze dodanie
+      const btn = input.parentElement.querySelector('button[type="button"]');
+      if (btn && btn.textContent.includes('Dodaj')) btn.textContent = '📷 Zmień zdjęcie';
+    } else {
+      throw new Error(result.error || 'Nieznany błąd');
+    }
+  } catch (e) {
+    if (statusEl) { statusEl.textContent = '✗ Błąd: ' + e.message; statusEl.style.color = 'var(--red)'; }
+  } finally {
+    input.disabled = false;
+    input.value = '';
+  }
+}
+
+function narzSkrawUsunZdjecieDodaj() {
+  document.getElementById('nskr-zdjecie-url').value = '';
+  document.getElementById('nskr-zdjecie-preview').style.display = 'none';
+  const status = document.getElementById('nskr-foto-status');
+  if (status) status.textContent = '';
+  const btn = document.querySelector('#nskr-foto-input').parentElement.querySelector('button[type="button"]');
+  if (btn) btn.textContent = '📷 Dodaj zdjęcie';
+}
+
 // ─── Modal: Dodaj ────────────────────────────────────────────────────────────
 function renderNarzSkrawDodajModal() {
-  const typy = state.narzSkrawTypy || NARZ_SKRAW_TYPY_FALLBACK;
+  const typyNazwy = narzSkrawTypyNazwy();
   return `
   <div id="nskr-dodaj-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hidePanel('nskr-dodaj-modal')">
     <div class="modal">
@@ -418,7 +637,7 @@ function renderNarzSkrawDodajModal() {
       <div class="field">
         <label>Typ *</label>
         <select id="nskr-typ" style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
-          ${typy.map(t=>`<option>${t}</option>`).join('')}
+          ${typyNazwy.map(t=>`<option>${t}</option>`).join('')}
         </select>
       </div>
       <div class="field">
@@ -456,6 +675,19 @@ function renderNarzSkrawDodajModal() {
         <input id="nskr-uwagi" type="text" placeholder="opcjonalnie" autocomplete="off"
           style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
+      <div class="field">
+        <label>Zdjęcie (opcjonalnie)</label>
+        <input type="hidden" id="nskr-zdjecie-url" value="">
+        <div id="nskr-zdjecie-preview" style="margin-bottom:8px;display:none">
+          <img src="" style="max-width:100%;max-height:160px;border-radius:8px;border:1px solid var(--border);display:block">
+        </div>
+        <div style="display:flex;gap:6px">
+          <button type="button" class="btn-sm btn-outline" style="flex:1" onclick="document.getElementById('nskr-foto-input').click()">📷 Dodaj zdjęcie</button>
+          <button type="button" class="btn-sm btn-red" onclick="narzSkrawUsunZdjecieDodaj()">🗑</button>
+        </div>
+        <input type="file" id="nskr-foto-input" accept="image/*" capture="environment" style="display:none" onchange="narzSkrawZdjecieWybrane(this,'nskr')">
+        <div id="nskr-foto-status" style="font-size:11px;color:var(--dim);margin-top:4px"></div>
+      </div>
       <div style="display:flex;gap:8px">
         <button class="btn btn-accent" style="flex:1" onclick="saveNarzSkrawDodaj()">＋ Dodaj</button>
         <button class="btn btn-outline" style="padding:14px 18px" onclick="hidePanel('nskr-dodaj-modal')">Anuluj</button>
@@ -473,14 +705,16 @@ async function saveNarzSkrawDodaj() {
   const status = document.getElementById('nskr-status').value;
   const lokalizacja = document.getElementById('nskr-lok').value.trim();
   const uwagi = document.getElementById('nskr-uwagi').value.trim();
+  const zdjecie_url = (document.getElementById('nskr-zdjecie-url')||{}).value || '';
   try {
     await post('/api/narzedzia-skrawajace', {
       typ, oznaczenie, srednica: srednicaRaw ? parseFloat(srednicaRaw) : null,
-      ilosc, status, lokalizacja, uwagi
+      ilosc, status, lokalizacja, uwagi, zdjecie_url
     });
     hidePanel('nskr-dodaj-modal');
     ['nskr-oznaczenie','nskr-srednica','nskr-lok','nskr-uwagi'].forEach(id => { const e=document.getElementById(id); if(e) e.value=''; });
     document.getElementById('nskr-ilosc').value = '1';
+    narzSkrawUsunZdjecieDodaj();
     await loadNarzSkrawAll();
     await loadNarzSkrawCount();
   } catch (e) {
@@ -496,10 +730,11 @@ async function saveNarzSkrawEdit(id) {
   const status = document.getElementById('nske-status').value;
   const lokalizacja = document.getElementById('nske-lok').value.trim();
   const uwagi = document.getElementById('nske-uwagi').value.trim();
+  const zdjecie_url = (document.getElementById('nske-zdjecie-url')||{}).value || '';
   try {
     await put(`/api/narzedzia-skrawajace/${id}`, {
       typ, oznaczenie, srednica: srednicaRaw ? parseFloat(srednicaRaw) : null,
-      ilosc, status, lokalizacja, uwagi
+      ilosc, status, lokalizacja, uwagi, zdjecie_url
     });
     setState({narzSkrawEditModal: null}, true);
     await loadNarzSkrawAll();

@@ -82,6 +82,16 @@ async function loadNarzSkrawHistoria() {
   }
 }
 
+async function loadNarzSkrawRegeneracja() {
+  setState({narzSkrawRegenLoading: true}, true);
+  try {
+    const r = await get('/api/narzedzia-skrawajace-regeneracja');
+    setState({narzSkrawRegenLista: r, narzSkrawRegenLoading: false});
+  } catch (e) {
+    setState({narzSkrawRegenLista: [], narzSkrawRegenLoading: false});
+  }
+}
+
 // ── Wyszukiwanie: aktualizujemy TYLKO kontener wyników, nigdy cały input ──────
 // To jest kluczowa naprawa: poprzednio każdy znak wpisany w polu szukania
 // wywoływał setState(...) BEZ noRender, co przebudowywało cały <input> w DOM
@@ -106,6 +116,7 @@ function switchNarzSkrawView(view) {
   if (view === 'lista') loadNarzSkrawAll();
   if (view === 'wypozyczenia') loadNarzSkrawWypozyczenia();
   if (view === 'historia') loadNarzSkrawHistoria();
+  if (view === 'regeneracja') loadNarzSkrawRegeneracja();
   render();
 }
 
@@ -122,20 +133,24 @@ function renderNarzSkraw() {
       ${cnt && cnt.zepsute > 0 ? `<span style="background:rgba(231,76,60,.15);color:var(--red);border-radius:10px;padding:3px 10px;font-size:11px;font-weight:700">🔴 ${cnt.zepsute} zepsute</span>` : ''}
       ${cnt && cnt.zamowione > 0 ? `<span style="background:rgba(230,126,0,.15);color:var(--orange);border-radius:10px;padding:3px 10px;font-size:11px;font-weight:700">🟠 ${cnt.zamowione} zamówione</span>` : ''}
       ${cnt && cnt.wypozyczone > 0 ? `<span style="background:rgba(52,152,219,.15);color:var(--blue);border-radius:10px;padding:3px 10px;font-size:11px;font-weight:700">📤 ${cnt.wypozyczone} wypożyczone</span>` : ''}
+      ${cnt && cnt.do_regeneracji > 0 ? `<span style="background:rgba(155,89,182,.15);color:var(--purple);border-radius:10px;padding:3px 10px;font-size:11px;font-weight:700">🔧 ${cnt.do_regeneracji} do regeneracji</span>` : ''}
       <span style="font-size:11px;color:var(--dim)">${cnt ? cnt.total+' poz.' : ''}</span>
     </div>
   </div>
   <div class="sub-tabs" style="margin-bottom:12px">
     <button class="sub-tab ${view==='lista'?'active':''}" onclick="switchNarzSkrawView('lista')">📦 Baza narzędzi</button>
     <button class="sub-tab ${view==='wypozyczenia'?'active':''}" onclick="switchNarzSkrawView('wypozyczenia')">📤 Aktywne wypożyczenia${cnt && cnt.wypozyczone ? ' ('+cnt.wypozyczone+')' : ''}</button>
+    <button class="sub-tab ${view==='regeneracja'?'active':''}" onclick="switchNarzSkrawView('regeneracja')">🔧 Do regeneracji${cnt && cnt.do_regeneracji ? ' ('+cnt.do_regeneracji+')' : ''}</button>
     <button class="sub-tab ${view==='historia'?'active':''}" onclick="switchNarzSkrawView('historia')">📋 Historia</button>
   </div>`;
 
   if (view === 'lista')         html += renderNarzSkrawLista();
   if (view === 'wypozyczenia')  html += renderNarzSkrawWypozyczeniaList();
+  if (view === 'regeneracja')   html += renderNarzSkrawRegeneracjaList();
   if (view === 'historia')      html += renderNarzSkrawHistoriaList();
 
   if (state.narzSkrawWypozyczModal) html += renderNarzSkrawWypozyczModal();
+  if (state.narzSkrawZwrotModal)    html += renderNarzSkrawZwrotModal();
   if (state.narzSkrawEditModal)     html += renderNarzSkrawEditModal();
   if (state.narzSkrawHistModal)     html += renderNarzSkrawHistModal();
   if (state.narzSkrawTypyModal)     html += renderNarzSkrawTypyModal();
@@ -276,7 +291,7 @@ function renderNarzSkrawWypozyczeniaList() {
           ${w.uwagi ? `<div style="font-size:11px;color:var(--dim);margin-top:3px;font-style:italic">${w.uwagi}</div>` : ''}
         </div>
         <button class="btn-sm" style="flex-shrink:0;margin-left:8px;background:rgba(39,174,96,.1);color:var(--green);border-color:var(--green)"
-          onclick="zwrocNarzSkraw(${w.id})">↩ Zwróć</button>
+          onclick='setState({narzSkrawZwrotModal:${JSON.stringify(w).replace(/'/g,"&#39;")}})'>↩ Zwróć</button>
       </div>
     </div>`;
   });
@@ -296,21 +311,28 @@ function renderNarzSkrawHistoriaList() {
 
   lista.forEach(w => {
     const zwrocone = w.status === 'zwrocone';
+    const doRegen = w.status === 'do_regeneracji';
+    const badge = doRegen
+      ? {bg: 'rgba(155,89,182,.12)', color: 'var(--purple)', label: (w.stan_zwrotu === 'uszkodzone' ? '🔴 uszkodzone' : '🟣 do regeneracji')}
+      : zwrocone
+        ? {bg: 'rgba(39,174,96,.12)', color: 'var(--green)', label: '↩ zwrócono'}
+        : {bg: 'rgba(52,152,219,.12)', color: 'var(--blue)', label: '📤 wypożyczone'};
     html += `
     <div class="card" style="padding:10px 12px;margin-bottom:6px;opacity:${zwrocone?0.75:1}">
       <div style="font-weight:700;font-size:13px">${w.narzedzie_oznaczenie || w.narzedzie_typ}${w.narzedzie_srednica?` · ⌀${w.narzedzie_srednica}mm`:''}</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;align-items:center">
-        <span style="background:${zwrocone?'rgba(39,174,96,.12)':'rgba(52,152,219,.12)'};color:${zwrocone?'var(--green)':'var(--blue)'};border-radius:8px;padding:2px 8px;font-size:12px;font-weight:700">
-          ${zwrocone?'↩ zwrócono':'📤 wypożyczone'} · ${w.ilosc} szt.
+        <span style="background:${badge.bg};color:${badge.color};border-radius:8px;padding:2px 8px;font-size:12px;font-weight:700">
+          ${badge.label} · ${w.ilosc} szt.
         </span>
         <span style="font-size:11px;color:var(--accent)">👤 ${w.wypozyczyl_imie}</span>
         ${w.zlecenie_nr ? `<span style="font-size:11px;color:var(--dim)">${w.zlecenie_nr}</span>` : ''}
       </div>
       <div style="font-size:10px;color:var(--dim);margin-top:4px">
         Wypożyczono: ${(w.data_wypozyczenia||'').slice(0,16).replace('T',' ')}
-        ${zwrocone ? ` · Zwrócono: ${(w.data_zwrotu||'').slice(0,16).replace('T',' ')} przez ${w.zwrocil_imie||'-'}` : ''}
+        ${(zwrocone || doRegen) ? ` · Zwrócono: ${(w.data_zwrotu||'').slice(0,16).replace('T',' ')} przez ${w.zwrocil_imie||'-'}` : ''}
       </div>
       ${w.uwagi ? `<div style="font-size:11px;color:var(--dim);margin-top:3px;font-style:italic">${w.uwagi}</div>` : ''}
+      ${w.uwagi_zwrotu ? `<div style="font-size:11px;color:${badge.color};margin-top:3px;font-style:italic">💬 ${w.uwagi_zwrotu}</div>` : ''}
     </div>`;
   });
   return html;
@@ -340,6 +362,61 @@ function renderNarzSkrawHistModal() {
       <button class="btn btn-outline" style="margin-top:14px" onclick="setState({narzSkrawHistModal:null})">Zamknij</button>
     </div>
   </div>`;
+}
+
+// ─── Widok: Do regeneracji ───────────────────────────────────────────────────
+function renderNarzSkrawRegeneracjaList() {
+  if (state.narzSkrawRegenLoading) return `<div class="spinner">⏳</div>`;
+  const lista = state.narzSkrawRegenLista || [];
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="section-hdr" style="margin-bottom:0">🔧 Do regeneracji (${lista.length})</div>
+    <button class="btn-sm btn-accent" onclick="loadNarzSkrawRegeneracja()">🔄</button>
+  </div>`;
+  if (!lista.length) return html + `<div class="card" style="text-align:center;padding:28px">
+    <div style="font-size:36px;margin-bottom:8px">✅</div>
+    <div style="color:var(--dim)">Brak narzędzi czekających na regenerację</div>
+  </div>`;
+
+  lista.forEach(w => {
+    const isUszkodzone = w.stan_zwrotu === 'uszkodzone';
+    const meta = isUszkodzone
+      ? {label: 'Uszkodzone', color: 'var(--red)', icon: '🔴'}
+      : {label: 'Do regeneracji', color: 'var(--purple)', icon: '🟣'};
+    html += `
+    <div class="card" style="padding:10px 12px;margin-bottom:6px;border-left:3px solid ${meta.color}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        ${w.narzedzie_zdjecie_url ? `<img src="${w.narzedzie_zdjecie_url}" alt="" style="width:42px;height:42px;border-radius:8px;object-fit:cover;flex-shrink:0;border:1px solid var(--border)">` : ''}
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:13px">${w.narzedzie_oznaczenie || w.narzedzie_typ}${w.narzedzie_srednica?` · ⌀${w.narzedzie_srednica}mm`:''}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;align-items:center">
+            <span style="background:${meta.color}22;color:${meta.color};border-radius:8px;padding:2px 8px;font-size:12px;font-weight:700">${meta.icon} ${meta.label}</span>
+            <span style="font-size:11px;color:var(--dim)">${w.ilosc} szt.</span>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:8px;font-size:12px;line-height:1.5">
+        <div>👤 Wypożyczył: <b style="color:var(--accent)">${w.wypozyczyl_imie}</b></div>
+        <div>↩ Zwrócił: <b style="color:var(--accent)">${w.zwrocil_imie || '-'}</b> · ${(w.data_zwrotu||'').slice(0,16).replace('T',' ')}</div>
+      </div>
+      ${w.uwagi_zwrotu ? `<div style="font-size:12px;color:var(--text);margin-top:6px;background:var(--entry);border-radius:8px;padding:8px 10px;font-style:italic">💬 ${w.uwagi_zwrotu}</div>` : ''}
+      <button class="btn btn-accent" style="width:100%;margin-top:10px;padding:8px;font-size:12px" onclick="narzSkrawRegeneracjaZakonczona(${w.id})">✅ Oznacz jako sprawne</button>
+    </div>`;
+  });
+  return html;
+}
+
+async function narzSkrawRegeneracjaZakonczona(wid) {
+  if (!confirm('Oznaczyć narzędzie jako naprawione i ponownie sprawne?')) return;
+  try {
+    await patch(`/api/narzedzia-skrawajace-wypozyczenia/${wid}/regeneracja-zakonczona`, {
+      user_id: state.user ? state.user.id : null, user_name: (state.user && state.user.full_name) || ''
+    });
+    await loadNarzSkrawRegeneracja();
+    await loadNarzSkrawCount();
+  } catch (e) {
+    alert('Błąd: ' + e.message);
+  }
 }
 
 // ─── Modal: Wypożycz ─────────────────────────────────────────────────────────
@@ -382,6 +459,77 @@ function renderNarzSkrawWypozyczModal() {
       </div>
     </div>
   </div>`;
+}
+
+// ─── Modal: Zwrot (ok / uszkodzone / regeneracja) ───────────────────────────
+// Zmiana radiobuttona NIE wywołuje setState/render – to przebudowałoby cały
+// modal i wymazało tekst już wpisany w polu "Uwagi" (ten sam problem co przy
+// wyszukiwaniu – patrz komentarz wyżej). Zamiast tego narzSkrawZwrotZmianaStanu()
+// tylko podświetla wybraną opcję i przełącza etykietę/placeholder pola uwag
+// bezpośrednio w DOM. Wybrany stan trzymamy w zmiennej module-scope (nie w
+// state), bo to czysto UI-lokalna sprawa modalu, zerowana przy zamknięciu.
+let _nskrZwrotStan = 'ok';
+
+function renderNarzSkrawZwrotModal() {
+  const w = state.narzSkrawZwrotModal;
+  if (!w) return '';
+  _nskrZwrotStan = 'ok'; // reset przy każdym otwarciu modalu dla innego wypożyczenia
+  const opcje = [
+    {v: 'ok',          label: '🟢 Sprawne',     desc: 'Narzędzie wraca w dobrym stanie'},
+    {v: 'uszkodzone',  label: '🔴 Uszkodzone',  desc: 'Trafia do zakładki „Do regeneracji”'},
+    {v: 'regeneracja', label: '🟣 Regeneracja', desc: 'Wymaga ostrzenia/serwisu – też do „Do regeneracji”'},
+  ];
+  return `
+  <div class="modal-overlay" onclick="if(event.target===this){setState({narzSkrawZwrotModal:null})}">
+    <div class="modal">
+      <button class="modal-close" onclick="setState({narzSkrawZwrotModal:null})">×</button>
+      <h3>↩ Zwrot narzędzia</h3>
+      <div style="background:var(--entry);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px">${w.narzedzie_oznaczenie || w.narzedzie_typ}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px">${w.narzedzie_typ}${w.narzedzie_srednica?` · ⌀${w.narzedzie_srednica}mm`:''} · ${w.ilosc} szt.</div>
+        <div style="font-size:11px;color:var(--accent);margin-top:4px">👤 wypożyczył: ${w.wypozyczyl_imie}</div>
+      </div>
+      <div class="field">
+        <label>W jakim stanie wraca narzędzie? *</label>
+        <div id="nskr-zwrot-opcje" style="display:flex;flex-direction:column;gap:6px">
+          ${opcje.map(o => `
+            <label data-stan="${o.v}" style="display:flex;align-items:center;gap:10px;background:${o.v==='ok'?'var(--entry)':'transparent'};border:1px solid ${o.v==='ok'?'var(--accent)':'var(--border)'};border-radius:10px;padding:10px 12px;cursor:pointer">
+              <input type="radio" name="nskr-zwrot-stan" value="${o.v}" ${o.v==='ok'?'checked':''}
+                onchange="narzSkrawZwrotZmianaStanu('${o.v}')" style="width:auto;margin:0">
+              <div>
+                <div style="font-weight:700;font-size:13px">${o.label}</div>
+                <div style="font-size:11px;color:var(--dim)">${o.desc}</div>
+              </div>
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="field">
+        <label id="nskr-zwrot-uwagi-label">Uwagi (opcjonalnie)</label>
+        <input id="nskr-zwrot-uwagi" type="text" placeholder="opcjonalnie"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-accent" style="flex:1;padding:14px" onclick="zwrocNarzSkraw(${w.id})">↩ Zatwierdź zwrot</button>
+        <button class="btn btn-outline" style="padding:14px 18px" onclick="setState({narzSkrawZwrotModal:null})">Anuluj</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function narzSkrawZwrotZmianaStanu(stan) {
+  _nskrZwrotStan = stan;
+  // Podświetl wybraną opcję
+  document.querySelectorAll('#nskr-zwrot-opcje label[data-stan]').forEach(el => {
+    const active = el.getAttribute('data-stan') === stan;
+    el.style.background = active ? 'var(--entry)' : 'transparent';
+    el.style.borderColor = active ? 'var(--accent)' : 'var(--border)';
+  });
+  // Przełącz etykietę/placeholder pola uwag – bez ruszania jego wartości
+  const label = document.getElementById('nskr-zwrot-uwagi-label');
+  const input = document.getElementById('nskr-zwrot-uwagi');
+  const wymagane = stan !== 'ok';
+  if (label) label.textContent = wymagane ? 'Uwagi * (co się stało?)' : 'Uwagi (opcjonalnie)';
+  if (input) input.placeholder = wymagane ? 'np. pękła płytka, stępione ostrze...' : 'opcjonalnie';
 }
 
 // ─── Modal: Edytuj ───────────────────────────────────────────────────────────
@@ -560,6 +708,37 @@ async function usunTypNarzSkraw(id, nazwa) {
 // wybiera tylną kamerę. Po zrobieniu zdjęcia plik jest od razu wgrywany na
 // Cloudinary przez nasz backend (multipart -> /api/zdjecie-upload), a w pole
 // hidden wpisujemy zwrócony URL.
+// Zdjęcia z aparatu telefonu mają zwykle 3-8 MB (pełna rozdzielczość sensora).
+// Wysyłanie tak dużego pliku 1:1 (telefon -> nasz serwer -> Cloudinary) to
+// główna przyczyna kilkusekundowego oczekiwania. Zmniejszamy obraz w samej
+// przeglądarce (canvas) do maks. 1600px po dłuższej stronie i kompresujemy
+// do JPEG q=0.82 – to z reguły daje plik 100-400 KB, czyli upload 10-20x
+// szybszy, bez zauważalnej utraty jakości na ekranie/wydruku karty narzędzia.
+function _narzSkrawSciesnijObraz(file, maxDim = 1600, quality = 0.82) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = () => { img.src = reader.result; };
+    reader.onerror = () => resolve(file); // w razie błędu wysyłamy oryginał
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxDim || height > maxDim) {
+        if (width >= height) { height = Math.round(height * maxDim / width); width = maxDim; }
+        else { width = Math.round(width * maxDim / height); height = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob((blob) => {
+        resolve(blob || file); // jeśli toBlob zawiedzie, wysyłamy oryginał
+      }, 'image/jpeg', quality);
+    };
+    img.onerror = () => resolve(file);
+    reader.readAsDataURL(file);
+  });
+}
+
 async function narzSkrawZdjecieWybrane(input, prefix) {
   const file = input.files[0];
   if (!file) return;
@@ -573,16 +752,22 @@ async function narzSkrawZdjecieWybrane(input, prefix) {
     return;
   }
 
-  if (statusEl) { statusEl.textContent = '⏳ Wgrywanie zdjęcia...'; statusEl.style.color = 'var(--dim)'; }
+  if (statusEl) { statusEl.textContent = '⏳ Przygotowywanie zdjęcia...'; statusEl.style.color = 'var(--dim)'; }
   input.disabled = true;
 
   try {
-    const buf = await file.arrayBuffer();
+    // Kompresja po stronie przeglądarki – patrz komentarz przy _narzSkrawSciesnijObraz.
+    const toUpload = file.type && file.type.startsWith('image/')
+      ? await _narzSkrawSciesnijObraz(file)
+      : file;
+
+    if (statusEl) statusEl.textContent = '⏳ Wgrywanie zdjęcia...';
+    const buf = await toUpload.arrayBuffer();
     const result = await new Promise((res, rej) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', SERVER_URL.replace(/\/$/, '') + '/api/zdjecie-upload');
       xhr.setRequestHeader('x-api-key', API_KEY);
-      xhr.setRequestHeader('Content-Type', file.type || 'image/jpeg');
+      xhr.setRequestHeader('Content-Type', toUpload.type || 'image/jpeg');
       xhr.upload.onprogress = e => {
         if (e.lengthComputable && statusEl)
           statusEl.textContent = '⏳ Wgrywanie... ' + Math.round(e.loaded/e.total*100) + '%';
@@ -774,11 +959,20 @@ async function wypozyczNarzSkraw(id) {
 }
 
 async function zwrocNarzSkraw(wypozyczenieId) {
+  const stan = _nskrZwrotStan || 'ok';
+  const uwagiEl = document.getElementById('nskr-zwrot-uwagi');
+  const uwagi = uwagiEl ? uwagiEl.value.trim() : '';
+  if (stan !== 'ok' && !uwagi) {
+    alert('Podaj uwagi – co się stało z narzędziem');
+    return;
+  }
   const kto = (state.user && state.user.full_name) || prompt('Kto zwraca narzędzie?') || '';
   try {
     await patch(`/api/narzedzia-skrawajace-wypozyczenia/${wypozyczenieId}/zwrot`, {
-      user_id: state.user ? state.user.id : null, user_name: kto
+      user_id: state.user ? state.user.id : null, user_name: kto,
+      stan_zwrotu: stan, uwagi_zwrotu: uwagi
     });
+    setState({narzSkrawZwrotModal: null}, true);
     await loadNarzSkrawWypozyczenia();
     await loadNarzSkrawAll();
     await loadNarzSkrawCount();

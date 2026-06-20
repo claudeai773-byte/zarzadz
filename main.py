@@ -4826,6 +4826,26 @@ def init_db_on_start():
     c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_narzedzie ON narzedzia_skrawajace_wypozyczenia(narzedzie_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_status ON narzedzia_skrawajace_wypozyczenia(status)")
 
+    # ➤ Narzędzia skrawające – kolumna ze zdjęciem (jeśli baza istniała wcześniej)
+    try:
+        c.execute("ALTER TABLE narzedzia_skrawajace ADD COLUMN zdjecie_url TEXT DEFAULT ''")
+    except Exception:
+        pass  # kolumna już istnieje
+
+    # ➤ Narzędzia skrawające – edytowalne typy narzędzi (zamiast listy zaszytej w kodzie)
+    c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_skrawajace_typy (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nazwa TEXT NOT NULL UNIQUE,
+        pozycja INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    istniejace_typy = c.execute("SELECT COUNT(*) FROM narzedzia_skrawajace_typy").fetchone()[0]
+    if istniejace_typy == 0:
+        for i, nazwa in enumerate(TYPY_NARZ_SKRAWAJACYCH):
+            c.execute(
+                "INSERT OR IGNORE INTO narzedzia_skrawajace_typy (nazwa, pozycja) VALUES (?,?)",
+                (nazwa, i)
+            )
+
     conn.commit()
     conn.close()
     logger.info(f"Baza danych gotowa: {DB_PATH}")
@@ -5920,6 +5940,7 @@ class NarzSkrawDodajRequest(BaseModel):
     status: Optional[str] = "sprawne"
     lokalizacja: Optional[str] = ""
     uwagi: Optional[str] = ""
+    zdjecie_url: Optional[str] = ""
 
 class NarzSkrawEditRequest(BaseModel):
     typ: Optional[str] = None
@@ -5929,6 +5950,13 @@ class NarzSkrawEditRequest(BaseModel):
     status: Optional[str] = None
     lokalizacja: Optional[str] = None
     uwagi: Optional[str] = None
+    zdjecie_url: Optional[str] = None
+
+class NarzSkrawTypDodajRequest(BaseModel):
+    nazwa: str
+
+class NarzSkrawTypEditRequest(BaseModel):
+    nazwa: str
 
 class NarzSkrawWypozyczRequest(BaseModel):
     ilosc: int = 1
@@ -5957,7 +5985,81 @@ def _narz_skraw_dostepne(conn, narzedzie_id: int, ilosc_total: int) -> int:
 
 @app.get("/api/narzedzia-skrawajace/typy", dependencies=[Depends(verify_key)])
 def get_typy_narz_skrawajacych():
-    return TYPY_NARZ_SKRAWAJACYCH
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, nazwa FROM narzedzia_skrawajace_typy ORDER BY pozycja, nazwa"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.post("/api/narzedzia-skrawajace/typy", dependencies=[Depends(verify_key)])
+def create_typ_narz_skrawajacego(req: NarzSkrawTypDodajRequest):
+    nazwa = (req.nazwa or "").strip()
+    if not nazwa:
+        raise HTTPException(400, "Nazwa typu jest wymagana")
+    with get_db() as conn:
+        istnieje = conn.execute(
+            "SELECT id FROM narzedzia_skrawajace_typy WHERE nazwa=?", (nazwa,)
+        ).fetchone()
+        if istnieje:
+            raise HTTPException(409, "Taki typ już istnieje")
+        maxpoz = conn.execute(
+            "SELECT COALESCE(MAX(pozycja),-1) FROM narzedzia_skrawajace_typy"
+        ).fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO narzedzia_skrawajace_typy (nazwa, pozycja) VALUES (?,?)",
+            (nazwa, maxpoz + 1)
+        )
+        new_id = cur.lastrowid
+    log_admin("system", "create_typ_narz_skrawajacego", nazwa)
+    return {"id": new_id, "nazwa": nazwa}
+
+
+@app.put("/api/narzedzia-skrawajace/typy/{tid}", dependencies=[Depends(verify_key)])
+def update_typ_narz_skrawajacego(tid: int, req: NarzSkrawTypEditRequest):
+    nazwa = (req.nazwa or "").strip()
+    if not nazwa:
+        raise HTTPException(400, "Nazwa typu jest wymagana")
+    with get_db() as conn:
+        stary = conn.execute(
+            "SELECT nazwa FROM narzedzia_skrawajace_typy WHERE id=?", (tid,)
+        ).fetchone()
+        if not stary:
+            raise HTTPException(404, "Typ nie znaleziony")
+        duplikat = conn.execute(
+            "SELECT id FROM narzedzia_skrawajace_typy WHERE nazwa=? AND id<>?", (nazwa, tid)
+        ).fetchone()
+        if duplikat:
+            raise HTTPException(409, "Taki typ już istnieje")
+        conn.execute("UPDATE narzedzia_skrawajace_typy SET nazwa=? WHERE id=?", (nazwa, tid))
+        # Zmiana nazwy typu propaguje się też na istniejące narzędzia tego typu
+        conn.execute(
+            "UPDATE narzedzia_skrawajace SET typ=? WHERE typ=?",
+            (nazwa, stary["nazwa"])
+        )
+    log_admin("system", "update_typ_narz_skrawajacego", f"{tid}: {stary['nazwa']} -> {nazwa}")
+    return {"ok": True}
+
+
+@app.delete("/api/narzedzia-skrawajace/typy/{tid}", dependencies=[Depends(verify_key)])
+def delete_typ_narz_skrawajacego(tid: int):
+    with get_db() as conn:
+        typ_row = conn.execute(
+            "SELECT nazwa FROM narzedzia_skrawajace_typy WHERE id=?", (tid,)
+        ).fetchone()
+        if not typ_row:
+            raise HTTPException(404, "Typ nie znaleziony")
+        w_uzyciu = conn.execute(
+            "SELECT COUNT(*) FROM narzedzia_skrawajace WHERE typ=?", (typ_row["nazwa"],)
+        ).fetchone()[0]
+        if w_uzyciu > 0:
+            raise HTTPException(
+                400,
+                f"Nie można usunąć – {w_uzyciu} narzędzi w bazie ma ten typ. Zmień ich typ albo usuń je najpierw."
+            )
+        conn.execute("DELETE FROM narzedzia_skrawajace_typy WHERE id=?", (tid,))
+    log_admin("system", "delete_typ_narz_skrawajacego", typ_row["nazwa"])
+    return {"ok": True}
 
 
 @app.get("/api/narzedzia-skrawajace", dependencies=[Depends(verify_key)])
@@ -6005,10 +6107,11 @@ def create_narzedzie_skrawajace(req: NarzSkrawDodajRequest):
         raise HTTPException(400, f"Nieprawidłowy status (dozwolone: {', '.join(STATUSY_NARZ_SKRAW)})")
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO narzedzia_skrawajace (typ, oznaczenie, srednica, ilosc, status, lokalizacja, uwagi, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO narzedzia_skrawajace (typ, oznaczenie, srednica, ilosc, status, lokalizacja, uwagi, zdjecie_url, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (req.typ.strip(), (req.oznaczenie or "").strip(), req.srednica, req.ilosc,
-             status, (req.lokalizacja or "").strip(), (req.uwagi or "").strip(), _now())
+             status, (req.lokalizacja or "").strip(), (req.uwagi or "").strip(),
+             (req.zdjecie_url or "").strip(), _now())
         )
         new_id = cur.lastrowid
     log_admin("system", "create_narzedzie_skrawajace", str(new_id))
@@ -6037,6 +6140,8 @@ def update_narzedzie_skrawajace(nid: int, req: NarzSkrawEditRequest):
         fields.append("lokalizacja=?"); vals.append(req.lokalizacja.strip())
     if req.uwagi is not None:
         fields.append("uwagi=?"); vals.append(req.uwagi.strip())
+    if req.zdjecie_url is not None:
+        fields.append("zdjecie_url=?"); vals.append(req.zdjecie_url.strip())
     if not fields:
         return {"ok": True}
     fields.append("updated_at=?"); vals.append(_now())
@@ -6225,7 +6330,59 @@ async def step_upload(request: Request):
     except Exception as e:
         raise HTTPException(502, f"Upload error: {e}")
 
-# ─── Proxy pobierania pliku STEP ──────────────────────────────────────────────
+# ─── Upload zdjęcia (np. z aparatu) do Cloudinary ─────────────────────────────
+@app.post("/api/zdjecie-upload", dependencies=[Depends(verify_key)])
+async def zdjecie_upload(request: Request):
+    import hashlib as _hl, time as _time
+    if not (CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET):
+        raise HTTPException(503, "Cloudinary nie skonfigurowany")
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "Brak danych pliku")
+    if len(body) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Plik za duży (maks. 20 MB)")
+
+    ts = str(int(_time.time()))
+    public_id = "produkcja_zdjecia/zdj_" + _hl.md5(body[:1024] + ts.encode()).hexdigest()[:12]
+
+    sign_params = f"access_mode=public&public_id={public_id}&timestamp={ts}"
+    sig = _hl.sha1(f"{sign_params}{CLOUDINARY_SECRET}".encode()).hexdigest()
+
+    boundary = "----CLD" + _hl.md5(ts.encode()).hexdigest()[:16]
+    def _field(name, value):
+        return f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode()
+
+    content_type = request.headers.get("content-type", "image/jpeg")
+    fname = "zdjecie.jpg"
+
+    multipart = (
+        _field("api_key", CLOUDINARY_KEY) +
+        _field("timestamp", ts) +
+        _field("signature", sig) +
+        _field("public_id", public_id) +
+        _field("access_mode", "public") +
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{fname}\"\r\nContent-Type: {content_type}\r\n\r\n".encode() +
+        body + f"\r\n--{boundary}--\r\n".encode()
+    )
+
+    try:
+        req = urllib.request.Request(
+            f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD}/image/upload",
+            data=multipart,
+            method="POST",
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        )
+        with urllib.request.urlopen(req, timeout=60) as r:
+            resp = json.loads(r.read())
+        url = resp.get("secure_url", "")
+        if not url:
+            raise HTTPException(500, "Cloudinary nie zwrócił URL")
+        return {"ok": True, "url": url, "public_id": resp.get("public_id"), "bytes": resp.get("bytes")}
+    except urllib.error.HTTPError as e:
+        err = e.read().decode()
+        raise HTTPException(502, f"Cloudinary error: {err}")
+    except Exception as e:
+        raise HTTPException(502, f"Upload error: {e}")
 @app.get("/api/step-proxy")
 async def step_proxy(url: str):
     import re as _re

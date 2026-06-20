@@ -4843,6 +4843,10 @@ def init_db_on_start():
         pass  # kolumna już istnieje
     c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_stan_zwrotu ON narzedzia_skrawajace_wypozyczenia(stan_zwrotu)")
 
+    # ➤ Narzędzia skrawające – indeksy na kolumny filtrowane w liście (typ/status)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_typ ON narzedzia_skrawajace(typ)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_status ON narzedzia_skrawajace(status)")
+
     # ➤ Narzędzia skrawające – edytowalne typy narzędzi (zamiast listy zaszytej w kodzie)
     c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_skrawajace_typy (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -6099,8 +6103,19 @@ def get_narzedzia_skrawajace(q: str = "", typ: str = "", status: str = ""):
             params.append(status)
         sql += " ORDER BY typ, srednica"
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+        # Jedno zapytanie zbiorcze zamiast N osobnych (poprzednio: 1 SELECT per
+        # narzędzie w pętli – przy kilkudziesięciu/kilkuset pozycjach to było
+        # główną przyczyną wielosekundowego ładowania listy po każdym zapisie).
+        wyp_rows = conn.execute(
+            "SELECT narzedzie_id, COALESCE(SUM(ilosc),0) AS suma "
+            "FROM narzedzia_skrawajace_wypozyczenia WHERE status='wypozyczone' "
+            "GROUP BY narzedzie_id"
+        ).fetchall()
+        wypozyczone_po_id = {r["narzedzie_id"]: r["suma"] for r in wyp_rows}
+
         for r in rows:
-            r["dostepne"] = _narz_skraw_dostepne(conn, r["id"], r["ilosc"])
+            r["dostepne"] = max(0, r["ilosc"] - wypozyczone_po_id.get(r["id"], 0))
         return rows
 
 

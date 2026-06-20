@@ -4832,6 +4832,17 @@ def init_db_on_start():
     except Exception:
         pass  # kolumna już istnieje
 
+    # ➤ Narzędzia skrawające – stan zwrotu (ok / uszkodzone / regeneracja) + uwagi przyczyny
+    try:
+        c.execute("ALTER TABLE narzedzia_skrawajace_wypozyczenia ADD COLUMN stan_zwrotu TEXT DEFAULT ''")
+    except Exception:
+        pass  # kolumna już istnieje
+    try:
+        c.execute("ALTER TABLE narzedzia_skrawajace_wypozyczenia ADD COLUMN uwagi_zwrotu TEXT DEFAULT ''")
+    except Exception:
+        pass  # kolumna już istnieje
+    c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_stan_zwrotu ON narzedzia_skrawajace_wypozyczenia(stan_zwrotu)")
+
     # ➤ Narzędzia skrawające – edytowalne typy narzędzi (zamiast listy zaszytej w kodzie)
     c.execute("""CREATE TABLE IF NOT EXISTS narzedzia_skrawajace_typy (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5969,6 +5980,15 @@ class NarzSkrawZwrotRequest(BaseModel):
     user_id: Optional[int] = None
     user_name: Optional[str] = ""
     uwagi: Optional[str] = ""
+    stan_zwrotu: str = "ok"          # 'ok' | 'uszkodzone' | 'regeneracja'
+    uwagi_zwrotu: Optional[str] = "" # przyczyna uszkodzenia / regeneracji
+
+class NarzSkrawRegeneracjaZakonczonaRequest(BaseModel):
+    user_id: Optional[int] = None
+    user_name: Optional[str] = ""
+    uwagi: Optional[str] = ""
+
+STANY_ZWROTU_NARZ_SKRAW = ("ok", "uszkodzone", "regeneracja")
 
 STATUSY_NARZ_SKRAW = ("sprawne", "zepsute", "zamowione")
 
@@ -6093,7 +6113,11 @@ def count_narzedzia_skrawajace():
         wypozyczone = conn.execute(
             "SELECT COUNT(DISTINCT narzedzie_id) FROM narzedzia_skrawajace_wypozyczenia WHERE status='wypozyczone'"
         ).fetchone()[0]
-        return {"total": total, "zepsute": zepsute, "zamowione": zamowione, "wypozyczone": wypozyczone}
+        do_regeneracji = conn.execute(
+            "SELECT COUNT(*) FROM narzedzia_skrawajace_wypozyczenia WHERE status='do_regeneracji'"
+        ).fetchone()[0]
+        return {"total": total, "zepsute": zepsute, "zamowione": zamowione,
+                "wypozyczone": wypozyczone, "do_regeneracji": do_regeneracji}
 
 
 @app.post("/api/narzedzia-skrawajace", dependencies=[Depends(verify_key)])
@@ -6199,21 +6223,77 @@ def wypozycz_narzedzie_skrawajace(nid: int, req: NarzSkrawWypozyczRequest):
 
 @app.patch("/api/narzedzia-skrawajace-wypozyczenia/{wid}/zwrot", dependencies=[Depends(verify_key)])
 def zwrot_narzedzie_skrawajace(wid: int, req: NarzSkrawZwrotRequest):
+    stan = (req.stan_zwrotu or "ok").lower()
+    if stan not in STANY_ZWROTU_NARZ_SKRAW:
+        raise HTTPException(400, f"Nieprawidłowy stan zwrotu (dozwolone: {', '.join(STANY_ZWROTU_NARZ_SKRAW)})")
+    if stan in ("uszkodzone", "regeneracja") and not (req.uwagi_zwrotu or "").strip():
+        raise HTTPException(400, "Podaj uwagi – co się stało z narzędziem")
+
     with get_db() as conn:
         w = conn.execute("SELECT * FROM narzedzia_skrawajace_wypozyczenia WHERE id=?", (wid,)).fetchone()
         if not w:
             raise HTTPException(404, "Wypożyczenie nie znalezione")
-        if w["status"] == "zwrocone":
-            raise HTTPException(409, "Już zwrócone")
+        if w["status"] != "wypozyczone":
+            raise HTTPException(409, "To wypożyczenie zostało już obsłużone")
+
+        # Status wypożyczenia: 'zwrocone' (ok) albo 'do_regeneracji' (uszkodzone/regeneracja)
+        # – dzięki temu trafia do osobnej zakładki, niezależnie od stanu narzędzia.
+        nowy_status = "zwrocone" if stan == "ok" else "do_regeneracji"
+
         conn.execute(
-            "UPDATE narzedzia_skrawajace_wypozyczenia SET status='zwrocone', data_zwrotu=?, "
-            "zwrocil_user_id=?, zwrocil_imie=?, uwagi=CASE WHEN ?='' THEN uwagi ELSE (uwagi || CASE WHEN uwagi='' THEN '' ELSE ' | ' END || ?) END "
+            "UPDATE narzedzia_skrawajace_wypozyczenia SET status=?, data_zwrotu=?, "
+            "zwrocil_user_id=?, zwrocil_imie=?, stan_zwrotu=?, uwagi_zwrotu=?, "
+            "uwagi=CASE WHEN ?='' THEN uwagi ELSE (uwagi || CASE WHEN uwagi='' THEN '' ELSE ' | ' END || ?) END "
             "WHERE id=?",
-            (_now(), req.user_id, (req.user_name or "").strip(), (req.uwagi or "").strip(), (req.uwagi or "").strip(), wid)
+            (nowy_status, _now(), req.user_id, (req.user_name or "").strip(), stan,
+             (req.uwagi_zwrotu or "").strip(),
+             (req.uwagi or "").strip(), (req.uwagi or "").strip(), wid)
         )
         narzedzie_id = w["narzedzie_id"]
-    db_log(req.user_id, req.user_name or "", "NARZ_SKRAW_ZWROT",
-           "Zwrócono narzędzie skrawające", f"wypozyczenie_id={wid}, narzedzie_id={narzedzie_id}")
+        if stan in ("uszkodzone", "regeneracja"):
+            # Narzędzie fizycznie wraca jako niesprawne, aż ktoś je zaregeneruje
+            conn.execute("UPDATE narzedzia_skrawajace SET status='zepsute', updated_at=? WHERE id=?", (_now(), narzedzie_id))
+
+    akcja = {"ok": "NARZ_SKRAW_ZWROT", "uszkodzone": "NARZ_SKRAW_ZWROT_USZKODZONE", "regeneracja": "NARZ_SKRAW_ZWROT_REGENERACJA"}[stan]
+    db_log(req.user_id, req.user_name or "", akcja,
+           f"Zwrócono narzędzie skrawające ({stan})", f"wypozyczenie_id={wid}, narzedzie_id={narzedzie_id}")
+    return {"ok": True}
+
+
+@app.get("/api/narzedzia-skrawajace-regeneracja", dependencies=[Depends(verify_key)])
+def get_narzedzia_skrawajace_regeneracja():
+    """Lista zwrotów oznaczonych jako uszkodzone/do regeneracji, jeszcze nie obsłużonych."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT w.*, n.typ AS narzedzie_typ, n.oznaczenie AS narzedzie_oznaczenie,
+                   n.srednica AS narzedzie_srednica, n.zdjecie_url AS narzedzie_zdjecie_url
+            FROM narzedzia_skrawajace_wypozyczenia w
+            JOIN narzedzia_skrawajace n ON w.narzedzie_id = n.id
+            WHERE w.status = 'do_regeneracji'
+            ORDER BY w.data_zwrotu DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+@app.patch("/api/narzedzia-skrawajace-wypozyczenia/{wid}/regeneracja-zakonczona", dependencies=[Depends(verify_key)])
+def regeneracja_zakonczona(wid: int, req: NarzSkrawRegeneracjaZakonczonaRequest):
+    """Oznacza, że uszkodzone/do regeneracji narzędzie zostało naprawione i jest ponownie sprawne."""
+    with get_db() as conn:
+        w = conn.execute("SELECT * FROM narzedzia_skrawajace_wypozyczenia WHERE id=?", (wid,)).fetchone()
+        if not w:
+            raise HTTPException(404, "Wypożyczenie nie znalezione")
+        if w["status"] != "do_regeneracji":
+            raise HTTPException(409, "To zgłoszenie nie czeka na regenerację")
+        conn.execute(
+            "UPDATE narzedzia_skrawajace_wypozyczenia SET status='zwrocone', "
+            "uwagi=CASE WHEN ?='' THEN uwagi ELSE (uwagi || CASE WHEN uwagi='' THEN '' ELSE ' | ' END || 'Regeneracja: ' || ?) END "
+            "WHERE id=?",
+            ((req.uwagi or "").strip(), (req.uwagi or "").strip(), wid)
+        )
+        narzedzie_id = w["narzedzie_id"]
+        conn.execute("UPDATE narzedzia_skrawajace SET status='sprawne', updated_at=? WHERE id=?", (_now(), narzedzie_id))
+    db_log(req.user_id, req.user_name or "", "NARZ_SKRAW_REGENERACJA_OK",
+           "Narzędzie po regeneracji oznaczone jako sprawne", f"wypozyczenie_id={wid}, narzedzie_id={narzedzie_id}")
     return {"ok": True}
 
 
@@ -6331,9 +6411,19 @@ async def step_upload(request: Request):
         raise HTTPException(502, f"Upload error: {e}")
 
 # ─── Upload zdjęcia (np. z aparatu) do Cloudinary ─────────────────────────────
+def _cloudinary_upload_sync(url: str, multipart: bytes, boundary: str) -> dict:
+    """Część blokująca (sieć) – wykonywana w osobnym wątku, żeby nie blokować event loopa."""
+    req = urllib.request.Request(
+        url, data=multipart, method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read())
+
+
 @app.post("/api/zdjecie-upload", dependencies=[Depends(verify_key)])
 async def zdjecie_upload(request: Request):
-    import hashlib as _hl, time as _time
+    import hashlib as _hl, time as _time, asyncio
     if not (CLOUDINARY_CLOUD and CLOUDINARY_KEY and CLOUDINARY_SECRET):
         raise HTTPException(503, "Cloudinary nie skonfigurowany")
     body = await request.body()
@@ -6366,14 +6456,13 @@ async def zdjecie_upload(request: Request):
     )
 
     try:
-        req = urllib.request.Request(
+        # urlopen jest blokujące – odpalamy w osobnym wątku, żeby serwer mógł
+        # w tym czasie obsługiwać inne requesty (lista narzędzi, logowanie itd.)
+        resp = await asyncio.to_thread(
+            _cloudinary_upload_sync,
             f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD}/image/upload",
-            data=multipart,
-            method="POST",
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}
+            multipart, boundary
         )
-        with urllib.request.urlopen(req, timeout=60) as r:
-            resp = json.loads(r.read())
         url = resp.get("secure_url", "")
         if not url:
             raise HTTPException(500, "Cloudinary nie zwrócił URL")

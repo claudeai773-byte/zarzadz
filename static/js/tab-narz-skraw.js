@@ -62,6 +62,19 @@ async function loadNarzSkrawCount() {
   } catch (e) { /* ignoruj */ }
 }
 
+// Po każdej akcji (dodaj/edytuj/usuń/wypożycz/zwróć) trzeba odświeżyć i listę,
+// i licznik w nagłówku. To dwa niezależne GET-y – odpalone po sobie (await,
+// await) sumują czas oczekiwania na sieci; równolegle przez Promise.all to
+// w praktyce czas tylko jednego z nich. Na końcu jeden render() – loadNarzSkrawCount
+// ustawia stan z noRender:true (żeby nie przerywać ewentualnego "searching"
+// w trakcie loadNarzSkrawAll), więc bez tego ręcznego render() na końcu liczniki
+// w nagłówku (zepsute/zamówione/wypożyczone/do regeneracji) nie odświeżałyby się
+// wizualnie od razu po akcji.
+async function narzSkrawOdswiezListeIicznik() {
+  await Promise.all([loadNarzSkrawAll(), loadNarzSkrawCount()]);
+  render();
+}
+
 async function loadNarzSkrawWypozyczenia() {
   setState({narzSkrawWypLoading: true}, true);
   try {
@@ -900,8 +913,7 @@ async function saveNarzSkrawDodaj() {
     ['nskr-oznaczenie','nskr-srednica','nskr-lok','nskr-uwagi'].forEach(id => { const e=document.getElementById(id); if(e) e.value=''; });
     document.getElementById('nskr-ilosc').value = '1';
     narzSkrawUsunZdjecieDodaj();
-    await loadNarzSkrawAll();
-    await loadNarzSkrawCount();
+    await narzSkrawOdswiezListeIicznik();
   } catch (e) {
     alert('Błąd dodawania: ' + e.message);
   }
@@ -922,8 +934,7 @@ async function saveNarzSkrawEdit(id) {
       ilosc, status, lokalizacja, uwagi, zdjecie_url
     });
     setState({narzSkrawEditModal: null}, true);
-    await loadNarzSkrawAll();
-    await loadNarzSkrawCount();
+    await narzSkrawOdswiezListeIicznik();
   } catch (e) {
     alert('Błąd zapisu: ' + e.message);
   }
@@ -933,8 +944,7 @@ async function usunNarzSkraw(id) {
   if (!confirm('Usunąć to narzędzie z bazy?')) return;
   try {
     await del('/api/narzedzia-skrawajace/' + id);
-    await loadNarzSkrawAll();
-    await loadNarzSkrawCount();
+    await narzSkrawOdswiezListeIicznik();
   } catch (e) {
     alert('Błąd usuwania: ' + e.message);
   }
@@ -951,8 +961,7 @@ async function wypozyczNarzSkraw(id) {
       ilosc, user_id: state.user ? state.user.id : null, user_name: kto, zlecenie_nr, uwagi
     });
     setState({narzSkrawWypozyczModal: null}, true);
-    await loadNarzSkrawAll();
-    await loadNarzSkrawCount();
+    await narzSkrawOdswiezListeIicznik();
   } catch (e) {
     alert('Błąd wypożyczenia: ' + e.message);
   }
@@ -973,9 +982,7 @@ async function zwrocNarzSkraw(wypozyczenieId) {
       stan_zwrotu: stan, uwagi_zwrotu: uwagi
     });
     setState({narzSkrawZwrotModal: null}, true);
-    await loadNarzSkrawWypozyczenia();
-    await loadNarzSkrawAll();
-    await loadNarzSkrawCount();
+    await Promise.all([loadNarzSkrawWypozyczenia(), narzSkrawOdswiezListeIicznik()]);
   } catch (e) {
     alert('Błąd zwrotu: ' + e.message);
   }

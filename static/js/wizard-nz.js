@@ -978,6 +978,7 @@ function renderNzWizard() {
             </div>
             <div style="display:flex;flex-direction:column;gap:5px">
               <input type="text" placeholder="Nazwa operacji" value="${op.nazwa||''}"
+                     class="nz-op-nazwa-input"
                      onblur="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               <select onblur="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
@@ -994,6 +995,7 @@ function renderNzWizard() {
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
               <textarea placeholder="Opis czynności (opcjonalnie)"
+                     class="nz-op-opis-input"
                      onblur="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:56px;font-family:inherit"
                      >${op.opis_czynnosci||''}</textarea>
@@ -1038,6 +1040,7 @@ function renderNzWizard() {
             </div>
             <div style="display:flex;flex-direction:column;gap:5px">
               <input type="text" placeholder="Nazwa operacji" value="${op.nazwa||''}"
+                     class="nz-op-nazwa-input"
                      onblur="nzUpdateOp('${editNode._id}','${op._id}','nazwa',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               <select onblur="nzUpdateOp('${editNode._id}','${op._id}','stanowisko',this.value)"
@@ -1054,6 +1057,7 @@ function renderNzWizard() {
                        style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem">
               </div>
               <textarea placeholder="Opis czynności (opcjonalnie)"
+                     class="nz-op-opis-input"
                      onblur="nzUpdateOp('${editNode._id}','${op._id}','opis_czynnosci',this.value)"
                      style="background:#0f172a;color:#e2e8f0;border:1px solid #1e293b;border-radius:4px;padding:5px 7px;width:100%;box-sizing:border-box;font-size:.78rem;resize:vertical;min-height:56px;font-family:inherit"
                      >${op.opis_czynnosci||''}</textarea>

@@ -158,6 +158,21 @@ function _doRender(tabEvent) {
         }
       }
     }
+    // ── Podpięcie autouzupełniania fraz (nazwy/opisy operacji, opis zlecenia) ──
+    if (typeof initTextAutocomplete === 'function') {
+      initTextAutocomplete({
+        'op-nazwa': 'op_nazwa',
+        'op-opis': 'op_opis',
+        'zl-opis': 'zl_opis',
+        'zl-nazwa': 'zl_nazwa',
+        'nz-opis': 'zl_opis',
+        'nz-nazwa': 'zl_nazwa',
+      });
+      // Pola operacji w drzewie G/P wizarda nowego zlecenia – brak id (dynamiczne _id),
+      // identyfikowane przez klasę nadaną w wizard-nz.js
+      app.querySelectorAll('.nz-op-nazwa-input').forEach(el => attachTextAutocomplete(el, 'op_nazwa'));
+      app.querySelectorAll('.nz-op-opis-input').forEach(el => attachTextAutocomplete(el, 'op_opis'));
+    }
   });
 }
 // ══════════════════════════════════════════════════════════════

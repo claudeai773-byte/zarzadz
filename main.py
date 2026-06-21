@@ -539,6 +539,9 @@ def create_zlecenie(req: ZlecenieRequest):
                  req.model_3d_url)
             )
             new_id = cur.lastrowid
+            # ➤ Zapisz frazy do słownika autouzupełniania
+            _zapisz_fraze(conn, "zl_nazwa", req.nazwa)
+            _zapisz_fraze(conn, "zl_opis", req.opis)
             # ─ Powiadomienie real-time dla majstrów ─────────────────────
             _broadcast_sync({
                 "type": "nowe_zlecenie",
@@ -565,6 +568,9 @@ def update_zlecenie(zid: int, req: ZlecenieRequest):
              req.ilosc_sztuk, req.cena_brutto_szt, req.material_od_klienta,
              req.model_3d_url, zid)
         )
+        # ➤ Zapisz frazy do słownika autouzupełniania
+        _zapisz_fraze(conn, "zl_nazwa", req.nazwa)
+        _zapisz_fraze(conn, "zl_opis", req.opis)
         return {"ok": True}
 
 @app.delete("/api/zlecenia/{zid}", dependencies=[Depends(verify_key)])
@@ -838,6 +844,23 @@ class OperacjaRequest(BaseModel):
     opis_czynnosci: Optional[str] = ""
     czas_zbrojenia_min: Optional[float] = 0.0
 
+def _zapisz_fraze(conn, typ: str, tekst: Optional[str]):
+    """Dopisuje/inkrementuje frazę w słowniku autouzupełniania (best-effort, nie blokuje zapisu)."""
+    tekst = (tekst or "").strip()
+    if len(tekst) < 3:
+        return
+    try:
+        conn.execute(
+            """INSERT INTO frazy_slownik (typ, tekst, uzycia, ostatnie_uzycie)
+               VALUES (?,?,1,CURRENT_TIMESTAMP)
+               ON CONFLICT(typ, tekst) DO UPDATE SET
+                 uzycia = uzycia + 1,
+                 ostatnie_uzycie = CURRENT_TIMESTAMP""",
+            (typ, tekst)
+        )
+    except Exception:
+        pass
+
 @app.post("/api/operacje", dependencies=[Depends(verify_key)])
 def create_operacja(req: OperacjaRequest):
     import uuid
@@ -853,6 +876,9 @@ def create_operacja(req: OperacjaRequest):
         # ➤ Inicjalizuj stawkę zlecenia dla tego stanowiska (jeśli istnieje)
         if req.stanowisko:
             _init_stawki_zlecenia(conn, req.zlecenie_id)
+        # ➤ Zapisz frazy do słownika autouzupełniania
+        _zapisz_fraze(conn, "op_nazwa", req.nazwa)
+        _zapisz_fraze(conn, "op_opis", req.opis_czynnosci)
         return {"id": cur.lastrowid, "qr_code": qr}
 
 @app.put("/api/operacje/{oid}", dependencies=[Depends(verify_key)])
@@ -869,12 +895,67 @@ def update_operacja(oid: int, req: OperacjaRequest):
         if req.stanowisko and op_before:
             if req.stanowisko != op_before["stanowisko"]:
                 _init_stawki_zlecenia(conn, op_before["zlecenie_id"])
+        # ➤ Zapisz frazy do słownika autouzupełniania
+        _zapisz_fraze(conn, "op_nazwa", req.nazwa)
+        _zapisz_fraze(conn, "op_opis", req.opis_czynnosci)
         return {"ok": True}
+
 
 @app.delete("/api/operacje/{oid}", dependencies=[Depends(verify_key)])
 def delete_operacja(oid: int):
     with get_db() as conn:
         conn.execute("DELETE FROM operacje WHERE id=?", (oid,))
+        return {"ok": True}
+
+# ─── Słownik fraz – autouzupełnianie nazw/opisów operacji i opisów zleceń ──────
+# `typ` rozróżnia konteksty, np.: 'op_nazwa', 'op_opis', 'zl_opis', 'zl_nazwa'
+@app.get("/api/frazy", dependencies=[Depends(verify_key)])
+def get_frazy(typ: str, q: Optional[str] = "", limit: int = 8):
+    q = (q or "").strip()
+    with get_db() as conn:
+        if q:
+            rows = conn.execute(
+                """SELECT tekst, uzycia FROM frazy_slownik
+                   WHERE typ=? AND tekst LIKE ? COLLATE NOCASE
+                   ORDER BY uzycia DESC, ostatnie_uzycie DESC
+                   LIMIT ?""",
+                (typ, q + "%", limit)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT tekst, uzycia FROM frazy_slownik
+                   WHERE typ=?
+                   ORDER BY uzycia DESC, ostatnie_uzycie DESC
+                   LIMIT ?""",
+                (typ, limit)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+class FrazaRequest(BaseModel):
+    typ: str
+    tekst: str
+
+@app.post("/api/frazy", dependencies=[Depends(verify_key)])
+def upsert_fraza(req: FrazaRequest):
+    tekst = (req.tekst or "").strip()
+    # Ignoruj puste i bardzo krótkie wpisy (nie mają sensu jako podpowiedzi)
+    if len(tekst) < 3:
+        return {"ok": True, "skipped": True}
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO frazy_slownik (typ, tekst, uzycia, ostatnie_uzycie)
+               VALUES (?,?,1,CURRENT_TIMESTAMP)
+               ON CONFLICT(typ, tekst) DO UPDATE SET
+                 uzycia = uzycia + 1,
+                 ostatnie_uzycie = CURRENT_TIMESTAMP""",
+            (req.typ, tekst)
+        )
+        return {"ok": True}
+
+@app.delete("/api/frazy", dependencies=[Depends(verify_key)])
+def delete_fraza(typ: str, tekst: str):
+    with get_db() as conn:
+        conn.execute("DELETE FROM frazy_slownik WHERE typ=? AND tekst=?", (typ, tekst))
         return {"ok": True}
 
 # Endpoint KJ
@@ -4388,6 +4469,16 @@ def init_db_on_start():
         tytul TEXT, tresc TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         odczytane INTEGER DEFAULT 0, dla_roli TEXT DEFAULT 'all')""")
+
+    # ➤ NOWA TABELA: słownik fraz do autouzupełniania (nazwy/opisy operacji, opisy zleceń)
+    c.execute("""CREATE TABLE IF NOT EXISTS frazy_slownik (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        typ TEXT NOT NULL,
+        tekst TEXT NOT NULL,
+        uzycia INTEGER DEFAULT 1,
+        ostatnie_uzycie TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(typ, tekst))""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_frazy_typ ON frazy_slownik(typ)")
 
     # ➤ NOWA TABELA: stawki per zlecenie
     c.execute("""CREATE TABLE IF NOT EXISTS stawki_zlecen (

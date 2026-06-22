@@ -1,51 +1,22 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // Autouzupełnianie fraz – nazwy/opisy operacji, opisy zleceń
 // ═══════════════════════════════════════════════════════════════════════════════
-//
-// Działanie:
-//  • Aplikacja zapamiętuje zwroty użyte w polach "Nazwa operacji", "Opis czynności"
-//    i "Opis zlecenia" (backend: tabela frazy_slownik, endpointy /api/frazy).
-//  • Przy wpisywaniu tekstu (od 2 znaków) pole pokazuje dopowiedzenie "ghost text"
-//    (resztę najlepiej pasującej frazy, wyszarzoną) ORAZ rozwijaną listę do 6
-//    podpowiedzi pod polem.
-//  • Obsługa klawiatury:
-//      → (Strzałka w prawo) / Tab  – przyjmuje cały ghost-text (uzupełnia od kursora)
-//      ↓ / ↑                        – przechodzi między propozycjami na liście
-//      Enter (gdy lista aktywna)    – zatwierdza wybraną propozycję i kontynuuje pisanie
-//      Esc                          – zamyka podpowiedzi, nie zmienia tekstu
-//  • Frazy są zapisywane do słownika automatycznie przez backend w momencie
-//    zapisu operacji/zlecenia (POST/PUT /api/operacje, /api/zlecenia) – nic
-//    dodatkowego nie trzeba robić przy samym zapisie.
-//
-// UŻYCIE – po wyrenderowaniu pola w DOM:
-//    attachTextAutocomplete(document.getElementById('op-nazwa'), 'op_nazwa');
-//    attachTextAutocomplete(document.getElementById('op-opis'),  'op_opis');
-//    attachTextAutocomplete(document.getElementById('zl-opis'),  'zl_opis');
-//
-// Działa na <input type="text"> i <textarea>. Dla textarea podpowiada na bazie
-// aktualnie edytowanej linii (od ostatniego \n do kursora), żeby nie psuć
-// wielolinijkowych opisów typu "Frezować wybranie...\nWiercić otwory...".
-// ═══════════════════════════════════════════════════════════════════════════════
 
-const _tac = new WeakMap(); // element -> { typ, cache:[], ghost:'', timer, listEl, wrapEl }
+const _tac = new WeakMap(); // element -> { typ, cache:[], ghost:'', timer, listEl, ghostEl, activeIdx }
 
 function attachTextAutocomplete(el, typ) {
   if (!el || _tac.has(el)) return;
 
-  // Owijamy pole w relative-wrapper (bez zmiany layoutu otaczającego kodu) jeśli
-  // rodzic nie jest już position:relative.
-  let wrap = el.parentElement;
-  if (!wrap || getComputedStyle(wrap).position === 'static') {
-    wrap = document.createElement('div');
-    wrap.style.position = 'relative';
-    el.parentNode.insertBefore(wrap, el);
-    wrap.appendChild(el);
-  }
-
-  // Overlay do "ghost text" – widoczny tylko dla input (textarea: tylko lista, bo
-  // wieloliniowy ghost-text overlay jest zbyt zawodny przy zawijaniu tekstu)
+  // Ghost text overlay – tylko dla INPUT
   let ghostEl = null;
   if (el.tagName === 'INPUT') {
+    let wrap = el.parentElement;
+    if (!wrap || getComputedStyle(wrap).position === 'static') {
+      wrap = document.createElement('div');
+      wrap.style.position = 'relative';
+      el.parentNode.insertBefore(wrap, el);
+      wrap.appendChild(el);
+    }
     ghostEl = document.createElement('div');
     ghostEl.className = 'tac-ghost';
     const cs = getComputedStyle(el);
@@ -59,17 +30,19 @@ function attachTextAutocomplete(el, typ) {
     wrap.appendChild(ghostEl);
   }
 
+  // Lista podpowiedzi – dołączona do <body> (portal pattern), żeby nie była
+  // przycinana przez overflow:auto/hidden na .modal i panelach przewijanych.
   const list = document.createElement('ul');
   list.className = 'tac-list';
   list.style.cssText = [
-    'position:absolute', 'z-index:9999', 'top:100%', 'left:0',
+    'position:fixed', 'z-index:99999',
     'background:#0f172a', 'border:1px solid #334155',
-    'border-radius:8px', 'margin:2px 0 0 0', 'padding:0',
+    'border-radius:8px', 'margin:0', 'padding:0',
     'list-style:none', 'max-height:200px', 'overflow-y:auto',
-    'width:100%', 'box-shadow:0 8px 24px #00000066',
+    'box-shadow:0 8px 24px #00000066',
     'display:none', 'box-sizing:border-box',
   ].join(';');
-  wrap.appendChild(list);
+  document.body.appendChild(list);
 
   const data = { typ, cache: [], ghost: '', timer: null, listEl: list, ghostEl, activeIdx: -1 };
   _tac.set(el, data);
@@ -78,9 +51,40 @@ function attachTextAutocomplete(el, typ) {
   el.addEventListener('keydown', (e) => _tacOnKeydown(el, e));
   el.addEventListener('blur', () => setTimeout(() => _tacHide(el), 150));
   el.addEventListener('scroll', () => _tacSyncGhostScroll(el));
+
+  // Gdy element jest usuwany z DOM (re-render), wyczyść listę z body
+  const obs = new MutationObserver(() => {
+    if (!document.body.contains(el)) {
+      list.remove();
+      obs.disconnect();
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
 }
 
-// ── Wyznacz aktualnie edytowany "token" (cały input, albo ostatnia linia textarea aż do kursora)
+// ── Pozycjonuje listę pod polem – wywoływane przy każdym pokazaniu listy ──────
+function _tacPositionList(el) {
+  const data = _tac.get(el);
+  if (!data) return;
+  const rect = el.getBoundingClientRect();
+  const list = data.listEl;
+  const vh = window.innerHeight;
+  const listH = Math.min(200, list.scrollHeight || 200);
+  const spaceBelow = vh - rect.bottom;
+  if (spaceBelow >= listH + 4 || spaceBelow >= 80) {
+    // Wyświetl pod polem
+    list.style.top = (rect.bottom + 2) + 'px';
+    list.style.maxHeight = Math.min(200, spaceBelow - 8) + 'px';
+  } else {
+    // Wyświetl nad polem
+    list.style.top = Math.max(4, rect.top - listH - 2) + 'px';
+    list.style.maxHeight = Math.min(200, rect.top - 8) + 'px';
+  }
+  list.style.left = rect.left + 'px';
+  list.style.width = rect.width + 'px';
+}
+
+// ── Wyznacz aktualnie edytowany "token"
 function _tacCurrentFragment(el) {
   const pos = el.selectionStart ?? el.value.length;
   const before = el.value.slice(0, pos);
@@ -109,7 +113,6 @@ async function _tacSearch(el) {
   } catch (e) {
     results = [];
   }
-  // Nie pokazuj propozycji identycznej z tym co już jest wpisane
   results = results.filter(r => r.tekst.toLowerCase() !== q.toLowerCase());
   data.cache = results;
   data.activeIdx = -1;
@@ -155,7 +158,8 @@ function _tacRenderList(el, q) {
       ${r.uzycia > 1 ? `<span style="color:#475569;font-size:11px;flex-shrink:0">×${r.uzycia}</span>` : ''}
     </li>`).join('');
   ul.style.display = 'block';
-  window._tacCurEl = el; // referencja do elementu na potrzeby onmousedown (inline handler)
+  window._tacCurEl = el;
+  _tacPositionList(el); // ustaw pozycję po pokazaniu listy
 }
 
 function _tacHl(text, q) {
@@ -186,7 +190,6 @@ function _tacSetActive(el, idx) {
   }
 }
 
-// ── Wstawia wybraną frazę w miejsce aktualnie edytowanego fragmentu i kontynuuje pisanie
 function _tacApplyByIdx(el, idx) {
   const data = _tac.get(el);
   if (!data || !data.cache[idx]) return;
@@ -198,15 +201,14 @@ function _tacApplyByIdx(el, idx) {
   el.setSelectionRange(newPos, newPos);
   el.focus();
   _tacHide(el);
-  el.dispatchEvent(new Event('input', { bubbles: true })); // odśwież ewentualne bindowanie stanu
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// ── Przyjęcie ghost-textu (strzałka w prawo / Tab) – tylko jeśli kursor jest na końcu fragmentu
 function _tacAcceptGhost(el) {
   const data = _tac.get(el);
   if (!data || !data.ghost) return false;
   const pos = el.selectionStart;
-  if (pos !== el.selectionEnd) return false; // brak zaznaczenia – wymagane
+  if (pos !== el.selectionEnd) return false;
   const after = el.value.slice(pos);
   el.value = el.value.slice(0, pos) + data.ghost + after;
   const newPos = pos + data.ghost.length;
@@ -221,7 +223,6 @@ function _tacOnKeydown(el, e) {
   if (!data) return;
   const listOpen = data.listEl.style.display !== 'none' && data.cache.length;
 
-  // Strzałka w prawo / Tab → przyjmij ghost-text, tylko gdy kursor jest na końcu wpisanego tekstu
   if ((e.key === 'ArrowRight' || e.key === 'Tab') && data.ghost) {
     const atEnd = el.selectionStart === el.value.length;
     if (atEnd) {
@@ -248,9 +249,8 @@ function _tacOnKeydown(el, e) {
   }
 }
 
-// ── Inicjalizacja wielu pól naraz, np. po wyrenderowaniu modala ───────────────
+// ── Inicjalizacja wielu pól naraz ─────────────────────────────────────────────
 function initTextAutocomplete(map) {
-  // map: { 'css-id-or-selector': 'typ_frazy', ... }
   Object.entries(map).forEach(([sel, typ]) => {
     const el = sel.startsWith('#') || sel.startsWith('.') ? document.querySelector(sel) : document.getElementById(sel);
     if (el) attachTextAutocomplete(el, typ);

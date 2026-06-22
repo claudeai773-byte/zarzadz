@@ -198,42 +198,9 @@ function renderPodZlecenieModal() {
   </div>`;
 }
 
-function render() {
-  document.getElementById('app').innerHTML = renderContent();
-  _afterRender();
-  // Restart timerów po re-render
-  for (const [sid, t] of Object.entries(state.timers)) {
-    if (t.sesja) startTimerFor(t.sesja);
-  }
-  // Narysuj QR jeśli modal QR otwarty
-  if (state.qrGenModal && state.qrGenKod) {
-    setTimeout(() => drawQRCanvas(state.qrGenKod), 50);
-  }
-  // Narysuj QR na karcie zlecenia jeśli print modal otwarty
-  if (state.printModal && state.printModal.zlecenie?.qr_code) {
-    setTimeout(() => {
-      const canvas = document.getElementById('print-qr-canvas');
-      if (!canvas) return;
-      const kod = state.printModal.zlecenie.qr_code;
-      const url = `${SERVER_URL.replace(/\/$/,'')}/api/qr/${encodeURIComponent(kod)}`;
-      fetch(url, {headers: {'x-api-key': API_KEY}})
-        .then(r => { if (!r.ok) throw new Error(); return r.blob(); })
-        .then(blob => {
-          const img = new Image();
-          img.onload = () => {
-            canvas.width = img.width; canvas.height = img.height;
-            canvas.getContext('2d').drawImage(img, 0, 0);
-            // Zapisz dataURL żeby doPrint mógł użyć natychmiast
-            window._printQrDataUrl = canvas.toDataURL('image/png');
-            URL.revokeObjectURL(img.src);
-          };
-          img.src = URL.createObjectURL(blob);
-        }).catch(() => { window._printQrDataUrl = null; });
-    }, 80);
-  } else {
-    window._printQrDataUrl = null;
-  }
-}
+// (Funkcja render() została scalona z tą w render.js – zobacz tam.
+//  Wcześniej druga, niezależna definicja render() w tym pliku nadpisywała
+//  render.js i przez to autouzupełnianie fraz nigdy się nie podpinało.)
 
 
 // ══════════════════════════════════════════════════════════════

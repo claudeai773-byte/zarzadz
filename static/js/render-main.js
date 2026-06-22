@@ -2,6 +2,7 @@
 // ══════════════════════════════════════════════════════════════
 function renderContent() {
   if (state.screen === 'config') return renderConfig();
+  if (state.screen === 'restoring') return renderRestoring();
   if (state.screen === 'login')  return renderLogin();
 
   const tabContent = {

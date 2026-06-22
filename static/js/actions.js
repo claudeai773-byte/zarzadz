@@ -6,8 +6,10 @@ async function doLogin(username, password) {
     const user = await post('/api/login', {username, password});
     stopWHRefresh();
     // Zapisz token sesji do globalnej zmiennej (używanej przez HEADERS w config.js)
+    // oraz do localStorage, żeby sesja przeżyła odświeżenie strony.
     if (user.token) {
       SESSION_TOKEN = user.token;
+      localStorage.setItem('produkcja_session_token', SESSION_TOKEN);
     }
     // Pobierz uprawnienia użytkownika
     let userTabs = [];
@@ -23,6 +25,34 @@ async function doLogin(username, password) {
     if (typeof wsInit === 'function') wsInit();
   } catch(e) {
     setState({loading:false, error:'Nieprawidłowy login lub hasło'});
+  }
+}
+
+// ── Przywracanie sesji po odświeżeniu strony ──────────────────────────────────
+// Wołane raz przy starcie aplikacji (init.js), TYLKO gdy w localStorage jest
+// zapisany token sesji (patrz config.js). Sprawdza u serwera, czy token jest
+// wciąż aktywny – jeśli tak, loguje "po cichu" bez ekranu logowania; jeśli
+// token wygasł/jest nieważny, czyści go i pokazuje normalny ekran logowania.
+async function attemptSessionRestore() {
+  if (!SESSION_TOKEN) { setState({screen:'login'}); return; }
+  try {
+    const user = await get('/api/me');
+    stopWHRefresh();
+    let userTabs = [];
+    try {
+      const perm = await get('/api/users/' + user.id + '/permissions');
+      userTabs = perm.tabs || [];
+    } catch(e) { /* brak uprawnień = domyślne */ }
+    const tab = defaultTabWithPerms(user.role, userTabs);
+    setState({user, screen:'main', loading:false, activeTab:tab, currentUserTabs: userTabs});
+    loadTabData(tab);
+    startMagazynAutoRefresh();
+    if (typeof wsInit === 'function') wsInit();
+  } catch(e) {
+    // Token nieważny/wygasły (lub serwer nieosiągalny) – wyczyść i pokaż login
+    SESSION_TOKEN = '';
+    localStorage.removeItem('produkcja_session_token');
+    setState({screen:'login'});
   }
 }
 
@@ -742,6 +772,7 @@ function logout() {
   if (SESSION_TOKEN) {
     post('/api/logout', {}).catch(() => {});
     SESSION_TOKEN = '';
+    localStorage.removeItem('produkcja_session_token');
   }
   setState({user:null, screen:'login', aktywnesje:[], operacje:[], timers:{}});
 }

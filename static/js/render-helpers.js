@@ -69,6 +69,15 @@ function saveConfig() {
 // ══════════════════════════════════════════════════════════════
 //  SCREEN: LOGIN
 // ══════════════════════════════════════════════════════════════
+// Krótki ekran widoczny tylko na chwilę przy starcie, gdy aplikacja sprawdza
+// zapisany token sesji (po odświeżeniu strony), zamiast od razu pokazywać login.
+function renderRestoring() {
+  return `
+  <div style="padding:16px;max-width:500px;margin:80px auto;text-align:center;color:var(--dim)">
+    ⏳ Przywracanie sesji...
+  </div>`;
+}
+
 function renderLogin() {
   const wi = state.warehouseInfo;
   return `

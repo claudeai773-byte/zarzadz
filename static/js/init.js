@@ -89,6 +89,10 @@ setInterval(() => {
 
 render();
 
+// Jeśli ekran startowy to 'restoring' (zapisany token sesji czeka na
+// weryfikację), spróbuj przywrócić sesję bez pokazywania ekranu logowania.
+if (state.screen === 'restoring') attemptSessionRestore();
+
 // ── ESC zamyka otwarte okienka (modale) ───────────────────────
 document.addEventListener('keydown', function(e) {
   if (e.key !== 'Escape') return;

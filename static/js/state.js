@@ -1,7 +1,7 @@
 //  STATE
 // ══════════════════════════════════════════════════════════════
 let state = {
-  screen: SERVER_URL ? 'login' : 'config',
+  screen: SERVER_URL ? (SESSION_TOKEN ? 'restoring' : 'login') : 'config',
   user: null,
   activeTab: 'praca',
   loading: false,

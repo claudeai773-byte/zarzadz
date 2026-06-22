@@ -139,8 +139,15 @@ _NO_BACKUP_PATHS = {"/api/login", "/api/logout", "/health",
                     "/api/import-technologia/parse",   # tylko parsuje, nie zapisuje
                     "/api/powiadomienia"}               # odczyty powiadomień
 
+# Czas ostatniej JAKIEJKOLWIEK aktywności API – używany przez backup, żeby nie
+# odpalać się w trakcie gdy ktoś coś właśnie robi (patrz _schedule_backup niżej).
+_last_activity_ts = time.time()
+
 async def _auto_backup_middleware(request: Request, call_next):
+    global _last_activity_ts
+    _last_activity_ts = time.time()
     response = await call_next(request)
+    _last_activity_ts = time.time()
     if (request.method in _WRITE_METHODS
             and response.status_code < 400
             and not any(request.url.path.startswith(p) for p in _NO_BACKUP_PATHS)):
@@ -336,6 +343,30 @@ def logout(x_session_token: Optional[str] = Header(None, alias="x-session-token"
     if x_session_token:
         revoke_session(x_session_token)
     return {"ok": True}
+
+@app.get("/api/me", dependencies=[Depends(verify_key)])
+def me(session: dict = Depends(get_session_user)):
+    """
+    Weryfikuje zapisany token sesji (np. po odświeżeniu strony) i zwraca dane
+    użytkownika – odpowiednik tego co zwraca /api/login, ale bez hasła.
+    Front-end wywołuje to przy starcie, jeśli ma zapisany token w localStorage,
+    żeby przywrócić sesję bez konieczności ponownego logowania.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, username, full_name, role, COALESCE(is_kj,0) as is_kj "
+            "FROM users WHERE id=?",
+            (session["user_id"],)
+        ).fetchone()
+        if not row:
+            raise HTTPException(401, "Użytkownik nie istnieje")
+        return {
+            "id": row["id"],
+            "username": row["username"],
+            "full_name": row["full_name"],
+            "role": row["role"],
+            "is_kj": row["is_kj"],
+        }
 
 @app.get("/api/status/produkcja", dependencies=[Depends(verify_key)])
 def status_produkcja():
@@ -5116,34 +5147,53 @@ def _db_backup_to_json(path: str = None) -> dict:
 # zapis pliku JSON + PATCH do GitHub Gist. Przy kilku akcjach pod rząd (np. kilku
 # pracowników klikających "stop" w tym samym czasie) to ryzyko kolizji zapisu do
 # tego samego pliku i zalewania GitHub API żądaniami.
-# _schedule_backup() ogranicza to do max. jednego faktycznego backupu na
-# _BACKUP_MIN_INTERVAL sekund i gwarantuje, że ostatnia zmiana i tak zostanie
-# zapisana (trailing call) bez nawarstwiania wątków.
-_BACKUP_MIN_INTERVAL = 5.0   # sekundy
+#
+# Backup odpala się teraz dopiero gdy zapanuje "cisza" (_BACKUP_IDLE_WAIT sekund
+# bez żadnej nowej operacji zapisu) – czyli wtedy, gdy nikt aktualnie nic nie
+# dodaje/edytuje. Każdy kolejny zapis w tym czasie odracza backup od nowa
+# (debounce). Żeby dane nie czekały w nieskończoność, jeśli aktywność trwa bez
+# przerwy, _BACKUP_MAX_WAIT wymusza backup nawet w trakcie ruchu.
+_BACKUP_IDLE_WAIT = 4.0      # sekund ciszy wymaganych przed odpaleniem backupu
+_BACKUP_MAX_WAIT  = 90.0     # maks. czas odkładania backupu przy ciągłej aktywności
 _backup_lock = _threading.Lock()
-_backup_last_run = 0.0
-_backup_pending = False
+_backup_timer = None          # aktywny odroczony Timer (czeka na ciszę)
+_backup_first_pending_ts = None
+
+def _run_backup_now():
+    global _backup_timer, _backup_first_pending_ts
+    with _backup_lock:
+        _backup_timer = None
+        _backup_first_pending_ts = None
+    try:
+        _db_backup_to_json()
+    except Exception as e:
+        logger.error(f"Błąd backupu: {e}")
 
 def _schedule_backup():
-    global _backup_pending
+    global _backup_timer, _backup_first_pending_ts
     with _backup_lock:
-        if _backup_pending:
-            return  # backup już zaplanowany – kolejne wywołanie nic nie robi
-        _backup_pending = True
+        now = time.time()
+        if _backup_first_pending_ts is None:
+            _backup_first_pending_ts = now
 
-    def _runner():
-        global _backup_last_run, _backup_pending
-        wait = _BACKUP_MIN_INTERVAL - (time.time() - _backup_last_run)
-        if wait > 0:
-            time.sleep(wait)
-        try:
-            _db_backup_to_json()
-        finally:
-            _backup_last_run = time.time()
-            with _backup_lock:
-                _backup_pending = False
+        # Aktywność trwa już zbyt długo bez backupu – wymuś go teraz,
+        # zamiast czekać dalej na ciszę, która może nie nadejść.
+        if now - _backup_first_pending_ts >= _BACKUP_MAX_WAIT:
+            if _backup_timer:
+                _backup_timer.cancel()
+            _backup_timer = None
+            _backup_first_pending_ts = None
+            _threading.Thread(target=_run_backup_now, daemon=True).start()
+            return
 
-    _threading.Thread(target=_runner, daemon=True).start()
+        # W przeciwnym razie – zresetuj odroczenie: backup odpali się dopiero
+        # gdy minie _BACKUP_IDLE_WAIT sekund BEZ kolejnego zapisu (czyli wtedy,
+        # gdy nikt akurat nic nie robi).
+        if _backup_timer:
+            _backup_timer.cancel()
+        _backup_timer = _threading.Timer(_BACKUP_IDLE_WAIT, _run_backup_now)
+        _backup_timer.daemon = True
+        _backup_timer.start()
 
 
 def _db_restore_from_json(path: str = None) -> bool:
@@ -5197,10 +5247,17 @@ def _auto_backup_loop():
         try:
             db_mtime  = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0
             bak_mtime = os.path.getmtime(BACKUP_PATH) if os.path.exists(BACKUP_PATH) else 0
-            if db_mtime > bak_mtime:
-                _db_backup_to_json()
-            elif db_mtime > 0 and (_time.time() - bak_mtime > 3600):
-                _db_backup_to_json()
+            needs_backup = (db_mtime > bak_mtime) or (db_mtime > 0 and (_time.time() - bak_mtime > 3600))
+            if needs_backup:
+                idle_for = _time.time() - _last_activity_ts
+                if idle_for >= 3.0:
+                    _db_backup_to_json()
+                else:
+                    # Ktoś właśnie korzysta z aplikacji – odczekaj krótko i sprawdź
+                    # ponownie, zamiast czekać pełne BACKUP_INTERVAL lub odpalać
+                    # backup w trakcie aktywności.
+                    _time.sleep(3.0)
+                    continue
         except Exception as e:
             logger.error(f"auto-backup loop error: {e}")
         _time.sleep(BACKUP_INTERVAL)

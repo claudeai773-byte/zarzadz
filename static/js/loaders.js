@@ -166,19 +166,27 @@ async function loadRezerwacjeZSerwera() {
 }
 
 // ── Ręczny CRUD materiałów ───────────────────────────────────────────────────
+function matFormJmChange() {
+  const jm = document.getElementById('mat-f-jm')?.value || 'kg';
+  const wymRow = document.getElementById('mat-f-wymiary-row');
+  if (wymRow) wymRow.style.display = (jm === 'kg' || jm === 't') ? 'grid' : 'none';
+}
+
 function otworzFormularzDodajMaterial() {
-  // Czyść pola
-  ['mat-f-indeks','mat-f-kod','mat-f-opis','mat-f-kp'].forEach(id => {
+  ['mat-f-indeks','mat-f-kod','mat-f-opis'].forEach(id => {
     const el = document.getElementById(id); if(el) el.value = '';
   });
   const dysp = document.getElementById('mat-f-dysp'); if(dysp) dysp.value = '0';
   const stan = document.getElementById('mat-f-stan'); if(stan) stan.value = '0';
   const jm = document.getElementById('mat-f-jm'); if(jm) jm.value = 'kg';
+  ['mat-f-szerokosc','mat-f-dlugosc','mat-f-ciezar'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value = '0';
+  });
   const eid = document.getElementById('mat-f-edit-id'); if(eid) eid.value = '';
   const title = document.getElementById('mag-dodaj-title'); if(title) title.textContent = '➕ Dodaj nowy materiał';
   const btn = document.getElementById('mat-f-save-btn'); if(btn) btn.textContent = '✅ Dodaj materiał';
+  matFormJmChange();
   showPanel('mag-dodaj-panel');
-  // Scroll do formularza
   setTimeout(() => document.getElementById('mag-dodaj-panel')?.scrollIntoView({behavior:'smooth', block:'start'}), 50);
 }
 function otworzEdycjeMaterialu(mat) {
@@ -188,11 +196,14 @@ function otworzEdycjeMaterialu(mat) {
   if(f('mat-f-opis'))   f('mat-f-opis').value   = mat.opis || '';
   if(f('mat-f-dysp'))   f('mat-f-dysp').value   = mat.do_dyspozycji ?? 0;
   if(f('mat-f-stan'))   f('mat-f-stan').value   = mat.stan_rzeczywisty ?? 0;
-  if(f('mat-f-kp'))     f('mat-f-kp').value     = mat.kod_paskowy || '';
   if(f('mat-f-jm'))     f('mat-f-jm').value     = mat.jm || 'kg';
+  if(f('mat-f-szerokosc')) f('mat-f-szerokosc').value = mat.szerokosc ?? 0;
+  if(f('mat-f-dlugosc'))   f('mat-f-dlugosc').value   = mat.dlugosc ?? 0;
+  if(f('mat-f-ciezar'))    f('mat-f-ciezar').value    = mat.ciezar_jedn ?? 0;
   if(f('mat-f-edit-id')) f('mat-f-edit-id').value = mat.id;
   const title = document.getElementById('mag-dodaj-title'); if(title) title.textContent = '✏️ Edytuj materiał';
   const btn = document.getElementById('mat-f-save-btn'); if(btn) btn.textContent = '💾 Zapisz zmiany';
+  matFormJmChange();
   showPanel('mag-dodaj-panel');
   setTimeout(() => document.getElementById('mag-dodaj-panel')?.scrollIntoView({behavior:'smooth', block:'start'}), 50);
 }
@@ -205,15 +216,18 @@ async function zapiszMaterial() {
   const opis   = f('mat-f-opis');
   const mid    = f('mat-f-edit-id');
   if (!indeks) { alert('Indeks jest wymagany'); return; }
-  if (!opis)   { alert('Opis artykułu jest wymagany'); return; }
+  if (!opis)   { alert('Nazwa artykułu jest wymagana'); return; }
+  const jm = document.getElementById('mat-f-jm')?.value || 'kg';
   const body = {
     indeks,
     opis,
     kod:             f('mat-f-kod') || '',
-    jm:              document.getElementById('mat-f-jm')?.value || 'kg',
+    jm,
     do_dyspozycji:   parseFloat(document.getElementById('mat-f-dysp')?.value) || 0,
     stan_rzeczywisty:parseFloat(document.getElementById('mat-f-stan')?.value) || 0,
-    kod_paskowy:     f('mat-f-kp') || '',
+    szerokosc:       parseFloat(document.getElementById('mat-f-szerokosc')?.value) || 0,
+    dlugosc:         parseFloat(document.getElementById('mat-f-dlugosc')?.value) || 0,
+    ciezar_jedn:     parseFloat(document.getElementById('mat-f-ciezar')?.value) || 0,
   };
   const btn = document.getElementById('mat-f-save-btn');
   if(btn) { btn.disabled = true; btn.textContent = '⏳ Zapisuję...'; }

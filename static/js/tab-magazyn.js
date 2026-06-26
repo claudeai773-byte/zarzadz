@@ -128,7 +128,7 @@ function renderMagazynMaterialy() {
   const cnt = state.magazynMatCount;
 
   // Formularz dodawania – zawsze w DOM, pokazywany przez showPanel/hidePanel
-  const jmOpts = ['kg','szt','mb','m2','m3','t','l'].map(u => `<option value="${u}">${u}</option>`).join('');
+  const jmOpts = ['kg','szt','mb','m2','m3','t','l','kpl'].map(u => `<option value="${u}">${u}</option>`).join('');
 
   let html = `
   <div id="mag-dodaj-panel" style="display:none;margin-bottom:14px">
@@ -137,30 +137,30 @@ function renderMagazynMaterialy() {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Indeks <span style="color:var(--red)">*</span></div>
-          <input id="mat-f-indeks" placeholder="np. P19518" autocomplete="off"
+          <input id="mat-f-indeks" placeholder="np. M04497" autocomplete="off"
             style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
         </div>
         <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Kod (opcjonalny)</div>
-          <input id="mat-f-kod" placeholder="np. 78111" autocomplete="off"
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Kod materiału (opcjonalny)</div>
+          <input id="mat-f-kod" placeholder="np. 0311" autocomplete="off"
             style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
         </div>
       </div>
       <div style="margin-bottom:8px">
-        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Opis artykułu <span style="color:var(--red)">*</span></div>
-        <input id="mat-f-opis" placeholder="np. Ceownik 100x50x6 S355" autocomplete="off"
+        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Nazwa artykułu <span style="color:var(--red)">*</span></div>
+        <input id="mat-f-opis" placeholder="np. BLACHA 1 GAT.DC.01." autocomplete="off"
           style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
         <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">J.m.</div>
-          <select id="mat-f-jm"
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">J.M.</div>
+          <select id="mat-f-jm" onchange="matFormJmChange()"
             style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px">
             ${jmOpts}
           </select>
         </div>
         <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Do dyspozycji</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Stan do dyspozycji</div>
           <input id="mat-f-dysp" type="number" step="0.001" min="0" value="0" autocomplete="off"
             style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
         </div>
@@ -170,10 +170,22 @@ function renderMagazynMaterialy() {
             style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
         </div>
       </div>
-      <div style="margin-bottom:10px">
-        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Kod paskowy (opcjonalny)</div>
-        <input id="mat-f-kp" placeholder="EAN / kod" autocomplete="off"
-          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+      <div id="mat-f-wymiary-row" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Szerokość (mm)</div>
+          <input id="mat-f-szerokosc" type="number" step="0.1" min="0" value="0" autocomplete="off"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Długość (mm)</div>
+          <input id="mat-f-dlugosc" type="number" step="0.1" min="0" value="0" autocomplete="off"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Ciężar jedn. (kg)</div>
+          <input id="mat-f-ciezar" type="number" step="0.001" min="0" value="0" autocomplete="off"
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
+        </div>
       </div>
       <input type="hidden" id="mat-f-edit-id" value="">
       <div style="display:flex;gap:8px">
@@ -187,8 +199,9 @@ function renderMagazynMaterialy() {
   <div class="card" style="margin-bottom:14px">
     <div style="font-size:13px;font-weight:700;margin-bottom:12px">📂 Import bazy materiałów (.xlsx)</div>
     <div style="font-size:12px;color:var(--dim);margin-bottom:10px;line-height:1.5">
-      Wczytaj plik Excel z bazą materiałów. Wymagane kolumny: <b>Indeks</b>, <b>Opis artykułu</b>.<br>
-      Opcjonalne: Jm, Do dyspozycji, Stan rzeczywisty, Rezerwacja, Kod paskowy.
+      Wczytaj plik Excel z bazą materiałów. Obsługuje format xlsm z systemu magazynowego.<br>
+      Wymagane kolumny: <b>Indeks</b>, <b>Nazwa artykułu (materiału)</b>.<br>
+      Opcjonalne: J.M., Stan do dyspozycji, Stan rzeczywisty, Rezerwacje, Kod materiału, Szerokość, Długość, Ciężar jedn.
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <input type="file" id="mag-xlsx-file" accept=".xlsx,.xls"
@@ -222,12 +235,21 @@ function renderMagazynMaterialy() {
       const rez = (state.magazynRezerwacje||[]).filter(r => r.material_id === m.id && r.status === 'aktywna');
       const rezSum = rez.reduce((a,r)=>a+r.ilosc, 0);
       const wolne = dostepne - rezSum;
+      // Buduj info o wymiarach dla materiałów kg
+      let wymInfo = '';
+      if (m.jm === 'kg') {
+        const parts = [];
+        if (m.szerokosc > 0) parts.push(`szer: ${m.szerokosc} mm`);
+        if (m.dlugosc > 0) parts.push(`dł: ${m.dlugosc} mm`);
+        if (m.ciezar_jedn > 0) parts.push(`cięż: ${m.ciezar_jedn} kg/m`);
+        if (parts.length) wymInfo = ` · <span style="color:var(--blue);font-size:10px">${parts.join(' · ')}</span>`;
+      }
       html += `
       <div class="card" style="padding:10px;margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;font-size:13px">${m.opis}</div>
-            <div style="font-size:11px;color:var(--dim);margin-top:2px">${m.indeks||''}${m.gatunek_stali?' · <span style="color:var(--accent)">'+m.gatunek_stali+'</span>':''}${m.wymiary_str?' · '+m.wymiary_str:''}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">${m.indeks||''}${m.kod?' · <span style="color:var(--dim)">'+m.kod+'</span>':''}${wymInfo}</div>
           </div>
           <div style="text-align:right;margin-left:8px;white-space:nowrap">
             <div style="font-size:13px;font-weight:700;color:${dostepne>0?'var(--green)':'var(--red)'}">${dostepne.toFixed(dostepne%1===0?0:3)} ${m.jm}</div>

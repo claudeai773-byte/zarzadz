@@ -204,7 +204,7 @@ function renderMagazynMaterialy() {
       Opcjonalne: J.M., Stan do dyspozycji, Stan rzeczywisty, Rezerwacje, Kod materiału, Szerokość, Długość, Ciężar jedn.
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <input type="file" id="mag-xlsx-file" accept=".xlsx,.xls"
+      <input type="file" id="mag-xlsx-file" accept=".xlsx,.xls,.xlsm"
         style="font-size:12px;color:var(--text);background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:6px">
       <button class="btn btn-accent" onclick="importMaterialyXlsx()">📥 Importuj</button>
     </div>

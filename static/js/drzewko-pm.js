@@ -187,27 +187,91 @@ function renderMaterialZleceniaModal() {
   const m = state.pmModal;
   if (!m || m.typ !== 'material') return '';
   const it = m.item || {};
+  const jmVal = it.jednostka || 'kg';
+  // Szukaj danych materiału z bazy (jeśli wczytano)
+  const matBaza = (state.magazynMatResults || []).find(x => x.indeks === it.indeks) || null;
+  const matJm = matBaza?.jm || jmVal;
+  const isSzt = matJm === 'szt' || matJm === 'kpl';
+  const isKg  = matJm === 'kg' || matJm === 't';
+
+  // Podpowiedź wymiarów z bazy materiałów
+  let wymPodpowiedz = '';
+  if (isKg && matBaza) {
+    const parts = [];
+    if (matBaza.szerokosc > 0) parts.push(`szer: ${matBaza.szerokosc} mm`);
+    if (matBaza.dlugosc > 0) parts.push(`dł: ${matBaza.dlugosc} mm`);
+    if (matBaza.ciezar_jedn > 0) parts.push(`cięż. jedn.: ${matBaza.ciezar_jedn} kg/m`);
+    if (parts.length) wymPodpowiedz = `<div style="font-size:10px;color:var(--blue);margin-top:4px">📐 Dane z bazy: ${parts.join(' · ')}</div>`;
+  }
+
+  const jmOpts = ['kg','szt','m','m²','m³','kpl','l','t'].map(j =>
+    `<option value="${j}" ${jmVal===j?'selected':''}>${j}</option>`).join('');
+
   return `
   <div class="modal-overlay" onclick="if(event.target===this)setState({pmModal:null})">
-    <div class="modal" style="max-width:420px">
+    <div class="modal" style="max-width:440px">
       <button class="modal-close" onclick="setState({pmModal:null})">×</button>
       <h3>${it.id ? '✏ Edytuj materiał M' : '+ Dodaj materiał M'}</h3>
       <div class="field"><label>Indeks materiału</label>
-        <input id="pm-m-indeks" type="text" value="${it.indeks||''}" placeholder="np. 78111">
+        <input id="pm-m-indeks" type="text" value="${it.indeks||''}" placeholder="np. M04497"
+          oninput="pmMIndeksChange()" autocomplete="off">
       </div>
-      <div class="field"><label>Opis</label>
-        <input id="pm-m-opis" type="text" value="${it.opis||''}" placeholder="Blacha 40x405x4390">
+      <div class="field"><label>Opis / nazwa</label>
+        <input id="pm-m-opis" type="text" value="${it.opis||''}" placeholder="np. BLACHA 1 GAT.DC.01." autocomplete="off">
       </div>
-      <div style="display:flex;gap:10px">
-        <div class="field" style="flex:1"><label>Ilość</label>
-          <input id="pm-m-ilosc" type="number" step="0.01" min="0.01" value="${it.ilosc||1}">
+      <div class="field"><label>Jednostka (J.M.)</label>
+        <select id="pm-m-jm" onchange="pmMJmChange()"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:15px">
+          ${jmOpts}
+        </select>
+      </div>
+
+      <!-- Tryb: szt / kpl – tylko ilość -->
+      <div id="pm-m-szt-row" style="${isSzt?'':'display:none'}">
+        <div class="field">
+          <label>Ilość (szt)</label>
+          <input id="pm-m-ilosc-szt" type="number" step="1" min="1"
+            value="${isSzt ? Math.round(it.ilosc||1) : 1}"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:20px;font-weight:700;box-sizing:border-box;text-align:center">
         </div>
-        <div class="field" style="flex:1"><label>Jednostka</label>
-          <select id="pm-m-jm" style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:15px">
-            ${['kg','szt','m','m²','m³','kpl','l'].map(j => `<option value="${j}" ${(it.jednostka||'kg')===j?'selected':''}>${j}</option>`).join('')}
-          </select>
+      </div>
+
+      <!-- Tryb: kg / t – długość + opcjonalnie szerokość → oblicza wagę -->
+      <div id="pm-m-kg-row" style="${isKg?'':'display:none'}">
+        <div style="font-size:11px;color:var(--dim);margin-bottom:8px">Wpisz wymiary do obliczenia masy, lub wpisz masę bezpośrednio:</div>
+        ${wymPodpowiedz}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+          <div class="field" style="margin-bottom:0">
+            <label>Długość (mm)</label>
+            <input id="pm-m-dlugosc" type="number" step="1" min="0" value="${it.dlugosc||''}"
+              placeholder="np. 6000" oninput="pmMObliczKg()"
+              style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:15px;box-sizing:border-box">
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label>Szerokość (mm) <span style="color:var(--dim);font-size:10px">opcja</span></label>
+            <input id="pm-m-szerokosc" type="number" step="1" min="0" value="${it.szerokosc||''}"
+              placeholder="np. 200" oninput="pmMObliczKg()"
+              style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:15px;box-sizing:border-box">
+          </div>
+        </div>
+        <div class="field">
+          <label>Masa (kg) – wynik lub wpis ręczny</label>
+          <input id="pm-m-ilosc-kg" type="number" step="0.001" min="0.001"
+            value="${isKg ? (it.ilosc||1) : 1}"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:20px;font-weight:700;box-sizing:border-box;text-align:center">
+          <div id="pm-m-kg-hint" style="font-size:10px;color:var(--dim);margin-top:4px"></div>
         </div>
       </div>
+
+      <!-- Tryb: inne jednostki -->
+      <div id="pm-m-inne-row" style="${(!isSzt && !isKg)?'':'display:none'}">
+        <div class="field"><label>Ilość</label>
+          <input id="pm-m-ilosc" type="number" step="0.01" min="0.01"
+            value="${(!isSzt && !isKg) ? (it.ilosc||1) : 1}"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:20px;font-weight:700;box-sizing:border-box;text-align:center">
+        </div>
+      </div>
+
       <div class="field"><label>Uwagi</label>
         <input id="pm-m-uwagi" type="text" value="${it.uwagi||''}" placeholder="Opcjonalne uwagi">
       </div>
@@ -216,14 +280,75 @@ function renderMaterialZleceniaModal() {
   </div>`;
 }
 
+function pmMJmChange() {
+  const jm = document.getElementById('pm-m-jm')?.value || 'kg';
+  const isSzt = jm === 'szt' || jm === 'kpl';
+  const isKg  = jm === 'kg'  || jm === 't';
+  const show = (id, v) => { const el = document.getElementById(id); if(el) el.style.display = v?'':'none'; };
+  show('pm-m-szt-row', isSzt);
+  show('pm-m-kg-row', isKg);
+  show('pm-m-inne-row', !isSzt && !isKg);
+}
+
+function pmMIndeksChange() {
+  const indeks = document.getElementById('pm-m-indeks')?.value?.trim();
+  if (!indeks) return;
+  // Uzupełnij opis jeśli materiał jest w bazie i pole opis jest puste
+  const mat = (state.magazynMatResults || []).find(x => x.indeks === indeks);
+  if (mat) {
+    const opis = document.getElementById('pm-m-opis');
+    if (opis && !opis.value) opis.value = mat.opis;
+    // Ustaw właściwą JM
+    const jmEl = document.getElementById('pm-m-jm');
+    if (jmEl && mat.jm) { jmEl.value = mat.jm; pmMJmChange(); }
+    // Zapisz dane materiału w window dla obliczenia kg
+    window._pmMatBaza = mat;
+  }
+}
+
+function pmMObliczKg() {
+  const mat = window._pmMatBaza;
+  const dlugosc = parseFloat(document.getElementById('pm-m-dlugosc')?.value) || 0;
+  const szerokosc = parseFloat(document.getElementById('pm-m-szerokosc')?.value) || 0;
+  if (!dlugosc) return;
+  let masa = 0;
+  let hint = '';
+  if (mat && mat.ciezar_jedn > 0) {
+    // ciezar_jedn w kg/m – dlugosc w mm
+    masa = (dlugosc / 1000) * mat.ciezar_jedn;
+    hint = `${dlugosc} mm × ${mat.ciezar_jedn} kg/m = ${masa.toFixed(3)} kg`;
+    // Jeśli podano też szerokość i baza ma tylko ciężar/mb – można pominąć szer
+  } else if (mat && mat.szerokosc > 0 && mat.dlugosc > 0) {
+    // Brak ciężaru jedn – spróbuj z gęstości stali ~7.85 kg/dm³
+    hint = 'Brak ciężaru jedn. – wpisz masę ręcznie';
+  }
+  if (masa > 0) {
+    const el = document.getElementById('pm-m-ilosc-kg');
+    if (el) el.value = masa.toFixed(3);
+    const hintEl = document.getElementById('pm-m-kg-hint');
+    if (hintEl) hintEl.textContent = hint;
+  }
+}
+
 async function saveMaterialZlecenia(zid, mid) {
   const indeks = document.getElementById('pm-m-indeks')?.value?.trim();
   const opis   = document.getElementById('pm-m-opis')?.value?.trim();
-  const ilosc  = parseFloat(document.getElementById('pm-m-ilosc')?.value) || 1;
   const jm     = document.getElementById('pm-m-jm')?.value || 'kg';
   const uwagi  = document.getElementById('pm-m-uwagi')?.value?.trim() || '';
   if (!indeks) { alert('Wpisz indeks materiału'); return; }
   if (!opis)   { alert('Wpisz opis'); return; }
+
+  let ilosc = 1;
+  const isSzt = jm === 'szt' || jm === 'kpl';
+  const isKg  = jm === 'kg'  || jm === 't';
+  if (isSzt) {
+    ilosc = parseInt(document.getElementById('pm-m-ilosc-szt')?.value) || 1;
+  } else if (isKg) {
+    ilosc = parseFloat(document.getElementById('pm-m-ilosc-kg')?.value) || 1;
+  } else {
+    ilosc = parseFloat(document.getElementById('pm-m-ilosc')?.value) || 1;
+  }
+
   try {
     if (mid) {
       await put(`/api/zlecenia/${zid}/materialy-zlecenia/${mid}`, { indeks, opis, ilosc, jednostka: jm, uwagi });
@@ -231,7 +356,6 @@ async function saveMaterialZlecenia(zid, mid) {
       await post(`/api/zlecenia/${zid}/materialy-zlecenia`, { indeks, opis, ilosc, jednostka: jm, uwagi });
     }
     setState({ pmModal: null });
-    // Jeśli modal podzlecenia był otwarty dla tego zid – odśwież go ORAZ drzewo zlecenia G
     const pdm = state.podZlecenieModal;
     if (pdm && !pdm.loading && pdm.zid === zid) {
       const gid = pdm.parentGid;

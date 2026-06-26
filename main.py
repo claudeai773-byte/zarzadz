@@ -139,15 +139,8 @@ _NO_BACKUP_PATHS = {"/api/login", "/api/logout", "/health",
                     "/api/import-technologia/parse",   # tylko parsuje, nie zapisuje
                     "/api/powiadomienia"}               # odczyty powiadomień
 
-# Czas ostatniej JAKIEJKOLWIEK aktywności API – używany przez backup, żeby nie
-# odpalać się w trakcie gdy ktoś coś właśnie robi (patrz _schedule_backup niżej).
-_last_activity_ts = time.time()
-
 async def _auto_backup_middleware(request: Request, call_next):
-    global _last_activity_ts
-    _last_activity_ts = time.time()
     response = await call_next(request)
-    _last_activity_ts = time.time()
     if (request.method in _WRITE_METHODS
             and response.status_code < 400
             and not any(request.url.path.startswith(p) for p in _NO_BACKUP_PATHS)):
@@ -343,30 +336,6 @@ def logout(x_session_token: Optional[str] = Header(None, alias="x-session-token"
     if x_session_token:
         revoke_session(x_session_token)
     return {"ok": True}
-
-@app.get("/api/me", dependencies=[Depends(verify_key)])
-def me(session: dict = Depends(get_session_user)):
-    """
-    Weryfikuje zapisany token sesji (np. po odświeżeniu strony) i zwraca dane
-    użytkownika – odpowiednik tego co zwraca /api/login, ale bez hasła.
-    Front-end wywołuje to przy starcie, jeśli ma zapisany token w localStorage,
-    żeby przywrócić sesję bez konieczności ponownego logowania.
-    """
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT id, username, full_name, role, COALESCE(is_kj,0) as is_kj "
-            "FROM users WHERE id=?",
-            (session["user_id"],)
-        ).fetchone()
-        if not row:
-            raise HTTPException(401, "Użytkownik nie istnieje")
-        return {
-            "id": row["id"],
-            "username": row["username"],
-            "full_name": row["full_name"],
-            "role": row["role"],
-            "is_kj": row["is_kj"],
-        }
 
 @app.get("/api/status/produkcja", dependencies=[Depends(verify_key)])
 def status_produkcja():
@@ -4659,7 +4628,16 @@ def init_db_on_start():
         stan_rzeczywisty REAL DEFAULT 0,
         rezerwacja REAL DEFAULT 0,
         kod_paskowy TEXT,
+        szerokosc REAL DEFAULT 0,
+        dlugosc REAL DEFAULT 0,
+        ciezar_jedn REAL DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+    # Migracja: dodaj nowe kolumny jeśli nie istnieją
+    for _col, _def in [("szerokosc","REAL DEFAULT 0"),("dlugosc","REAL DEFAULT 0"),("ciezar_jedn","REAL DEFAULT 0")]:
+        try:
+            c.execute(f"ALTER TABLE materialy ADD COLUMN {_col} {_def}")
+        except Exception:
+            pass
 
     # ➤ BOM – pozycje materiałowe zlecenia
     c.execute("""CREATE TABLE IF NOT EXISTS bom_pozycje (
@@ -5147,53 +5125,34 @@ def _db_backup_to_json(path: str = None) -> dict:
 # zapis pliku JSON + PATCH do GitHub Gist. Przy kilku akcjach pod rząd (np. kilku
 # pracowników klikających "stop" w tym samym czasie) to ryzyko kolizji zapisu do
 # tego samego pliku i zalewania GitHub API żądaniami.
-#
-# Backup odpala się teraz dopiero gdy zapanuje "cisza" (_BACKUP_IDLE_WAIT sekund
-# bez żadnej nowej operacji zapisu) – czyli wtedy, gdy nikt aktualnie nic nie
-# dodaje/edytuje. Każdy kolejny zapis w tym czasie odracza backup od nowa
-# (debounce). Żeby dane nie czekały w nieskończoność, jeśli aktywność trwa bez
-# przerwy, _BACKUP_MAX_WAIT wymusza backup nawet w trakcie ruchu.
-_BACKUP_IDLE_WAIT = 4.0      # sekund ciszy wymaganych przed odpaleniem backupu
-_BACKUP_MAX_WAIT  = 90.0     # maks. czas odkładania backupu przy ciągłej aktywności
+# _schedule_backup() ogranicza to do max. jednego faktycznego backupu na
+# _BACKUP_MIN_INTERVAL sekund i gwarantuje, że ostatnia zmiana i tak zostanie
+# zapisana (trailing call) bez nawarstwiania wątków.
+_BACKUP_MIN_INTERVAL = 5.0   # sekundy
 _backup_lock = _threading.Lock()
-_backup_timer = None          # aktywny odroczony Timer (czeka na ciszę)
-_backup_first_pending_ts = None
-
-def _run_backup_now():
-    global _backup_timer, _backup_first_pending_ts
-    with _backup_lock:
-        _backup_timer = None
-        _backup_first_pending_ts = None
-    try:
-        _db_backup_to_json()
-    except Exception as e:
-        logger.error(f"Błąd backupu: {e}")
+_backup_last_run = 0.0
+_backup_pending = False
 
 def _schedule_backup():
-    global _backup_timer, _backup_first_pending_ts
+    global _backup_pending
     with _backup_lock:
-        now = time.time()
-        if _backup_first_pending_ts is None:
-            _backup_first_pending_ts = now
+        if _backup_pending:
+            return  # backup już zaplanowany – kolejne wywołanie nic nie robi
+        _backup_pending = True
 
-        # Aktywność trwa już zbyt długo bez backupu – wymuś go teraz,
-        # zamiast czekać dalej na ciszę, która może nie nadejść.
-        if now - _backup_first_pending_ts >= _BACKUP_MAX_WAIT:
-            if _backup_timer:
-                _backup_timer.cancel()
-            _backup_timer = None
-            _backup_first_pending_ts = None
-            _threading.Thread(target=_run_backup_now, daemon=True).start()
-            return
+    def _runner():
+        global _backup_last_run, _backup_pending
+        wait = _BACKUP_MIN_INTERVAL - (time.time() - _backup_last_run)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            _db_backup_to_json()
+        finally:
+            _backup_last_run = time.time()
+            with _backup_lock:
+                _backup_pending = False
 
-        # W przeciwnym razie – zresetuj odroczenie: backup odpali się dopiero
-        # gdy minie _BACKUP_IDLE_WAIT sekund BEZ kolejnego zapisu (czyli wtedy,
-        # gdy nikt akurat nic nie robi).
-        if _backup_timer:
-            _backup_timer.cancel()
-        _backup_timer = _threading.Timer(_BACKUP_IDLE_WAIT, _run_backup_now)
-        _backup_timer.daemon = True
-        _backup_timer.start()
+    _threading.Thread(target=_runner, daemon=True).start()
 
 
 def _db_restore_from_json(path: str = None) -> bool:
@@ -5247,17 +5206,10 @@ def _auto_backup_loop():
         try:
             db_mtime  = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0
             bak_mtime = os.path.getmtime(BACKUP_PATH) if os.path.exists(BACKUP_PATH) else 0
-            needs_backup = (db_mtime > bak_mtime) or (db_mtime > 0 and (_time.time() - bak_mtime > 3600))
-            if needs_backup:
-                idle_for = _time.time() - _last_activity_ts
-                if idle_for >= 3.0:
-                    _db_backup_to_json()
-                else:
-                    # Ktoś właśnie korzysta z aplikacji – odczekaj krótko i sprawdź
-                    # ponownie, zamiast czekać pełne BACKUP_INTERVAL lub odpalać
-                    # backup w trakcie aktywności.
-                    _time.sleep(3.0)
-                    continue
+            if db_mtime > bak_mtime:
+                _db_backup_to_json()
+            elif db_mtime > 0 and (_time.time() - bak_mtime > 3600):
+                _db_backup_to_json()
         except Exception as e:
             logger.error(f"auto-backup loop error: {e}")
         _time.sleep(BACKUP_INTERVAL)
@@ -5422,18 +5374,40 @@ async def import_materialy(file: UploadFile = File(...)):
 
     # Znajdź nagłówki (pierwsza niepusta linia)
     header_row = [str(c).strip() if c else '' for c in rows[0]]
-    # Mapowanie kolumn (elastyczne)
+    # Mapowanie kolumn (elastyczne) – obsługuje format xlsm z systemu magazynowego
     col_map = {}
     for i, h in enumerate(header_row):
         hl = h.lower()
-        if 'kod' in hl and 'paskowy' not in hl: col_map.setdefault('kod', i)
-        elif 'indeks' in hl:  col_map['indeks'] = i
-        elif 'opis' in hl:    col_map['opis'] = i
-        elif 'jm' in hl:      col_map['jm'] = i
-        elif 'dyspozycji' in hl: col_map['do_dyspozycji'] = i
-        elif 'rzeczywisty' in hl: col_map['stan_rzeczywisty'] = i
-        elif 'rezerwacja' in hl: col_map['rezerwacja'] = i
-        elif 'paskowy' in hl: col_map['kod_paskowy'] = i
+        # Indeks materiału
+        if hl in ('indeks',) or (hl.startswith('indeks') and 'dostawcy' not in hl and 'indeks 2' not in hl and hl != 'indeks dostawcy'):
+            col_map.setdefault('indeks', i)
+        # Opis / nazwa artykułu
+        if 'nazwa artykułu' in hl or 'nazwa artyku' in hl or hl == 'opis':
+            col_map['opis'] = i
+        # Jednostka miary
+        if hl in ('j.m.', 'jm', 'jedn.', 'jednostka'):
+            col_map['jm'] = i
+        # Stan do dyspozycji
+        if 'dyspozycji' in hl or hl == 'do dyspozycji':
+            col_map['do_dyspozycji'] = i
+        # Stan rzeczywisty
+        if 'rzeczywisty' in hl:
+            col_map['stan_rzeczywisty'] = i
+        # Rezerwacje
+        if 'rezerwacj' in hl:
+            col_map['rezerwacja'] = i
+        # Kod materiału / kod paskowy
+        if hl in ('kod materiału', 'kod materialu'):
+            col_map.setdefault('kod', i)
+        if 'paskowy' in hl:
+            col_map['kod_paskowy'] = i
+        # Wymiary
+        if hl in ('szerokość', 'szerokosc'):
+            col_map['szerokosc'] = i
+        if hl in ('dlugość', 'dlugosc', 'długość'):
+            col_map['dlugosc'] = i
+        if 'ciężar' in hl or 'ciezar' in hl:
+            col_map['ciezar_jedn'] = i
 
     required = {'indeks', 'opis'}
     missing = required - set(col_map.keys())
@@ -5457,21 +5431,30 @@ async def import_materialy(file: UploadFile = File(...)):
             if not indeks or not opis:
                 skipped += 1
                 continue
+            # Pomiń fantomy i puste wpisy
+            if str(opis).strip() in (',,,', '', '-'):
+                skipped += 1
+                continue
             kod = cell(row, 'kod')
-            jm = cell(row, 'jm') or 'kg'
+            jm = str(cell(row, 'jm') or 'kg').strip()
             do_dysp = float(cell(row, 'do_dyspozycji') or 0)
             stan = float(cell(row, 'stan_rzeczywisty') or 0)
             rez = float(cell(row, 'rezerwacja') or 0)
             kp = cell(row, 'kod_paskowy')
             if kp: kp = str(int(float(kp))) if isinstance(kp, float) else str(kp)
+            szerokosc = float(cell(row, 'szerokosc') or 0)
+            dlugosc = float(cell(row, 'dlugosc') or 0)
+            ciezar_jedn = float(cell(row, 'ciezar_jedn') or 0)
             conn.execute("""
-                INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, szerokosc, dlugosc, ciezar_jedn, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(indeks) DO UPDATE SET
                   kod=excluded.kod, opis=excluded.opis, jm=excluded.jm,
                   do_dyspozycji=excluded.do_dyspozycji, stan_rzeczywisty=excluded.stan_rzeczywisty,
-                  rezerwacja=excluded.rezerwacja, kod_paskowy=excluded.kod_paskowy, updated_at=excluded.updated_at
-            """, (kod, indeks, opis, jm, do_dysp, stan, rez, kp, now))
+                  rezerwacja=excluded.rezerwacja, kod_paskowy=excluded.kod_paskowy,
+                  szerokosc=excluded.szerokosc, dlugosc=excluded.dlugosc,
+                  ciezar_jedn=excluded.ciezar_jedn, updated_at=excluded.updated_at
+            """, (kod, indeks, opis, jm, do_dysp, stan, rez, kp, szerokosc, dlugosc, ciezar_jedn, now))
             imported += 1
     return {"ok": True, "imported": imported, "skipped": skipped}
 
@@ -5481,14 +5464,16 @@ def get_materialy(q: str = "", limit: int = 50):
         if q:
             pattern = f"%{q}%"
             rows = conn.execute("""
-                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy
+                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy,
+                       COALESCE(szerokosc,0) as szerokosc, COALESCE(dlugosc,0) as dlugosc, COALESCE(ciezar_jedn,0) as ciezar_jedn
                 FROM materialy
                 WHERE opis LIKE ? OR indeks LIKE ? OR kod LIKE ?
                 ORDER BY opis LIMIT ?
             """, (pattern, pattern, pattern, limit)).fetchall()
         else:
             rows = conn.execute("""
-                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy
+                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy,
+                       COALESCE(szerokosc,0) as szerokosc, COALESCE(dlugosc,0) as dlugosc, COALESCE(ciezar_jedn,0) as ciezar_jedn
                 FROM materialy ORDER BY opis LIMIT ?
             """, (limit,)).fetchall()
         return [dict(r) for r in rows]
@@ -5509,6 +5494,9 @@ class MaterialIn(BaseModel):
     stan_rzeczywisty: Optional[float] = 0
     rezerwacja: Optional[float] = 0
     kod_paskowy: Optional[str] = ""
+    szerokosc: Optional[float] = 0
+    dlugosc: Optional[float] = 0
+    ciezar_jedn: Optional[float] = 0
 
 @app.post("/api/materialy", dependencies=[Depends(verify_key)])
 def create_material(req: MaterialIn):
@@ -5519,11 +5507,12 @@ def create_material(req: MaterialIn):
         if existing:
             raise HTTPException(400, f"Materiał o indeksie '{req.indeks}' już istnieje")
         cur = conn.execute(
-            """INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, szerokosc, dlugosc, ciezar_jedn, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (req.kod or "", req.indeks, req.opis, req.jm or "kg",
              req.do_dyspozycji or 0, req.stan_rzeczywisty or 0,
-             req.rezerwacja or 0, req.kod_paskowy or "", now)
+             req.rezerwacja or 0, req.kod_paskowy or "",
+             req.szerokosc or 0, req.dlugosc or 0, req.ciezar_jedn or 0, now)
         )
         new_id = cur.lastrowid
     _schedule_backup()
@@ -5542,10 +5531,11 @@ def update_material(mid: int, req: MaterialIn):
             raise HTTPException(400, f"Inny materiał już posiada indeks '{req.indeks}'")
         conn.execute(
             """UPDATE materialy SET kod=?,indeks=?,opis=?,jm=?,do_dyspozycji=?,
-               stan_rzeczywisty=?,rezerwacja=?,kod_paskowy=?,updated_at=? WHERE id=?""",
+               stan_rzeczywisty=?,rezerwacja=?,kod_paskowy=?,szerokosc=?,dlugosc=?,ciezar_jedn=?,updated_at=? WHERE id=?""",
             (req.kod or "", req.indeks, req.opis, req.jm or "kg",
              req.do_dyspozycji or 0, req.stan_rzeczywisty or 0,
-             req.rezerwacja or 0, req.kod_paskowy or "", now, mid)
+             req.rezerwacja or 0, req.kod_paskowy or "",
+             req.szerokosc or 0, req.dlugosc or 0, req.ciezar_jedn or 0, now, mid)
         )
     _schedule_backup()
     return {"ok": True}

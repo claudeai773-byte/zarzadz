@@ -4620,20 +4620,37 @@ def init_db_on_start():
     # ➤ Baza materiałów (import z xlsx)
     c.execute("""CREATE TABLE IF NOT EXISTS materialy (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        kod TEXT,
+        nr TEXT DEFAULT '',
+        kod TEXT DEFAULT '',
         indeks TEXT UNIQUE NOT NULL,
+        indeks_dostawcy TEXT DEFAULT '',
+        indeks2 TEXT DEFAULT '',
         opis TEXT NOT NULL,
+        sww TEXT DEFAULT '',
+        opakowanie TEXT DEFAULT '',
         jm TEXT DEFAULT 'kg',
         do_dyspozycji REAL DEFAULT 0,
         stan_rzeczywisty REAL DEFAULT 0,
         rezerwacja REAL DEFAULT 0,
-        kod_paskowy TEXT,
+        cena_zakupu REAL DEFAULT 0,
         szerokosc REAL DEFAULT 0,
         dlugosc REAL DEFAULT 0,
+        wysokosc REAL DEFAULT 0,
         ciezar_jedn REAL DEFAULT 0,
+        symbol_kj TEXT DEFAULT '',
+        atest TEXT DEFAULT '',
+        rys_klienta TEXT DEFAULT '',
+        rys_janus TEXT DEFAULT '',
+        kod_paskowy TEXT DEFAULT '',
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
     # Migracja: dodaj nowe kolumny jeśli nie istnieją
-    for _col, _def in [("szerokosc","REAL DEFAULT 0"),("dlugosc","REAL DEFAULT 0"),("ciezar_jedn","REAL DEFAULT 0")]:
+    for _col, _def in [
+        ("nr","TEXT DEFAULT ''"), ("indeks_dostawcy","TEXT DEFAULT ''"), ("indeks2","TEXT DEFAULT ''"),
+        ("sww","TEXT DEFAULT ''"), ("opakowanie","TEXT DEFAULT ''"), ("cena_zakupu","REAL DEFAULT 0"),
+        ("szerokosc","REAL DEFAULT 0"), ("dlugosc","REAL DEFAULT 0"), ("wysokosc","REAL DEFAULT 0"),
+        ("ciezar_jedn","REAL DEFAULT 0"), ("symbol_kj","TEXT DEFAULT ''"), ("atest","TEXT DEFAULT ''"),
+        ("rys_klienta","TEXT DEFAULT ''"), ("rys_janus","TEXT DEFAULT ''"), ("kod_paskowy","TEXT DEFAULT ''"),
+    ]:
         try:
             c.execute(f"ALTER TABLE materialy ADD COLUMN {_col} {_def}")
         except Exception:
@@ -4672,6 +4689,12 @@ def init_db_on_start():
         lokalizacja TEXT DEFAULT '',
         uwagi TEXT DEFAULT '',
         kod_paskowy TEXT DEFAULT '',
+        srednica REAL DEFAULT 0,
+        dlugosc_robocza REAL DEFAULT 0,
+        dlugosc_calkowita REAL DEFAULT 0,
+        typ_oprawki TEXT DEFAULT '',
+        dlugosc_oprawki REAL DEFAULT 0,
+        operacje TEXT DEFAULT '',
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
     for _col, _def in [
         ("lokalizacja","TEXT DEFAULT ''"),
@@ -4679,6 +4702,12 @@ def init_db_on_start():
         ("kod_paskowy","TEXT DEFAULT ''"),
         ("stan_min","INTEGER DEFAULT 1"),
         ("typ","TEXT DEFAULT ''"),
+        ("srednica","REAL DEFAULT 0"),
+        ("dlugosc_robocza","REAL DEFAULT 0"),
+        ("dlugosc_calkowita","REAL DEFAULT 0"),
+        ("typ_oprawki","TEXT DEFAULT ''"),
+        ("dlugosc_oprawki","REAL DEFAULT 0"),
+        ("operacje","TEXT DEFAULT ''"),
     ]:
         try: c.execute(f"ALTER TABLE narzedzia ADD COLUMN {_col} {_def}")
         except: pass
@@ -5374,40 +5403,32 @@ async def import_materialy(file: UploadFile = File(...)):
 
     # Znajdź nagłówki (pierwsza niepusta linia)
     header_row = [str(c).strip() if c else '' for c in rows[0]]
-    # Mapowanie kolumn (elastyczne) – obsługuje format xlsm z systemu magazynowego
+    # Mapowanie kolumn – obsługuje format xlsm z systemu magazynowego
     col_map = {}
     for i, h in enumerate(header_row):
         hl = h.lower()
-        # Indeks materiału
-        if hl in ('indeks',) or (hl.startswith('indeks') and 'dostawcy' not in hl and 'indeks 2' not in hl and hl != 'indeks dostawcy'):
-            col_map.setdefault('indeks', i)
-        # Opis / nazwa artykułu
-        if 'nazwa artykułu' in hl or 'nazwa artyku' in hl or hl == 'opis':
-            col_map['opis'] = i
-        # Jednostka miary
-        if hl in ('j.m.', 'jm', 'jedn.', 'jednostka'):
-            col_map['jm'] = i
-        # Stan do dyspozycji
-        if 'dyspozycji' in hl or hl == 'do dyspozycji':
-            col_map['do_dyspozycji'] = i
-        # Stan rzeczywisty
-        if 'rzeczywisty' in hl:
-            col_map['stan_rzeczywisty'] = i
-        # Rezerwacje
-        if 'rezerwacj' in hl:
-            col_map['rezerwacja'] = i
-        # Kod materiału / kod paskowy
-        if hl in ('kod materiału', 'kod materialu'):
-            col_map.setdefault('kod', i)
-        if 'paskowy' in hl:
-            col_map['kod_paskowy'] = i
-        # Wymiary
-        if hl in ('szerokość', 'szerokosc'):
-            col_map['szerokosc'] = i
-        if hl in ('dlugość', 'dlugosc', 'długość'):
-            col_map['dlugosc'] = i
-        if 'ciężar' in hl or 'ciezar' in hl:
-            col_map['ciezar_jedn'] = i
+        if hl == 'nr':                                                      col_map['nr'] = i
+        if hl == 'indeks':                                                   col_map.setdefault('indeks', i)
+        if hl == 'indeks dostawcy':                                          col_map['indeks_dostawcy'] = i
+        if hl in ('indeks 2', 'indeks2'):                                    col_map['indeks2'] = i
+        if 'nazwa artykułu' in hl or 'nazwa artyku' in hl or hl == 'opis': col_map['opis'] = i
+        if hl == 'sww':                                                      col_map['sww'] = i
+        if hl in ('opak.', 'opakowanie', 'opak'):                           col_map['opakowanie'] = i
+        if hl in ('j.m.', 'jm', 'jedn.', 'jednostka'):                     col_map['jm'] = i
+        if 'dyspozycji' in hl:                                               col_map['do_dyspozycji'] = i
+        if 'rzeczywisty' in hl:                                              col_map['stan_rzeczywisty'] = i
+        if 'rezerwacj' in hl:                                                col_map['rezerwacja'] = i
+        if hl in ('kod materiału', 'kod materialu'):                         col_map.setdefault('kod', i)
+        if 'ost.cena' in hl or 'cena zakupu' in hl or 'cena_zakupu' in hl: col_map['cena_zakupu'] = i
+        if hl in ('szerokość', 'szerokosc'):                                 col_map['szerokosc'] = i
+        if hl in ('dlugość', 'dlugosc', 'długość', 'dlugość'):              col_map['dlugosc'] = i
+        if hl in ('wysokość', 'wysokosc'):                                   col_map['wysokosc'] = i
+        if 'ciężar' in hl or 'ciezar' in hl:                                col_map['ciezar_jedn'] = i
+        if hl in ('symbol kj', 'symbol_kj'):                                col_map['symbol_kj'] = i
+        if hl == 'atest':                                                    col_map['atest'] = i
+        if 'rys. klienta' in hl or 'rys_klienta' in hl:                    col_map['rys_klienta'] = i
+        if 'rys. janus' in hl or 'rys_janus' in hl:                        col_map['rys_janus'] = i
+        if 'paskowy' in hl:                                                  col_map['kod_paskowy'] = i
 
     required = {'indeks', 'opis'}
     missing = required - set(col_map.keys())
@@ -5421,6 +5442,9 @@ async def import_materialy(file: UploadFile = File(...)):
         if v is None: return None
         return str(v).strip() if isinstance(v, str) else v
 
+    def flt(val): return float(val) if val not in (None, '') else 0.0
+    def txt(val): return str(val).strip() if val not in (None, '') else ''
+
     now = _now()
     imported = 0
     skipped = 0
@@ -5431,50 +5455,73 @@ async def import_materialy(file: UploadFile = File(...)):
             if not indeks or not opis:
                 skipped += 1
                 continue
-            # Pomiń fantomy i puste wpisy
             if str(opis).strip() in (',,,', '', '-'):
                 skipped += 1
                 continue
-            kod = cell(row, 'kod')
-            jm = str(cell(row, 'jm') or 'kg').strip()
-            do_dysp = float(cell(row, 'do_dyspozycji') or 0)
-            stan = float(cell(row, 'stan_rzeczywisty') or 0)
-            rez = float(cell(row, 'rezerwacja') or 0)
-            kp = cell(row, 'kod_paskowy')
-            if kp: kp = str(int(float(kp))) if isinstance(kp, float) else str(kp)
-            szerokosc = float(cell(row, 'szerokosc') or 0)
-            dlugosc = float(cell(row, 'dlugosc') or 0)
-            ciezar_jedn = float(cell(row, 'ciezar_jedn') or 0)
+            nr            = txt(cell(row, 'nr'))
+            indeks_d      = txt(cell(row, 'indeks_dostawcy'))
+            indeks2       = txt(cell(row, 'indeks2'))
+            sww           = txt(cell(row, 'sww'))
+            opakowanie    = txt(cell(row, 'opakowanie'))
+            jm            = txt(cell(row, 'jm')) or 'szt'
+            do_dysp       = flt(cell(row, 'do_dyspozycji'))
+            stan          = flt(cell(row, 'stan_rzeczywisty'))
+            rez           = flt(cell(row, 'rezerwacja'))
+            kod           = txt(cell(row, 'kod'))
+            cena          = flt(cell(row, 'cena_zakupu'))
+            szerokosc     = flt(cell(row, 'szerokosc'))
+            dlugosc       = flt(cell(row, 'dlugosc'))
+            wysokosc      = flt(cell(row, 'wysokosc'))
+            ciezar_jedn   = flt(cell(row, 'ciezar_jedn'))
+            symbol_kj     = txt(cell(row, 'symbol_kj'))
+            atest         = txt(cell(row, 'atest'))
+            rys_klienta   = txt(cell(row, 'rys_klienta'))
+            rys_janus     = txt(cell(row, 'rys_janus'))
+            kp_raw        = cell(row, 'kod_paskowy')
+            kp            = str(int(float(kp_raw))) if isinstance(kp_raw, float) else txt(kp_raw)
             conn.execute("""
-                INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, szerokosc, dlugosc, ciezar_jedn, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO materialy
+                  (nr, kod, indeks, indeks_dostawcy, indeks2, opis, sww, opakowanie, jm,
+                   do_dyspozycji, stan_rzeczywisty, rezerwacja, cena_zakupu,
+                   szerokosc, dlugosc, wysokosc, ciezar_jedn,
+                   symbol_kj, atest, rys_klienta, rys_janus, kod_paskowy, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(indeks) DO UPDATE SET
-                  kod=excluded.kod, opis=excluded.opis, jm=excluded.jm,
+                  nr=excluded.nr, kod=excluded.kod, indeks_dostawcy=excluded.indeks_dostawcy,
+                  indeks2=excluded.indeks2, opis=excluded.opis, sww=excluded.sww,
+                  opakowanie=excluded.opakowanie, jm=excluded.jm,
                   do_dyspozycji=excluded.do_dyspozycji, stan_rzeczywisty=excluded.stan_rzeczywisty,
-                  rezerwacja=excluded.rezerwacja, kod_paskowy=excluded.kod_paskowy,
-                  szerokosc=excluded.szerokosc, dlugosc=excluded.dlugosc,
-                  ciezar_jedn=excluded.ciezar_jedn, updated_at=excluded.updated_at
-            """, (kod, indeks, opis, jm, do_dysp, stan, rez, kp, szerokosc, dlugosc, ciezar_jedn, now))
+                  rezerwacja=excluded.rezerwacja, cena_zakupu=excluded.cena_zakupu,
+                  szerokosc=excluded.szerokosc, dlugosc=excluded.dlugosc, wysokosc=excluded.wysokosc,
+                  ciezar_jedn=excluded.ciezar_jedn, symbol_kj=excluded.symbol_kj,
+                  atest=excluded.atest, rys_klienta=excluded.rys_klienta,
+                  rys_janus=excluded.rys_janus, kod_paskowy=excluded.kod_paskowy,
+                  updated_at=excluded.updated_at
+            """, (nr, kod, indeks, indeks_d, indeks2, opis, sww, opakowanie, jm,
+                  do_dysp, stan, rez, cena, szerokosc, dlugosc, wysokosc, ciezar_jedn,
+                  symbol_kj, atest, rys_klienta, rys_janus, kp, now))
             imported += 1
     return {"ok": True, "imported": imported, "skipped": skipped}
 
 @app.get("/api/materialy", dependencies=[Depends(verify_key)])
 def get_materialy(q: str = "", limit: int = 50):
     with get_db() as conn:
+        cols = """id, nr, kod, indeks, indeks_dostawcy, indeks2, opis, sww, opakowanie, jm,
+                  do_dyspozycji, stan_rzeczywisty, rezerwacja, cena_zakupu, kod_paskowy,
+                  COALESCE(szerokosc,0) as szerokosc, COALESCE(dlugosc,0) as dlugosc,
+                  COALESCE(wysokosc,0) as wysokosc, COALESCE(ciezar_jedn,0) as ciezar_jedn,
+                  COALESCE(symbol_kj,'') as symbol_kj, COALESCE(atest,'') as atest,
+                  COALESCE(rys_klienta,'') as rys_klienta, COALESCE(rys_janus,'') as rys_janus"""
         if q:
             pattern = f"%{q}%"
-            rows = conn.execute("""
-                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy,
-                       COALESCE(szerokosc,0) as szerokosc, COALESCE(dlugosc,0) as dlugosc, COALESCE(ciezar_jedn,0) as ciezar_jedn
-                FROM materialy
-                WHERE opis LIKE ? OR indeks LIKE ? OR kod LIKE ?
+            rows = conn.execute(f"""
+                SELECT {cols} FROM materialy
+                WHERE opis LIKE ? OR indeks LIKE ? OR kod LIKE ? OR indeks2 LIKE ?
                 ORDER BY opis LIMIT ?
-            """, (pattern, pattern, pattern, limit)).fetchall()
+            """, (pattern, pattern, pattern, pattern, limit)).fetchall()
         else:
-            rows = conn.execute("""
-                SELECT id, kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy,
-                       COALESCE(szerokosc,0) as szerokosc, COALESCE(dlugosc,0) as dlugosc, COALESCE(ciezar_jedn,0) as ciezar_jedn
-                FROM materialy ORDER BY opis LIMIT ?
+            rows = conn.execute(f"""
+                SELECT {cols} FROM materialy ORDER BY opis LIMIT ?
             """, (limit,)).fetchall()
         return [dict(r) for r in rows]
 
@@ -5488,15 +5535,26 @@ def count_materialy():
 class MaterialIn(BaseModel):
     indeks: str
     opis: str
+    nr: Optional[str] = ""
     kod: Optional[str] = ""
-    jm: Optional[str] = "kg"
+    indeks_dostawcy: Optional[str] = ""
+    indeks2: Optional[str] = ""
+    sww: Optional[str] = ""
+    opakowanie: Optional[str] = ""
+    jm: Optional[str] = "szt"
     do_dyspozycji: Optional[float] = 0
     stan_rzeczywisty: Optional[float] = 0
     rezerwacja: Optional[float] = 0
-    kod_paskowy: Optional[str] = ""
+    cena_zakupu: Optional[float] = 0
     szerokosc: Optional[float] = 0
     dlugosc: Optional[float] = 0
+    wysokosc: Optional[float] = 0
     ciezar_jedn: Optional[float] = 0
+    symbol_kj: Optional[str] = ""
+    atest: Optional[str] = ""
+    rys_klienta: Optional[str] = ""
+    rys_janus: Optional[str] = ""
+    kod_paskowy: Optional[str] = ""
 
 @app.post("/api/materialy", dependencies=[Depends(verify_key)])
 def create_material(req: MaterialIn):
@@ -5507,12 +5565,18 @@ def create_material(req: MaterialIn):
         if existing:
             raise HTTPException(400, f"Materiał o indeksie '{req.indeks}' już istnieje")
         cur = conn.execute(
-            """INSERT INTO materialy (kod, indeks, opis, jm, do_dyspozycji, stan_rzeczywisty, rezerwacja, kod_paskowy, szerokosc, dlugosc, ciezar_jedn, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (req.kod or "", req.indeks, req.opis, req.jm or "kg",
-             req.do_dyspozycji or 0, req.stan_rzeczywisty or 0,
-             req.rezerwacja or 0, req.kod_paskowy or "",
-             req.szerokosc or 0, req.dlugosc or 0, req.ciezar_jedn or 0, now)
+            """INSERT INTO materialy
+               (nr, kod, indeks, indeks_dostawcy, indeks2, opis, sww, opakowanie, jm,
+                do_dyspozycji, stan_rzeczywisty, rezerwacja, cena_zakupu,
+                szerokosc, dlugosc, wysokosc, ciezar_jedn,
+                symbol_kj, atest, rys_klienta, rys_janus, kod_paskowy, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (req.nr or "", req.kod or "", req.indeks, req.indeks_dostawcy or "", req.indeks2 or "",
+             req.opis, req.sww or "", req.opakowanie or "", req.jm or "szt",
+             req.do_dyspozycji or 0, req.stan_rzeczywisty or 0, req.rezerwacja or 0, req.cena_zakupu or 0,
+             req.szerokosc or 0, req.dlugosc or 0, req.wysokosc or 0, req.ciezar_jedn or 0,
+             req.symbol_kj or "", req.atest or "", req.rys_klienta or "", req.rys_janus or "",
+             req.kod_paskowy or "", now)
         )
         new_id = cur.lastrowid
     _schedule_backup()
@@ -5530,12 +5594,18 @@ def update_material(mid: int, req: MaterialIn):
         if conflict:
             raise HTTPException(400, f"Inny materiał już posiada indeks '{req.indeks}'")
         conn.execute(
-            """UPDATE materialy SET kod=?,indeks=?,opis=?,jm=?,do_dyspozycji=?,
-               stan_rzeczywisty=?,rezerwacja=?,kod_paskowy=?,szerokosc=?,dlugosc=?,ciezar_jedn=?,updated_at=? WHERE id=?""",
-            (req.kod or "", req.indeks, req.opis, req.jm or "kg",
-             req.do_dyspozycji or 0, req.stan_rzeczywisty or 0,
-             req.rezerwacja or 0, req.kod_paskowy or "",
-             req.szerokosc or 0, req.dlugosc or 0, req.ciezar_jedn or 0, now, mid)
+            """UPDATE materialy SET
+               nr=?, kod=?, indeks=?, indeks_dostawcy=?, indeks2=?, opis=?, sww=?, opakowanie=?, jm=?,
+               do_dyspozycji=?, stan_rzeczywisty=?, rezerwacja=?, cena_zakupu=?,
+               szerokosc=?, dlugosc=?, wysokosc=?, ciezar_jedn=?,
+               symbol_kj=?, atest=?, rys_klienta=?, rys_janus=?, kod_paskowy=?, updated_at=?
+               WHERE id=?""",
+            (req.nr or "", req.kod or "", req.indeks, req.indeks_dostawcy or "", req.indeks2 or "",
+             req.opis, req.sww or "", req.opakowanie or "", req.jm or "szt",
+             req.do_dyspozycji or 0, req.stan_rzeczywisty or 0, req.rezerwacja or 0, req.cena_zakupu or 0,
+             req.szerokosc or 0, req.dlugosc or 0, req.wysokosc or 0, req.ciezar_jedn or 0,
+             req.symbol_kj or "", req.atest or "", req.rys_klienta or "", req.rys_janus or "",
+             req.kod_paskowy or "", now, mid)
         )
     _schedule_backup()
     return {"ok": True}
@@ -5877,7 +5947,8 @@ def narzedzia_niskie_stany():
 @app.put("/api/narzedzia/{nid}", dependencies=[Depends(verify_key)])
 async def update_narzedzie(nid: int, request: Request):
     body = await request.json()
-    fields = ["nazwa","typ","jm","stan","stan_min","lokalizacja","uwagi","kod_paskowy"]
+    fields = ["nazwa","typ","jm","stan","stan_min","lokalizacja","uwagi","kod_paskowy",
+              "srednica","dlugosc_robocza","dlugosc_calkowita","typ_oprawki","dlugosc_oprawki","operacje"]
     sets = ", ".join(f"{f}=?" for f in fields if f in body)
     vals = [body[f] for f in fields if f in body]
     if not sets:
@@ -6002,6 +6073,12 @@ class NarzedzieIn(BaseModel):
     stan_min: Optional[float] = 1
     lokalizacja: Optional[str] = ""
     uwagi: Optional[str] = ""
+    srednica: Optional[float] = 0
+    dlugosc_robocza: Optional[float] = 0
+    dlugosc_calkowita: Optional[float] = 0
+    typ_oprawki: Optional[str] = ""
+    dlugosc_oprawki: Optional[float] = 0
+    operacje: Optional[str] = ""
 
 @app.post("/api/narzedzia", dependencies=[Depends(verify_key)])
 def add_narzedzie(req: NarzedzieIn):
@@ -6010,10 +6087,13 @@ def add_narzedzie(req: NarzedzieIn):
         if exists:
             raise HTTPException(409, f"Indeks '{req.indeks}' już istnieje")
         conn.execute("""
-            INSERT INTO narzedzia (indeks, nazwa, typ, jm, stan, stan_min, lokalizacja, uwagi, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
+            INSERT INTO narzedzia (indeks, nazwa, typ, jm, stan, stan_min, lokalizacja, uwagi,
+                srednica, dlugosc_robocza, dlugosc_calkowita, typ_oprawki, dlugosc_oprawki, operacje, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (req.indeks, req.nazwa, req.typ or "Inne", req.jm or "szt",
-              req.stan or 0, req.stan_min or 1, req.lokalizacja or "", req.uwagi or "", _now()))
+              req.stan or 0, req.stan_min or 1, req.lokalizacja or "", req.uwagi or "",
+              req.srednica or 0, req.dlugosc_robocza or 0, req.dlugosc_calkowita or 0,
+              req.typ_oprawki or "", req.dlugosc_oprawki or 0, req.operacje or "", _now()))
     return {"ok": True}
 
 

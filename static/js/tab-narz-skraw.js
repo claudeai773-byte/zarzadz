@@ -127,6 +127,7 @@ function searchNarzSkraw() {
 function switchNarzSkrawView(view) {
   setState({narzSkrawView: view}, true);
   if (view === 'lista') loadNarzSkrawAll();
+  if (view === 'dobor') loadNarzSkrawAll();
   if (view === 'wypozyczenia') loadNarzSkrawWypozyczenia();
   if (view === 'historia') loadNarzSkrawHistoria();
   if (view === 'regeneracja') loadNarzSkrawRegeneracja();
@@ -152,12 +153,14 @@ function renderNarzSkraw() {
   </div>
   <div class="sub-tabs" style="margin-bottom:12px">
     <button class="sub-tab ${view==='lista'?'active':''}" onclick="switchNarzSkrawView('lista')">📦 Baza narzędzi</button>
+    <button class="sub-tab ${view==='dobor'?'active':''}" onclick="switchNarzSkrawView('dobor')">🎯 Dobór narzędzia</button>
     <button class="sub-tab ${view==='wypozyczenia'?'active':''}" onclick="switchNarzSkrawView('wypozyczenia')">📤 Aktywne wypożyczenia${cnt && cnt.wypozyczone ? ' ('+cnt.wypozyczone+')' : ''}</button>
     <button class="sub-tab ${view==='regeneracja'?'active':''}" onclick="switchNarzSkrawView('regeneracja')">🔧 Do regeneracji${cnt && cnt.do_regeneracji ? ' ('+cnt.do_regeneracji+')' : ''}</button>
     <button class="sub-tab ${view==='historia'?'active':''}" onclick="switchNarzSkrawView('historia')">📋 Historia</button>
   </div>`;
 
   if (view === 'lista')         html += renderNarzSkrawLista();
+  if (view === 'dobor')         html += renderNarzSkrawDobor();
   if (view === 'wypozyczenia')  html += renderNarzSkrawWypozyczeniaList();
   if (view === 'regeneracja')   html += renderNarzSkrawRegeneracjaList();
   if (view === 'historia')      html += renderNarzSkrawHistoriaList();
@@ -574,10 +577,27 @@ function renderNarzSkrawEditModal() {
             style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
         </div>
         <div class="field">
-          <label>Ilość (łącznie)</label>
-          <input id="nske-ilosc" type="number" min="0" step="1" value="${n.ilosc}"
+          <label>Dł. robocza (mm)</label>
+          <input id="nske-dlr" type="number" min="0" step="0.1" value="${n.dlugosc_robocza||0}"
             style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
         </div>
+      </div>
+      <div class="field">
+        <label>Do wykonania (operacje)</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${['otwór zgrubny','otwór wykańczający','planowanie/kieszeń','gwintowanie'].map(o =>
+            `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+              <input type="checkbox" value="${o}" ${(n.operacje||'').split(',').map(x=>x.trim()).includes(o)?'checked':''} onchange="nskrSyncOperacje('nske-operacje')">
+              ${o}
+            </label>`
+          ).join('')}
+        </div>
+        <input type="hidden" id="nske-operacje" value="${n.operacje||''}">
+      </div>
+      <div class="field">
+        <label>Ilość (łącznie)</label>
+        <input id="nske-ilosc" type="number" min="0" step="1" value="${n.ilosc}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
       <div class="field">
         <label>Stan</label>
@@ -850,10 +870,27 @@ function renderNarzSkrawDodajModal() {
             style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
         </div>
         <div class="field">
-          <label>Ilość *</label>
-          <input id="nskr-ilosc" type="number" min="1" step="1" value="1" autocomplete="off"
+          <label>Dł. robocza (mm)</label>
+          <input id="nskr-dlr" type="number" min="0" step="0.1" placeholder="np. 50" autocomplete="off"
             style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
         </div>
+      </div>
+      <div class="field">
+        <label>Do wykonania (operacje)</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${['otwór zgrubny','otwór wykańczający','planowanie/kieszeń','gwintowanie'].map(o =>
+            `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+              <input type="checkbox" value="${o}" onchange="nskrSyncOperacje('nskr-operacje')">
+              ${o}
+            </label>`
+          ).join('')}
+        </div>
+        <input type="hidden" id="nskr-operacje" value="">
+      </div>
+      <div class="field">
+        <label>Ilość *</label>
+        <input id="nskr-ilosc" type="number" min="1" step="1" value="1" autocomplete="off"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
       <div class="field">
         <label>Stan</label>
@@ -894,11 +931,164 @@ function renderNarzSkrawDodajModal() {
   </div>`;
 }
 
+// ─── Widok: Dobór narzędzia do operacji ─────────────────────────────────────
+function renderNarzSkrawDobor() {
+  const d = state.nskrDobor || {};
+  const operacja = d.operacja || '';
+  const srednica = d.srednica || '';
+  const glebokos = d.glebokos || '';
+
+  const OPERACJE = [
+    { id: 'otw_zgr',  label: '🔵 Otwór zgrubny',       typy: ['wiertło','wiertła','wiertło centrujące','pogłębiacz'] },
+    { id: 'otw_wyk',  label: '🟢 Otwór wykańczający',   typy: ['wytaczadło zgrubne','wytaczadło wykańczające','wytaczadło','rozwiertak'] },
+    { id: 'plan_ki',  label: '🟡 Planowanie / kieszeń', typy: ['frez wykańczający','frez zgrubny','frez kulowy','głowica frezarska','płytka do głowicy'] },
+    { id: 'gwint',    label: '🔩 Gwintowanie',           typy: ['gwintownik','narzynka','frez do gwintów','wiertło','wiertła'] },
+  ];
+
+  const opcje = OPERACJE.map(o =>
+    `<button onclick="setState({nskrDobor:{...state.nskrDobor||{},operacja:'${o.id}'}});render()"
+      style="padding:10px 14px;border-radius:10px;border:2px solid ${operacja===o.id?'var(--accent)':'var(--border)'};
+             background:${operacja===o.id?'rgba(52,152,219,.15)':'var(--panel)'};
+             color:${operacja===o.id?'var(--accent)':'var(--text)'};font-size:13px;
+             font-weight:${operacja===o.id?700:400};cursor:pointer;text-align:left;width:100%">
+      ${o.label}
+    </button>`
+  ).join('');
+
+  let wyniki = '';
+  if (operacja) {
+    const op = OPERACJE.find(o => o.id === operacja);
+    const wszystkie = state.narzSkrawResults || [];
+
+    let pasujace = wszystkie.filter(n => {
+      const typLc = (n.typ || '').toLowerCase();
+      // Sprawdź typ narzędzia
+      const typMatch = op.typy.some(t => typLc.includes(t));
+      // Sprawdź pole operacje (jeśli wypełnione)
+      const opsMatch = n.operacje && n.operacje.split(',').some(o =>
+        o.trim().toLowerCase().replace('_',' ') === operacja.replace('_',' ')
+      );
+      if (!typMatch && !opsMatch) return false;
+
+      // Filtruj wg średnicy (tolerancja ±0.05 mm)
+      if (srednica && n.srednica > 0) {
+        const sr = parseFloat(srednica);
+        if (!isNaN(sr) && Math.abs(n.srednica - sr) > 0.05) return false;
+      }
+
+      // Filtruj wg głębokości — dlugosc_robocza musi być >= głębokość
+      if (glebokos && n.dlugosc_robocza > 0) {
+        const gl = parseFloat(glebokos);
+        if (!isNaN(gl) && n.dlugosc_robocza < gl) return false;
+      }
+
+      return true;
+    });
+
+    // Sortuj: sprawne i dostępne najpierw, potem wg dopasowania średnicy
+    pasujace.sort((a, b) => {
+      const aOk = a.status === 'sprawne' && a.dostepne > 0 ? 0 : 1;
+      const bOk = b.status === 'sprawne' && b.dostepne > 0 ? 0 : 1;
+      if (aOk !== bOk) return aOk - bOk;
+      if (srednica) {
+        const sr = parseFloat(srednica);
+        return Math.abs((a.srednica||0) - sr) - Math.abs((b.srednica||0) - sr);
+      }
+      return 0;
+    });
+
+    if (!pasujace.length) {
+      wyniki = `<div class="card" style="text-align:center;padding:28px;margin-top:12px">
+        <div style="font-size:32px;margin-bottom:8px">🔍</div>
+        <div style="font-weight:600;color:var(--dim)">Brak pasujących narzędzi</div>
+        <div style="font-size:12px;color:var(--dim);margin-top:6px">
+          Upewnij się że narzędzia mają uzupełniony typ i parametry (średnica, długość robocza)
+        </div>
+      </div>`;
+    } else {
+      wyniki = `<div style="font-size:12px;color:var(--dim);margin:12px 0 8px">
+        Znaleziono <b style="color:var(--text)">${pasujace.length}</b> pasujących narzędzi:
+      </div>`;
+      pasujace.forEach(n => {
+        const meta = narzSkrawStatusMeta(n.status);
+        const dostepne = n.dostepne > 0 && n.status === 'sprawne';
+        const params = [];
+        if (n.srednica)        params.push(`⌀${n.srednica} mm`);
+        if (n.dlugosc_robocza) params.push(`L rob. ${n.dlugosc_robocza} mm`);
+        wyniki += `
+        <div class="card" style="padding:10px 12px;margin-bottom:8px;border-left:4px solid ${dostepne?'var(--green)':meta.color}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            ${n.zdjecie_url ? `<img src="${n.zdjecie_url}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700;font-size:13px">${meta.icon} ${n.oznaczenie||n.typ}${n.srednica?` · ⌀${n.srednica}mm`:''}</div>
+              <div style="font-size:11px;color:var(--dim)">${n.typ}${n.lokalizacja?' · 📍'+n.lokalizacja:''}</div>
+              ${params.length ? `<div style="font-size:11px;color:var(--accent);margin-top:3px">${params.join(' · ')}</div>` : ''}
+              ${n.uwagi ? `<div style="font-size:11px;color:var(--dim);font-style:italic;margin-top:2px">${n.uwagi}</div>` : ''}
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:18px;font-weight:800;color:${dostepne?'var(--green)':'var(--red)'}">${n.dostepne}/${n.ilosc}</div>
+              <div style="font-size:10px;color:var(--dim)">szt.</div>
+            </div>
+          </div>
+          ${dostepne
+            ? `<button class="btn btn-accent" style="width:100%;margin-top:8px;padding:8px;font-size:12px"
+                onclick='setState({narzSkrawWypozyczModal:${JSON.stringify(n).replace(/'/g,"&#39;")}})'>📤 Wypożycz</button>`
+            : `<div style="margin-top:6px;font-size:11px;color:${meta.color};text-align:center;font-weight:600">${meta.icon} ${meta.label} – niedostępne</div>`
+          }
+        </div>`;
+      });
+    }
+  }
+
+  return `
+  <div class="card" style="margin-bottom:14px">
+    <div style="font-size:14px;font-weight:700;margin-bottom:14px">🎯 Dobór narzędzia do operacji</div>
+
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">1. Rodzaj operacji</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px">
+      ${opcje}
+    </div>
+
+    ${operacja ? `
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">2. Parametry (opcjonalne – zawężają wyniki)</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px">
+      <div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Średnica ⌀ (mm)</div>
+        <input type="number" step="0.01" min="0" placeholder="np. 12" value="${srednica}"
+          oninput="setState({nskrDobor:{...state.nskrDobor||{},srednica:this.value}});render()"
+          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:16px;font-weight:700;box-sizing:border-box;text-align:center">
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Głębokość (mm)</div>
+        <input type="number" step="0.1" min="0" placeholder="np. 50" value="${glebokos}"
+          oninput="setState({nskrDobor:{...state.nskrDobor||{},glebokos:this.value}});render()"
+          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:16px;font-weight:700;box-sizing:border-box;text-align:center">
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--dim);margin-bottom:14px">
+      💡 Zostaw puste aby pokazać wszystkie narzędzia danego typu. Głębokość filtruje tylko narzędzia z uzupełnioną „Długością roboczą".
+    </div>
+    ` : ''}
+
+    ${wyniki}
+  </div>`;
+}
+
+function nskrSyncOperacje(hiddenId) {
+  const hidden = document.getElementById(hiddenId);
+  if (!hidden) return;
+  const container = hidden.parentElement;
+  const checked = [...container.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+  hidden.value = checked.join(',');
+}
+
 // ─── Actions ─────────────────────────────────────────────────────────────────
 async function saveNarzSkrawDodaj() {
   const typ = document.getElementById('nskr-typ').value;
   const oznaczenie = document.getElementById('nskr-oznaczenie').value.trim();
   const srednicaRaw = document.getElementById('nskr-srednica').value;
+  const dlrRaw = document.getElementById('nskr-dlr')?.value;
+  const operacje = document.getElementById('nskr-operacje')?.value || '';
   const ilosc = parseInt(document.getElementById('nskr-ilosc').value, 10) || 1;
   const status = document.getElementById('nskr-status').value;
   const lokalizacja = document.getElementById('nskr-lok').value.trim();
@@ -907,11 +1097,15 @@ async function saveNarzSkrawDodaj() {
   try {
     await post('/api/narzedzia-skrawajace', {
       typ, oznaczenie, srednica: srednicaRaw ? parseFloat(srednicaRaw) : null,
+      dlugosc_robocza: dlrRaw ? parseFloat(dlrRaw) : 0,
+      operacje,
       ilosc, status, lokalizacja, uwagi, zdjecie_url
     });
     hidePanel('nskr-dodaj-modal');
-    ['nskr-oznaczenie','nskr-srednica','nskr-lok','nskr-uwagi'].forEach(id => { const e=document.getElementById(id); if(e) e.value=''; });
+    ['nskr-oznaczenie','nskr-srednica','nskr-dlr','nskr-lok','nskr-uwagi'].forEach(id => { const e=document.getElementById(id); if(e) e.value=''; });
     document.getElementById('nskr-ilosc').value = '1';
+    const op = document.getElementById('nskr-operacje'); if(op) op.value='';
+    document.querySelectorAll('#nskr-operacje ~ div input[type=checkbox]').forEach(c => c.checked = false);
     narzSkrawUsunZdjecieDodaj();
     await narzSkrawOdswiezListeIicznik();
   } catch (e) {
@@ -923,6 +1117,8 @@ async function saveNarzSkrawEdit(id) {
   const typ = document.getElementById('nske-typ').value;
   const oznaczenie = document.getElementById('nske-oznaczenie').value.trim();
   const srednicaRaw = document.getElementById('nske-srednica').value;
+  const dlrRaw = document.getElementById('nske-dlr')?.value;
+  const operacje = document.getElementById('nske-operacje')?.value || '';
   const ilosc = parseInt(document.getElementById('nske-ilosc').value, 10);
   const status = document.getElementById('nske-status').value;
   const lokalizacja = document.getElementById('nske-lok').value.trim();
@@ -931,6 +1127,8 @@ async function saveNarzSkrawEdit(id) {
   try {
     await put(`/api/narzedzia-skrawajace/${id}`, {
       typ, oznaczenie, srednica: srednicaRaw ? parseFloat(srednicaRaw) : null,
+      dlugosc_robocza: dlrRaw ? parseFloat(dlrRaw) : 0,
+      operacje,
       ilosc, status, lokalizacja, uwagi, zdjecie_url
     });
     setState({narzSkrawEditModal: null}, true);

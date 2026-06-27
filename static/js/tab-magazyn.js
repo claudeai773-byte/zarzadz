@@ -683,7 +683,6 @@ function renderNarzedzialnia() {
   </div>
   <div class="sub-tabs" style="margin-bottom:12px">
     <button class="sub-tab ${view==='stany'?'active':''}" onclick="switchNarzView('stany')">📦 Stany</button>
-    <button class="sub-tab ${view==='dobor'?'active':''}" onclick="switchNarzView('dobor')" style="${view==='dobor'?'':''}">🎯 Dobór</button>
     <button class="sub-tab ${view==='historia'?'active':''}" onclick="switchNarzView('historia')">📋 Historia</button>
     <button class="sub-tab ${view==='niskie'?'active':''}" style="${niskie>0?'color:var(--red);font-weight:700':''}"
       onclick="switchNarzView('niskie')">⚠ Alerty${niskie>0?' ('+niskie+')':''}</button>
@@ -691,7 +690,6 @@ function renderNarzedzialnia() {
   </div>`;
 
   if (view === 'stany')   html += renderNarzStany();
-  if (view === 'dobor')   html += renderNarzDobor();
   if (view === 'historia') html += renderNarzHistoria();
   if (view === 'niskie')  html += renderNarzNiskie();
   if (view === 'import')  html += renderNarzImport();
@@ -707,7 +705,6 @@ function renderNarzedzialnia() {
 function switchNarzView(view) {
   setState({narzSubView: view}, true);
   if (view === 'stany'   && !state.narzResults?.length) loadNarzAll();
-  if (view === 'dobor'   && !state.narzResults?.length) loadNarzAll();
   if (view === 'historia') loadNarzHistoria();
   if (view === 'niskie')   { setState({narzNiskeStany: null}, true); loadNarzNiskeStany(); }
   render();
@@ -795,139 +792,6 @@ function renderNarzStany() {
   return html;
 }
 
-// ─── Widok: Dobór narzędzia do operacji ──────────────────────
-function renderNarzDobor() {
-  const d = state.narzDobor || {};
-  const operacja = d.operacja || '';
-  const srednica = d.srednica || '';
-  const glebokos = d.glebokos || '';
-
-  // Reguły doboru
-  const OPERACJE = [
-    { id: 'otw_zgr',  label: '🔵 Otwór zgrubny',        typy: ['Wiertła','Wierteł','Wiertło'],           info: 'Wiertła' },
-    { id: 'otw_wyk',  label: '🟢 Otwór wykańczający',    typy: ['Wytaczadła','Wytaczadło','Rozwiertaki','Rozwiertaków'], info: 'Wytaczadła, Rozwiertaki' },
-    { id: 'plan_ki',  label: '🟡 Planowanie / kieszeń',  typy: ['Frezy czołowe','Frez czołowy','Frezy palcowe','Frez palcowy'], info: 'Frezy czołowe, Frezy palcowe' },
-    { id: 'gwint',    label: '🔩 Gwintowanie',            typy: ['Gwintowniki','Gwintownik','Wiertła','Wiertło'],               info: 'Gwintowniki, Wiertła' },
-  ];
-
-  const opcje = OPERACJE.map(o =>
-    `<button onclick="setState({narzDobor:{...state.narzDobor||{},operacja:'${o.id}'}});render()"
-      style="padding:10px 14px;border-radius:10px;border:2px solid ${operacja===o.id?'var(--accent)':'var(--border)'};
-             background:${operacja===o.id?'rgba(var(--accent-rgb,52,152,219),.15)':'var(--panel)'};
-             color:${operacja===o.id?'var(--accent)':'var(--text)'};font-size:13px;font-weight:${operacja===o.id?'700':'400'};cursor:pointer;text-align:left">
-      ${o.label}
-    </button>`
-  ).join('');
-
-  let wyniki = '';
-  if (operacja) {
-    const op = OPERACJE.find(o => o.id === operacja);
-    const wszystkie = state.narzResults || [];
-
-    let pasujace = wszystkie.filter(n => {
-      // Filtruj wg typu (lub wg pola operacje jeśli wypełnione)
-      const typMatch = op.typy.some(t => (n.typ||'').toLowerCase().includes(t.toLowerCase()));
-      const opsMatch = n.operacje && n.operacje.split(',').some(o => o.trim().toLowerCase().includes(operacja.toLowerCase().replace('_',' ')));
-      if (!typMatch && !opsMatch) return false;
-
-      // Filtruj wg średnicy jeśli podana
-      if (srednica && n.srednica > 0) {
-        const sr = parseFloat(srednica);
-        if (!isNaN(sr) && Math.abs(n.srednica - sr) > 0.1) return false;
-      }
-
-      // Filtruj wg głębokości — narzędzie musi mieć dlugosc_robocza >= głębokość
-      if (glebokos && n.dlugosc_robocza > 0) {
-        const gl = parseFloat(glebokos);
-        if (!isNaN(gl) && n.dlugosc_robocza < gl) return false;
-      }
-
-      return true;
-    });
-
-    // Sortuj: dostępne najpierw, potem najlepiej pasująca średnica
-    pasujace.sort((a,b) => {
-      if (b.stan !== a.stan) return b.stan - a.stan;
-      if (srednica) {
-        const sr = parseFloat(srednica);
-        return Math.abs(a.srednica - sr) - Math.abs(b.srednica - sr);
-      }
-      return 0;
-    });
-
-    if (!pasujace.length) {
-      wyniki = `<div class="card" style="text-align:center;padding:28px;margin-top:12px">
-        <div style="font-size:32px;margin-bottom:8px">🔍</div>
-        <div style="font-weight:600;color:var(--dim)">Brak pasujących narzędzi</div>
-        <div style="font-size:12px;color:var(--dim);margin-top:6px">
-          Sprawdź czy narzędzia mają uzupełniony typ i parametry (średnica, długość robocza)
-        </div>
-      </div>`;
-    } else {
-      wyniki = `<div style="font-size:12px;color:var(--dim);margin:10px 0 8px">
-        Znaleziono <b style="color:var(--text)">${pasujace.length}</b> pasujących narzędzi (${op.info}):
-      </div>`;
-      pasujace.forEach(n => {
-        const dostepne = n.stan > 0;
-        const paramParts = [];
-        if (n.srednica > 0)          paramParts.push(`⌀${n.srednica} mm`);
-        if (n.dlugosc_robocza > 0)   paramParts.push(`L rob.${n.dlugosc_robocza} mm`);
-        if (n.dlugosc_calkowita > 0) paramParts.push(`L cal.${n.dlugosc_calkowita} mm`);
-        if (n.typ_oprawki)           paramParts.push(`🔩 ${n.typ_oprawki}${n.dlugosc_oprawki>0?' '+n.dlugosc_oprawki+'mm':''}`);
-        wyniki += `
-        <div class="card" style="padding:10px 12px;margin-bottom:8px;border-left:4px solid ${dostepne?'var(--green)':'var(--red)'}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-            <div style="flex:1;min-width:0">
-              <div style="font-weight:700;font-size:13px">${dostepne?'🟢':'🔴'} ${n.nazwa}</div>
-              <div style="font-size:11px;color:var(--dim);margin-top:1px">${n.indeks} · ${n.typ||''}${n.lokalizacja?' · 📍'+n.lokalizacja:''}</div>
-              ${paramParts.length ? `<div style="font-size:12px;color:var(--accent);margin-top:4px">${paramParts.join(' · ')}</div>` : ''}
-              ${n.uwagi ? `<div style="font-size:11px;color:var(--dim);margin-top:3px;font-style:italic">${n.uwagi}</div>` : ''}
-            </div>
-            <div style="text-align:right;flex-shrink:0">
-              <div style="font-size:20px;font-weight:800;color:${dostepne?'var(--green)':'var(--red)'}">${n.stan}</div>
-              <div style="font-size:10px;color:var(--dim)">${n.jm}</div>
-            </div>
-          </div>
-          ${dostepne ? `<button class="btn btn-accent" style="width:100%;margin-top:8px;padding:8px;font-size:12px"
-            onclick='setState({narzPobierzModal:${JSON.stringify(n).replace(/'/g,"&#39;")}})'>📤 Pobierz</button>` :
-            `<div style="margin-top:6px;font-size:11px;color:var(--red);text-align:center">Brak na stanie</div>`}
-        </div>`;
-      });
-    }
-  }
-
-  return `
-  <div class="card" style="margin-bottom:14px">
-    <div style="font-size:14px;font-weight:700;margin-bottom:12px">🎯 Dobór narzędzia do operacji</div>
-
-    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600">1. Wybierz rodzaj operacji:</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px">
-      ${opcje}
-    </div>
-
-    ${operacja ? `
-    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600">2. Parametry operacji (opcjonalne – filtrują wyniki):</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px">
-      <div>
-        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Średnica ⌀ (mm)</div>
-        <input type="number" step="0.01" min="0" placeholder="np. 12" value="${srednica}"
-          oninput="setState({narzDobor:{...state.narzDobor||{},srednica:this.value}});render()"
-          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px;font-size:15px;box-sizing:border-box;text-align:center">
-      </div>
-      <div>
-        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Głębokość (mm)</div>
-        <input type="number" step="0.1" min="0" placeholder="np. 50" value="${glebokos}"
-          oninput="setState({narzDobor:{...state.narzDobor||{},glebokos:this.value}});render()"
-          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px;font-size:15px;box-sizing:border-box;text-align:center">
-      </div>
-    </div>
-    <div style="font-size:10px;color:var(--dim);margin-bottom:12px">
-      💡 Filtrowanie działa na narzędziach z uzupełnioną średnicą/długością. Zostaw puste żeby pokazać wszystkie pasujące typy.
-    </div>` : ''}
-
-    ${wyniki}
-  </div>`;
-}
 
 // ─── Widok: Historia pobrań ───────────────────────────────────
 function renderNarzHistoria() {

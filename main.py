@@ -4930,6 +4930,8 @@ def init_db_on_start():
         typ TEXT NOT NULL,
         oznaczenie TEXT DEFAULT '',
         srednica REAL,
+        dlugosc_robocza REAL DEFAULT 0,
+        operacje TEXT DEFAULT '',
         ilosc INTEGER NOT NULL DEFAULT 1,
         status TEXT NOT NULL DEFAULT 'sprawne',
         lokalizacja TEXT DEFAULT '',
@@ -4956,10 +4958,15 @@ def init_db_on_start():
     c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_status ON narzedzia_skrawajace_wypozyczenia(status)")
 
     # ➤ Narzędzia skrawające – kolumna ze zdjęciem (jeśli baza istniała wcześniej)
-    try:
-        c.execute("ALTER TABLE narzedzia_skrawajace ADD COLUMN zdjecie_url TEXT DEFAULT ''")
-    except Exception:
-        pass  # kolumna już istnieje
+    for _col, _def in [
+        ("zdjecie_url", "TEXT DEFAULT ''"),
+        ("dlugosc_robocza", "REAL DEFAULT 0"),
+        ("operacje", "TEXT DEFAULT ''"),
+    ]:
+        try:
+            c.execute(f"ALTER TABLE narzedzia_skrawajace ADD COLUMN {_col} {_def}")
+        except Exception:
+            pass
 
     # ➤ Narzędzia skrawające – stan zwrotu (ok / uszkodzone / regeneracja) + uwagi przyczyny
     try:
@@ -6169,6 +6176,8 @@ class NarzSkrawDodajRequest(BaseModel):
     typ: str
     oznaczenie: Optional[str] = ""
     srednica: Optional[float] = None
+    dlugosc_robocza: Optional[float] = 0
+    operacje: Optional[str] = ""
     ilosc: int = 1
     status: Optional[str] = "sprawne"
     lokalizacja: Optional[str] = ""
@@ -6179,6 +6188,8 @@ class NarzSkrawEditRequest(BaseModel):
     typ: Optional[str] = None
     oznaczenie: Optional[str] = None
     srednica: Optional[float] = None
+    dlugosc_robocza: Optional[float] = None
+    operacje: Optional[str] = None
     ilosc: Optional[int] = None
     status: Optional[str] = None
     lokalizacja: Optional[str] = None
@@ -6364,10 +6375,11 @@ def create_narzedzie_skrawajace(req: NarzSkrawDodajRequest):
         raise HTTPException(400, f"Nieprawidłowy status (dozwolone: {', '.join(STATUSY_NARZ_SKRAW)})")
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO narzedzia_skrawajace (typ, oznaczenie, srednica, ilosc, status, lokalizacja, uwagi, zdjecie_url, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (req.typ.strip(), (req.oznaczenie or "").strip(), req.srednica, req.ilosc,
-             status, (req.lokalizacja or "").strip(), (req.uwagi or "").strip(),
+            "INSERT INTO narzedzia_skrawajace (typ, oznaczenie, srednica, dlugosc_robocza, operacje, ilosc, status, lokalizacja, uwagi, zdjecie_url, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (req.typ.strip(), (req.oznaczenie or "").strip(), req.srednica,
+             req.dlugosc_robocza or 0, (req.operacje or "").strip(),
+             req.ilosc, status, (req.lokalizacja or "").strip(), (req.uwagi or "").strip(),
              (req.zdjecie_url or "").strip(), _now())
         )
         new_id = cur.lastrowid
@@ -6397,6 +6409,10 @@ def update_narzedzie_skrawajace(nid: int, req: NarzSkrawEditRequest):
         fields.append("lokalizacja=?"); vals.append(req.lokalizacja.strip())
     if req.uwagi is not None:
         fields.append("uwagi=?"); vals.append(req.uwagi.strip())
+    if req.dlugosc_robocza is not None:
+        fields.append("dlugosc_robocza=?"); vals.append(req.dlugosc_robocza)
+    if req.operacje is not None:
+        fields.append("operacje=?"); vals.append(req.operacje.strip())
     if req.zdjecie_url is not None:
         fields.append("zdjecie_url=?"); vals.append(req.zdjecie_url.strip())
     if not fields:

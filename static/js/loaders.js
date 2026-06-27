@@ -167,67 +167,93 @@ async function loadRezerwacjeZSerwera() {
 
 // ── Ręczny CRUD materiałów ───────────────────────────────────────────────────
 function matFormJmChange() {
-  const jm = document.getElementById('mat-f-jm')?.value || 'kg';
-  const wymRow = document.getElementById('mat-f-wymiary-row');
-  if (wymRow) wymRow.style.display = (jm === 'kg' || jm === 't') ? 'grid' : 'none';
+  // Wymiary zawsze widoczne – nie ma już warunkowego ukrywania
+}
+
+function _matFormClear() {
+  ['mat-f-indeks','mat-f-indeks-d','mat-f-indeks2','mat-f-opis','mat-f-kod','mat-f-sww','mat-f-opak',
+   'mat-f-kj','mat-f-atest','mat-f-rys-kl','mat-f-rys-janus'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  ['mat-f-dysp','mat-f-stan','mat-f-rez','mat-f-cena',
+   'mat-f-szerokosc','mat-f-dlugosc','mat-f-wysokosc','mat-f-ciezar'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value = '0';
+  });
+  const jm = document.getElementById('mat-f-jm'); if(jm) jm.value = 'szt';
+  const eid = document.getElementById('mat-f-edit-id'); if(eid) eid.value = '';
 }
 
 function otworzFormularzDodajMaterial() {
-  ['mat-f-indeks','mat-f-kod','mat-f-opis'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.value = '';
-  });
-  const dysp = document.getElementById('mat-f-dysp'); if(dysp) dysp.value = '0';
-  const stan = document.getElementById('mat-f-stan'); if(stan) stan.value = '0';
-  const jm = document.getElementById('mat-f-jm'); if(jm) jm.value = 'kg';
-  ['mat-f-szerokosc','mat-f-dlugosc','mat-f-ciezar'].forEach(id => {
-    const el = document.getElementById(id); if(el) el.value = '0';
-  });
-  const eid = document.getElementById('mat-f-edit-id'); if(eid) eid.value = '';
+  _matFormClear();
   const title = document.getElementById('mag-dodaj-title'); if(title) title.textContent = '➕ Dodaj nowy materiał';
   const btn = document.getElementById('mat-f-save-btn'); if(btn) btn.textContent = '✅ Dodaj materiał';
-  matFormJmChange();
   showPanel('mag-dodaj-panel');
   setTimeout(() => document.getElementById('mag-dodaj-panel')?.scrollIntoView({behavior:'smooth', block:'start'}), 50);
 }
+
 function otworzEdycjeMaterialu(mat) {
-  const f = id => document.getElementById(id);
-  if(f('mat-f-indeks')) f('mat-f-indeks').value = mat.indeks || '';
-  if(f('mat-f-kod'))    f('mat-f-kod').value    = mat.kod || '';
-  if(f('mat-f-opis'))   f('mat-f-opis').value   = mat.opis || '';
-  if(f('mat-f-dysp'))   f('mat-f-dysp').value   = mat.do_dyspozycji ?? 0;
-  if(f('mat-f-stan'))   f('mat-f-stan').value   = mat.stan_rzeczywisty ?? 0;
-  if(f('mat-f-jm'))     f('mat-f-jm').value     = mat.jm || 'kg';
-  if(f('mat-f-szerokosc')) f('mat-f-szerokosc').value = mat.szerokosc ?? 0;
-  if(f('mat-f-dlugosc'))   f('mat-f-dlugosc').value   = mat.dlugosc ?? 0;
-  if(f('mat-f-ciezar'))    f('mat-f-ciezar').value    = mat.ciezar_jedn ?? 0;
-  if(f('mat-f-edit-id')) f('mat-f-edit-id').value = mat.id;
+  _matFormClear();
+  const set = (id, val) => { const el = document.getElementById(id); if(el) el.value = val ?? ''; };
+  set('mat-f-indeks',      mat.indeks);
+  set('mat-f-indeks-d',    mat.indeks_dostawcy);
+  set('mat-f-indeks2',     mat.indeks2);
+  set('mat-f-opis',        mat.opis);
+  set('mat-f-kod',         mat.kod);
+  set('mat-f-sww',         mat.sww);
+  set('mat-f-opak',        mat.opakowanie);
+  set('mat-f-dysp',        mat.do_dyspozycji ?? 0);
+  set('mat-f-stan',        mat.stan_rzeczywisty ?? 0);
+  set('mat-f-rez',         mat.rezerwacja ?? 0);
+  set('mat-f-cena',        mat.cena_zakupu ?? 0);
+  set('mat-f-szerokosc',   mat.szerokosc ?? 0);
+  set('mat-f-dlugosc',     mat.dlugosc ?? 0);
+  set('mat-f-wysokosc',    mat.wysokosc ?? 0);
+  set('mat-f-ciezar',      mat.ciezar_jedn ?? 0);
+  set('mat-f-kj',          mat.symbol_kj);
+  set('mat-f-atest',       mat.atest);
+  set('mat-f-rys-kl',      mat.rys_klienta);
+  set('mat-f-rys-janus',   mat.rys_janus);
+  set('mat-f-edit-id',     mat.id);
+  const jmEl = document.getElementById('mat-f-jm'); if(jmEl) jmEl.value = mat.jm || 'szt';
   const title = document.getElementById('mag-dodaj-title'); if(title) title.textContent = '✏️ Edytuj materiał';
   const btn = document.getElementById('mat-f-save-btn'); if(btn) btn.textContent = '💾 Zapisz zmiany';
-  matFormJmChange();
   showPanel('mag-dodaj-panel');
   setTimeout(() => document.getElementById('mag-dodaj-panel')?.scrollIntoView({behavior:'smooth', block:'start'}), 50);
 }
+
 function zamknijFormularzMaterialu() {
   hidePanel('mag-dodaj-panel');
 }
+
 async function zapiszMaterial() {
-  const f = id => document.getElementById(id)?.value?.trim();
-  const indeks = f('mat-f-indeks');
-  const opis   = f('mat-f-opis');
-  const mid    = f('mat-f-edit-id');
+  const g  = id => document.getElementById(id)?.value?.trim() || '';
+  const gf = id => parseFloat(document.getElementById(id)?.value) || 0;
+  const indeks = g('mat-f-indeks');
+  const opis   = g('mat-f-opis');
+  const mid    = g('mat-f-edit-id');
   if (!indeks) { alert('Indeks jest wymagany'); return; }
   if (!opis)   { alert('Nazwa artykułu jest wymagana'); return; }
-  const jm = document.getElementById('mat-f-jm')?.value || 'kg';
   const body = {
     indeks,
     opis,
-    kod:             f('mat-f-kod') || '',
-    jm,
-    do_dyspozycji:   parseFloat(document.getElementById('mat-f-dysp')?.value) || 0,
-    stan_rzeczywisty:parseFloat(document.getElementById('mat-f-stan')?.value) || 0,
-    szerokosc:       parseFloat(document.getElementById('mat-f-szerokosc')?.value) || 0,
-    dlugosc:         parseFloat(document.getElementById('mat-f-dlugosc')?.value) || 0,
-    ciezar_jedn:     parseFloat(document.getElementById('mat-f-ciezar')?.value) || 0,
+    indeks_dostawcy: g('mat-f-indeks-d'),
+    indeks2:         g('mat-f-indeks2'),
+    kod:             g('mat-f-kod'),
+    sww:             g('mat-f-sww'),
+    opakowanie:      g('mat-f-opak'),
+    jm:              document.getElementById('mat-f-jm')?.value || 'szt',
+    do_dyspozycji:   gf('mat-f-dysp'),
+    stan_rzeczywisty:gf('mat-f-stan'),
+    rezerwacja:      gf('mat-f-rez'),
+    cena_zakupu:     gf('mat-f-cena'),
+    szerokosc:       gf('mat-f-szerokosc'),
+    dlugosc:         gf('mat-f-dlugosc'),
+    wysokosc:        gf('mat-f-wysokosc'),
+    ciezar_jedn:     gf('mat-f-ciezar'),
+    symbol_kj:       g('mat-f-kj'),
+    atest:           g('mat-f-atest'),
+    rys_klienta:     g('mat-f-rys-kl'),
+    rys_janus:       g('mat-f-rys-janus'),
   };
   const btn = document.getElementById('mat-f-save-btn');
   if(btn) { btn.disabled = true; btn.textContent = '⏳ Zapisuję...'; }

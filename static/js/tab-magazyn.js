@@ -127,66 +127,76 @@ function renderMagazynTransport() {
 function renderMagazynMaterialy() {
   const cnt = state.magazynMatCount;
 
-  // Formularz dodawania – zawsze w DOM, pokazywany przez showPanel/hidePanel
-  const jmOpts = ['kg','szt','mb','m2','m3','t','l','kpl'].map(u => `<option value="${u}">${u}</option>`).join('');
+  // Formularz dodawania/edycji – wszystkie pola z szablonu xlsm
+  const jmOpts = ['szt','kg','kpl','mb','m2','m3','t','l'].map(u => `<option value="${u}">${u}</option>`).join('');
+  const fld = (label, id, placeholder='', type='text', extra='') =>
+    `<div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">${label}</div>
+     <input id="${id}" type="${type}" placeholder="${placeholder}" autocomplete="off" ${extra}
+       style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box"></div>`;
 
   let html = `
   <div id="mag-dodaj-panel" style="display:none;margin-bottom:14px">
     <div class="card" style="border:1px solid var(--accent)">
       <div style="font-size:13px;font-weight:700;margin-bottom:12px" id="mag-dodaj-title">➕ Dodaj nowy materiał</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Indeks <span style="color:var(--red)">*</span></div>
+
+      <!-- Identyfikacja -->
+      <div style="font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Identyfikacja</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Indeks <span style="color:var(--red)">*</span></div>
           <input id="mat-f-indeks" placeholder="np. M04497" autocomplete="off"
-            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Kod materiału (opcjonalny)</div>
-          <input id="mat-f-kod" placeholder="np. 0311" autocomplete="off"
-            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
-        </div>
+            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box"></div>
+        ${fld('Indeks dostawcy', 'mat-f-indeks-d', 'opcjonalny')}
+        ${fld('Indeks 2 / Gatunek', 'mat-f-indeks2', 'np. GAT. BA1032')}
       </div>
-      <div style="margin-bottom:8px">
+      <div style="margin-bottom:10px">
         <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Nazwa artykułu <span style="color:var(--red)">*</span></div>
         <input id="mat-f-opis" placeholder="np. BLACHA 1 GAT.DC.01." autocomplete="off"
           style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">J.M.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        ${fld('Kod materiału', 'mat-f-kod', 'np. 0311')}
+        ${fld('SWW', 'mat-f-sww', 'np. 24.10.41.0')}
+        ${fld('Opakowanie', 'mat-f-opak', '')}
+      </div>
+
+      <!-- Stany magazynowe -->
+      <div style="font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;margin-top:4px">Stany magazynowe</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">J.M.</div>
           <select id="mat-f-jm" onchange="matFormJmChange()"
             style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px">
             ${jmOpts}
-          </select>
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Stan do dyspozycji</div>
-          <input id="mat-f-dysp" type="number" step="0.001" min="0" value="0" autocomplete="off"
-            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Stan rzeczywisty</div>
-          <input id="mat-f-stan" type="number" step="0.001" min="0" value="0" autocomplete="off"
-            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
-        </div>
+          </select></div>
+        ${fld('Stan do dyspozycji', 'mat-f-dysp', '0', 'number', 'step="0.001" min="0" value="0"')}
+        ${fld('Stan rzeczywisty', 'mat-f-stan', '0', 'number', 'step="0.001" min="0" value="0"')}
+        ${fld('Rezerwacje', 'mat-f-rez', '0', 'number', 'step="0.001" min="0" value="0"')}
       </div>
-      <div id="mat-f-wymiary-row" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Szerokość (mm)</div>
-          <input id="mat-f-szerokosc" type="number" step="0.1" min="0" value="0" autocomplete="off"
-            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Długość (mm)</div>
-          <input id="mat-f-dlugosc" type="number" step="0.1" min="0" value="0" autocomplete="off"
-            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
-        </div>
-        <div>
-          <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Ciężar jedn. (kg)</div>
-          <input id="mat-f-ciezar" type="number" step="0.001" min="0" value="0" autocomplete="off"
-            style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 9px;font-size:13px;box-sizing:border-box">
-        </div>
+      <div style="display:grid;grid-template-columns:1fr 3fr;gap:8px;margin-bottom:10px">
+        ${fld('Ost. cena zakupu (zł)', 'mat-f-cena', '0', 'number', 'step="0.01" min="0" value="0"')}
+        <div></div>
       </div>
+
+      <!-- Wymiary -->
+      <div style="font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;margin-top:4px">Wymiary i waga</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        ${fld('Szerokość (mm)', 'mat-f-szerokosc', '0', 'number', 'step="0.1" min="0" value="0"')}
+        ${fld('Długość (mm)', 'mat-f-dlugosc', '0', 'number', 'step="0.1" min="0" value="0"')}
+        ${fld('Wysokość (mm)', 'mat-f-wysokosc', '0', 'number', 'step="0.1" min="0" value="0"')}
+        ${fld('Ciężar jedn. (kg)', 'mat-f-ciezar', '0', 'number', 'step="0.001" min="0" value="0"')}
+      </div>
+
+      <!-- Dokumentacja -->
+      <div style="font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;margin-top:4px">Dokumentacja</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        ${fld('Symbol KJ', 'mat-f-kj', '')}
+        ${fld('Atest', 'mat-f-atest', 'np. PN-EN 10029')}
+        ${fld('Rys. klienta', 'mat-f-rys-kl', '')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:10px">
+        ${fld('Rys. JANUS', 'mat-f-rys-janus', '')}
+        <div></div>
+      </div>
+
       <input type="hidden" id="mat-f-edit-id" value="">
       <div style="display:flex;gap:8px">
         <button class="btn btn-accent" onclick="zapiszMaterial()" style="flex:1" id="mat-f-save-btn">✅ Dodaj materiał</button>
@@ -235,26 +245,33 @@ function renderMagazynMaterialy() {
       const rez = (state.magazynRezerwacje||[]).filter(r => r.material_id === m.id && r.status === 'aktywna');
       const rezSum = rez.reduce((a,r)=>a+r.ilosc, 0);
       const wolne = dostepne - rezSum;
-      // Buduj info o wymiarach dla materiałów kg
-      let wymInfo = '';
-      if (m.jm === 'kg') {
-        const parts = [];
-        if (m.szerokosc > 0) parts.push(`szer: ${m.szerokosc} mm`);
-        if (m.dlugosc > 0) parts.push(`dł: ${m.dlugosc} mm`);
-        if (m.ciezar_jedn > 0) parts.push(`cięż: ${m.ciezar_jedn} kg/m`);
-        if (parts.length) wymInfo = ` · <span style="color:var(--blue);font-size:10px">${parts.join(' · ')}</span>`;
-      }
+      // Wymiary
+      const wymParts = [];
+      if (m.szerokosc > 0) wymParts.push(`${m.szerokosc}×`);
+      if (m.dlugosc > 0)   wymParts.push(`${m.dlugosc}`);
+      if (wymParts.length) wymParts[wymParts.length-1] += ' mm';
+      if (m.wysokosc > 0)  wymParts.push(`wys: ${m.wysokosc} mm`);
+      if (m.ciezar_jedn > 0) wymParts.push(`${m.ciezar_jedn} kg/m`);
+      const wymStr = wymParts.join(' ');
       html += `
       <div class="card" style="padding:10px;margin-bottom:6px">
         <div style="display:flex;justify-content:space-between;align-items:flex-start">
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;font-size:13px">${m.opis}</div>
-            <div style="font-size:11px;color:var(--dim);margin-top:2px">${m.indeks||''}${m.kod?' · <span style="color:var(--dim)">'+m.kod+'</span>':''}${wymInfo}</div>
-          </div>
-          <div style="text-align:right;margin-left:8px;white-space:nowrap">
-            <div style="font-size:13px;font-weight:700;color:${dostepne>0?'var(--green)':'var(--red)'}">${dostepne.toFixed(dostepne%1===0?0:3)} ${m.jm}</div>
-            ${rezSum > 0 ? `<div style="font-size:10px;color:var(--orange)">🔒 ${rezSum.toFixed(rezSum%1===0?0:2)} zarezerwowane</div>` : ''}
-            ${wolne < dostepne ? `<div style="font-size:10px;color:var(--dim)">wolne: ${wolne.toFixed(wolne%1===0?0:2)} ${m.jm}</div>` : ''}
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">
+              <span style="color:var(--orange)">${m.indeks||''}</span>
+              ${m.indeks2 ? `<span style="color:var(--accent);margin-left:4px">${m.indeks2}</span>` : ''}
+              ${m.kod ? `· <span>kod: ${m.kod}</span>` : ''}
+              ${wymStr ? `· <span style="color:var(--blue)">${wymStr}</span>` : ''}
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:5px;font-size:11px">
+              <span>📦 dysp: <b style="color:${dostepne>0?'var(--green)':'var(--red)'}">${dostepne.toFixed(dostepne%1===0?0:3)} ${m.jm}</b></span>
+              <span style="color:var(--dim)">rzecz: ${(m.stan_rzeczywisty??0).toFixed(m.stan_rzeczywisty%1===0?0:3)} ${m.jm}</span>
+              ${rezSum > 0 ? `<span style="color:var(--orange)">🔒 rez: ${rezSum.toFixed(2)} ${m.jm}</span>` : ''}
+              ${wolne < dostepne && rezSum > 0 ? `<span style="color:var(--dim)">wolne: ${wolne.toFixed(2)} ${m.jm}</span>` : ''}
+              ${m.cena_zakupu > 0 ? `<span style="color:var(--dim)">💰 ${m.cena_zakupu.toFixed(2)} zł</span>` : ''}
+              ${m.atest ? `<span style="color:var(--dim)">📋 ${m.atest}</span>` : ''}
+            </div>
           </div>
         </div>
         <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">

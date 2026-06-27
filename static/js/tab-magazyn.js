@@ -562,17 +562,38 @@ async function zwrocNarz(pobId, narzId, ilosc) {
   } catch(e) { alert('Błąd: ' + e.message); }
 }
 
+function _narzParamValues(prefix) {
+  const g  = id => document.getElementById(id)?.value?.trim() || '';
+  const gf = id => parseFloat(document.getElementById(id)?.value) || 0;
+  return {
+    srednica:          gf(`${prefix}-srednica`),
+    dlugosc_robocza:   gf(`${prefix}-dlr`),
+    dlugosc_calkowita: gf(`${prefix}-dlc`),
+    typ_oprawki:       g(`${prefix}-oprawka`),
+    dlugosc_oprawki:   gf(`${prefix}-oprl`),
+    operacje:          g(`${prefix}-operacje`),
+  };
+}
+
 async function saveNarzEdit() {
   const m = state.narzEditModal;
   if (!m) return;
-  const stan     = parseFloat(document.getElementById('ne-stan')?.value) || 0;
-  const stan_min = parseFloat(document.getElementById('ne-stan-min')?.value) || 1;
-  const lok      = document.getElementById('ne-lok')?.value?.trim() || '';
-  const uwagi    = document.getElementById('ne-uwagi')?.value?.trim() || '';
+  const g  = id => document.getElementById(id)?.value?.trim() || '';
+  const gf = id => parseFloat(document.getElementById(id)?.value) || 0;
+  const body = {
+    nazwa:      g('ne-nazwa'),
+    typ:        document.getElementById('ne-typ')?.value || m.typ,
+    jm:         document.getElementById('ne-jm')?.value || m.jm,
+    stan:       gf('ne-stan'),
+    stan_min:   gf('ne-stan-min'),
+    lokalizacja:g('ne-lok'),
+    uwagi:      g('ne-uwagi'),
+    ..._narzParamValues('ne'),
+  };
   try {
     await fetch((SERVER_URL||'').replace(/\/$/,'') + '/api/narzedzia/' + m.id,
       {method:'PUT', headers:{'Content-Type':'application/json','x-api-key':API_KEY},
-       body: JSON.stringify({stan, stan_min, lokalizacja: lok, uwagi})});
+       body: JSON.stringify(body)});
     setState({narzEditModal: null});
     await loadNarzAll();
     await loadNarzCount();
@@ -582,16 +603,22 @@ async function saveNarzEdit() {
 }
 
 async function saveNarzDodaj() {
-  const indeks = document.getElementById('nd-indeks')?.value?.trim();
-  const nazwa  = document.getElementById('nd-nazwa')?.value?.trim();
-  const typ    = document.getElementById('nd-typ')?.value?.trim() || '';
-  const jm     = document.getElementById('nd-jm')?.value?.trim() || 'szt';
-  const stan   = parseFloat(document.getElementById('nd-stan')?.value) || 0;
-  const stan_min = parseFloat(document.getElementById('nd-stan-min')?.value) || 1;
-  const lok    = document.getElementById('nd-lok')?.value?.trim() || '';
+  const g  = id => document.getElementById(id)?.value?.trim() || '';
+  const gf = id => parseFloat(document.getElementById(id)?.value) || 0;
+  const indeks   = g('nd-indeks');
+  const nazwa    = g('nd-nazwa');
+  const typ      = document.getElementById('nd-typ')?.value || '';
+  const jm       = document.getElementById('nd-jm')?.value || 'szt';
+  const stan     = gf('nd-stan');
+  const stan_min = gf('nd-stan-min');
+  const lok      = g('nd-lok');
   if (!indeks || !nazwa) { alert('Indeks i Nazwa są wymagane'); return; }
+  const body = {
+    indeks, nazwa, typ, jm, stan, stan_min, lokalizacja: lok,
+    ..._narzParamValues('nd'),
+  };
   try {
-    await post('/api/narzedzia', {indeks, nazwa, typ, jm, stan, stan_min, lokalizacja: lok});
+    await post('/api/narzedzia', body);
     hidePanel('narz-dodaj-modal');
     await loadNarzAll();
     await loadNarzCount();
@@ -656,6 +683,7 @@ function renderNarzedzialnia() {
   </div>
   <div class="sub-tabs" style="margin-bottom:12px">
     <button class="sub-tab ${view==='stany'?'active':''}" onclick="switchNarzView('stany')">📦 Stany</button>
+    <button class="sub-tab ${view==='dobor'?'active':''}" onclick="switchNarzView('dobor')" style="${view==='dobor'?'':''}">🎯 Dobór</button>
     <button class="sub-tab ${view==='historia'?'active':''}" onclick="switchNarzView('historia')">📋 Historia</button>
     <button class="sub-tab ${view==='niskie'?'active':''}" style="${niskie>0?'color:var(--red);font-weight:700':''}"
       onclick="switchNarzView('niskie')">⚠ Alerty${niskie>0?' ('+niskie+')':''}</button>
@@ -663,6 +691,7 @@ function renderNarzedzialnia() {
   </div>`;
 
   if (view === 'stany')   html += renderNarzStany();
+  if (view === 'dobor')   html += renderNarzDobor();
   if (view === 'historia') html += renderNarzHistoria();
   if (view === 'niskie')  html += renderNarzNiskie();
   if (view === 'import')  html += renderNarzImport();
@@ -678,6 +707,7 @@ function renderNarzedzialnia() {
 function switchNarzView(view) {
   setState({narzSubView: view}, true);
   if (view === 'stany'   && !state.narzResults?.length) loadNarzAll();
+  if (view === 'dobor'   && !state.narzResults?.length) loadNarzAll();
   if (view === 'historia') loadNarzHistoria();
   if (view === 'niskie')   { setState({narzNiskeStany: null}, true); loadNarzNiskeStany(); }
   render();
@@ -725,6 +755,14 @@ function renderNarzStany() {
       const brak  = n.stan <= 0;
       const statusColor = brak ? 'var(--red)' : alarm ? 'var(--orange)' : 'var(--green)';
       const statusIcon  = brak ? '🔴' : alarm ? '🟡' : '🟢';
+      // Parametry techniczne
+      const paramParts = [];
+      if (n.srednica > 0)          paramParts.push(`⌀${n.srednica} mm`);
+      if (n.dlugosc_robocza > 0)   paramParts.push(`L${n.dlugosc_robocza} mm`);
+      if (n.dlugosc_calkowita > 0) paramParts.push(`Lc${n.dlugosc_calkowita} mm`);
+      if (n.typ_oprawki)           paramParts.push(`🔩 ${n.typ_oprawki}${n.dlugosc_oprawki>0?' '+n.dlugosc_oprawki+'mm':''}`);
+      const opsArr = n.operacje ? n.operacje.split(',').map(o=>o.trim()).filter(Boolean) : [];
+      const opsHtml = opsArr.map(o => `<span style="background:rgba(52,152,219,.13);color:var(--blue);border-radius:6px;padding:1px 7px;font-size:10px;font-weight:600">${o}</span>`).join(' ');
       html += `
       <div class="card" style="padding:10px 12px;margin-bottom:6px;${alarm?'border-left:3px solid '+(brak?'var(--red)':'var(--orange)'):''}">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -733,6 +771,8 @@ function renderNarzStany() {
             <div style="font-size:11px;color:var(--dim);margin-top:1px">
               ${n.indeks}${n.lokalizacja ? ' · 📍 '+n.lokalizacja : ''}
             </div>
+            ${paramParts.length ? `<div style="font-size:11px;color:var(--accent);margin-top:3px">${paramParts.join(' · ')}</div>` : ''}
+            ${opsHtml ? `<div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${opsHtml}</div>` : ''}
           </div>
           <div style="text-align:right;flex-shrink:0">
             <div style="font-size:17px;font-weight:800;color:${statusColor};line-height:1">${n.stan}</div>
@@ -753,6 +793,140 @@ function renderNarzStany() {
     });
   });
   return html;
+}
+
+// ─── Widok: Dobór narzędzia do operacji ──────────────────────
+function renderNarzDobor() {
+  const d = state.narzDobor || {};
+  const operacja = d.operacja || '';
+  const srednica = d.srednica || '';
+  const glebokos = d.glebokos || '';
+
+  // Reguły doboru
+  const OPERACJE = [
+    { id: 'otw_zgr',  label: '🔵 Otwór zgrubny',        typy: ['Wiertła','Wierteł','Wiertło'],           info: 'Wiertła' },
+    { id: 'otw_wyk',  label: '🟢 Otwór wykańczający',    typy: ['Wytaczadła','Wytaczadło','Rozwiertaki','Rozwiertaków'], info: 'Wytaczadła, Rozwiertaki' },
+    { id: 'plan_ki',  label: '🟡 Planowanie / kieszeń',  typy: ['Frezy czołowe','Frez czołowy','Frezy palcowe','Frez palcowy'], info: 'Frezy czołowe, Frezy palcowe' },
+    { id: 'gwint',    label: '🔩 Gwintowanie',            typy: ['Gwintowniki','Gwintownik','Wiertła','Wiertło'],               info: 'Gwintowniki, Wiertła' },
+  ];
+
+  const opcje = OPERACJE.map(o =>
+    `<button onclick="setState({narzDobor:{...state.narzDobor||{},operacja:'${o.id}'}});render()"
+      style="padding:10px 14px;border-radius:10px;border:2px solid ${operacja===o.id?'var(--accent)':'var(--border)'};
+             background:${operacja===o.id?'rgba(var(--accent-rgb,52,152,219),.15)':'var(--panel)'};
+             color:${operacja===o.id?'var(--accent)':'var(--text)'};font-size:13px;font-weight:${operacja===o.id?'700':'400'};cursor:pointer;text-align:left">
+      ${o.label}
+    </button>`
+  ).join('');
+
+  let wyniki = '';
+  if (operacja) {
+    const op = OPERACJE.find(o => o.id === operacja);
+    const wszystkie = state.narzResults || [];
+
+    let pasujace = wszystkie.filter(n => {
+      // Filtruj wg typu (lub wg pola operacje jeśli wypełnione)
+      const typMatch = op.typy.some(t => (n.typ||'').toLowerCase().includes(t.toLowerCase()));
+      const opsMatch = n.operacje && n.operacje.split(',').some(o => o.trim().toLowerCase().includes(operacja.toLowerCase().replace('_',' ')));
+      if (!typMatch && !opsMatch) return false;
+
+      // Filtruj wg średnicy jeśli podana
+      if (srednica && n.srednica > 0) {
+        const sr = parseFloat(srednica);
+        if (!isNaN(sr) && Math.abs(n.srednica - sr) > 0.1) return false;
+      }
+
+      // Filtruj wg głębokości — narzędzie musi mieć dlugosc_robocza >= głębokość
+      if (glebokos && n.dlugosc_robocza > 0) {
+        const gl = parseFloat(glebokos);
+        if (!isNaN(gl) && n.dlugosc_robocza < gl) return false;
+      }
+
+      return true;
+    });
+
+    // Sortuj: dostępne najpierw, potem najlepiej pasująca średnica
+    pasujace.sort((a,b) => {
+      if (b.stan !== a.stan) return b.stan - a.stan;
+      if (srednica) {
+        const sr = parseFloat(srednica);
+        return Math.abs(a.srednica - sr) - Math.abs(b.srednica - sr);
+      }
+      return 0;
+    });
+
+    if (!pasujace.length) {
+      wyniki = `<div class="card" style="text-align:center;padding:28px;margin-top:12px">
+        <div style="font-size:32px;margin-bottom:8px">🔍</div>
+        <div style="font-weight:600;color:var(--dim)">Brak pasujących narzędzi</div>
+        <div style="font-size:12px;color:var(--dim);margin-top:6px">
+          Sprawdź czy narzędzia mają uzupełniony typ i parametry (średnica, długość robocza)
+        </div>
+      </div>`;
+    } else {
+      wyniki = `<div style="font-size:12px;color:var(--dim);margin:10px 0 8px">
+        Znaleziono <b style="color:var(--text)">${pasujace.length}</b> pasujących narzędzi (${op.info}):
+      </div>`;
+      pasujace.forEach(n => {
+        const dostepne = n.stan > 0;
+        const paramParts = [];
+        if (n.srednica > 0)          paramParts.push(`⌀${n.srednica} mm`);
+        if (n.dlugosc_robocza > 0)   paramParts.push(`L rob.${n.dlugosc_robocza} mm`);
+        if (n.dlugosc_calkowita > 0) paramParts.push(`L cal.${n.dlugosc_calkowita} mm`);
+        if (n.typ_oprawki)           paramParts.push(`🔩 ${n.typ_oprawki}${n.dlugosc_oprawki>0?' '+n.dlugosc_oprawki+'mm':''}`);
+        wyniki += `
+        <div class="card" style="padding:10px 12px;margin-bottom:8px;border-left:4px solid ${dostepne?'var(--green)':'var(--red)'}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700;font-size:13px">${dostepne?'🟢':'🔴'} ${n.nazwa}</div>
+              <div style="font-size:11px;color:var(--dim);margin-top:1px">${n.indeks} · ${n.typ||''}${n.lokalizacja?' · 📍'+n.lokalizacja:''}</div>
+              ${paramParts.length ? `<div style="font-size:12px;color:var(--accent);margin-top:4px">${paramParts.join(' · ')}</div>` : ''}
+              ${n.uwagi ? `<div style="font-size:11px;color:var(--dim);margin-top:3px;font-style:italic">${n.uwagi}</div>` : ''}
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <div style="font-size:20px;font-weight:800;color:${dostepne?'var(--green)':'var(--red)'}">${n.stan}</div>
+              <div style="font-size:10px;color:var(--dim)">${n.jm}</div>
+            </div>
+          </div>
+          ${dostepne ? `<button class="btn btn-accent" style="width:100%;margin-top:8px;padding:8px;font-size:12px"
+            onclick='setState({narzPobierzModal:${JSON.stringify(n).replace(/'/g,"&#39;")}})'>📤 Pobierz</button>` :
+            `<div style="margin-top:6px;font-size:11px;color:var(--red);text-align:center">Brak na stanie</div>`}
+        </div>`;
+      });
+    }
+  }
+
+  return `
+  <div class="card" style="margin-bottom:14px">
+    <div style="font-size:14px;font-weight:700;margin-bottom:12px">🎯 Dobór narzędzia do operacji</div>
+
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600">1. Wybierz rodzaj operacji:</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px">
+      ${opcje}
+    </div>
+
+    ${operacja ? `
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600">2. Parametry operacji (opcjonalne – filtrują wyniki):</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px">
+      <div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Średnica ⌀ (mm)</div>
+        <input type="number" step="0.01" min="0" placeholder="np. 12" value="${srednica}"
+          oninput="setState({narzDobor:{...state.narzDobor||{},srednica:this.value}});render()"
+          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px;font-size:15px;box-sizing:border-box;text-align:center">
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Głębokość (mm)</div>
+        <input type="number" step="0.1" min="0" placeholder="np. 50" value="${glebokos}"
+          oninput="setState({narzDobor:{...state.narzDobor||{},glebokos:this.value}});render()"
+          style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:9px;font-size:15px;box-sizing:border-box;text-align:center">
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--dim);margin-bottom:12px">
+      💡 Filtrowanie działa na narzędziach z uzupełnioną średnicą/długością. Zostaw puste żeby pokazać wszystkie pasujące typy.
+    </div>` : ''}
+
+    ${wyniki}
+  </div>`;
 }
 
 // ─── Widok: Historia pobrań ───────────────────────────────────
@@ -926,42 +1100,130 @@ function renderNarzPobierzModal() {
   </div>`;
 }
 
+function _narzParamFields(prefix, n) {
+  const OPRAWKI = ['','ER','Weldon','Wytaczadło','Trzpień','Morse','SK/BT','Inne'];
+  const OPERACJE_LIST = ['otwór zgrubny','otwór wykańczający','planowanie/kieszeń','gwintowanie'];
+  const opsVal = n?.operacje || '';
+  const opsChecks = OPERACJE_LIST.map(o =>
+    `<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+      <input type="checkbox" value="${o}" ${opsVal.split(',').map(x=>x.trim()).includes(o)?'checked':''}
+        onchange="narzOpsChange('${prefix}')">
+      ${o}
+    </label>`
+  ).join('');
+  const oprawkaOpts = OPRAWKI.map(o => `<option value="${o}" ${(n?.typ_oprawki||'')==o?'selected':''}>${o||'— brak —'}</option>`).join('');
+  return `
+    <div style="font-size:11px;font-weight:700;color:var(--accent);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.06em">Parametry techniczne</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+      <div class="field" style="margin-bottom:0">
+        <label>Średnica ⌀ (mm)</label>
+        <input id="${prefix}-srednica" type="number" step="0.01" min="0" value="${n?.srednica||0}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label>Dł. robocza (mm)</label>
+        <input id="${prefix}-dlr" type="number" step="0.1" min="0" value="${n?.dlugosc_robocza||0}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label>Dł. całkowita (mm)</label>
+        <input id="${prefix}-dlc" type="number" step="0.1" min="0" value="${n?.dlugosc_calkowita||0}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+    </div>
+    <div style="font-size:11px;font-weight:700;color:var(--accent);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.06em">Oprawka</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <div class="field" style="margin-bottom:0">
+        <label>Typ oprawki</label>
+        <select id="${prefix}-oprawka"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
+          ${oprawkaOpts}
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label>Długość oprawki (mm)</label>
+        <input id="${prefix}-oprl" type="number" step="0.1" min="0" value="${n?.dlugosc_oprawki||0}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      </div>
+    </div>
+    <div style="font-size:11px;font-weight:700;color:var(--accent);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.06em">Do wykonania (operacje)</div>
+    <input type="hidden" id="${prefix}-operacje" value="${n?.operacje||''}">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px">
+      ${opsChecks}
+    </div>`;
+}
+
+function narzOpsChange(prefix) {
+  const checks = document.querySelectorAll(`#${prefix}-operacje ~ div input[type=checkbox]:checked`) ||
+                 document.querySelectorAll(`[id^="${prefix}"] input[type=checkbox]:checked`);
+  // Szukaj checkboxów w pobliżu hidden inputa
+  const hidden = document.getElementById(`${prefix}-operacje`);
+  if (!hidden) return;
+  const container = hidden.nextElementSibling;
+  if (!container) return;
+  const checked = [...container.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.value);
+  hidden.value = checked.join(',');
+}
+
 function renderNarzEditModal() {
   const n = state.narzEditModal;
   if (!n) return '';
+  const TYPY = ['Wiertła','Frezy palcowe','Frezy czołowe','Wytaczadła','Rozwiertaki','Gwintowniki','Płytki wymienne','Noże tokarskie','Ściernice','Tarcze szlifierskie','Ochrona osobista','Materiały pomocnicze','Inne'];
+  const typOpts = TYPY.map(t=>`<option ${(n.typ||'')==t?'selected':''}>${t}</option>`).join('');
   return `
   <div class="modal-overlay" onclick="if(event.target===this)setState({narzEditModal:null})">
-    <div class="modal">
+    <div class="modal" style="max-width:480px;max-height:90vh;overflow-y:auto">
       <button class="modal-close" onclick="setState({narzEditModal:null})">×</button>
-      <h3>✏ Edytuj / Uzupełnij stan</h3>
-      <div style="font-weight:700;margin-bottom:4px">${n.nazwa}</div>
+      <h3>✏ Edytuj narzędzie</h3>
+      <div style="font-weight:700;margin-bottom:2px">${n.nazwa}</div>
       <div style="font-size:11px;color:var(--dim);margin-bottom:16px">${n.indeks}</div>
+
+      <div style="font-size:11px;font-weight:700;color:var(--accent);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Podstawowe</div>
       <div class="field">
-        <label>Stan aktualny (${n.jm})</label>
-        <input id="ne-stan" type="number" min="0" step="0.01" value="${n.stan}"
-          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-            border-radius:8px;padding:12px;font-size:20px;font-weight:700;box-sizing:border-box;text-align:center">
-        <div style="font-size:11px;color:var(--dim);margin-top:4px">Wpisz aktualną ilość po inwentaryzacji lub uzupełnieniu</div>
+        <label>Nazwa</label>
+        <input id="ne-nazwa" type="text" value="${n.nazwa||''}"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
-      <div class="field">
-        <label>Stan minimalny – próg alarmu (${n.jm})</label>
-        <input id="ne-stan-min" type="number" min="0" step="0.01" value="${n.stan_min}"
-          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <label>Kategoria / typ</label>
+          <select id="ne-typ"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
+            ${typOpts}
+          </select>
+        </div>
+        <div class="field">
+          <label>Jednostka</label>
+          <select id="ne-jm"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
+            ${['szt','par','opak','kpl'].map(j=>`<option ${(n.jm||'szt')==j?'selected':''}>${j}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <label>Stan aktualny</label>
+          <input id="ne-stan" type="number" min="0" step="0.01" value="${n.stan}"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:18px;font-weight:700;box-sizing:border-box;text-align:center">
+        </div>
+        <div class="field">
+          <label>Stan min (alarm)</label>
+          <input id="ne-stan-min" type="number" min="0" step="0.01" value="${n.stan_min}"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+        </div>
       </div>
       <div class="field">
         <label>Lokalizacja / półka</label>
         <input id="ne-lok" type="text" value="${n.lokalizacja||''}" placeholder="np. Szafa A, Półka 3"
-          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
       <div class="field">
         <label>Uwagi</label>
         <input id="ne-uwagi" type="text" value="${n.uwagi||''}"
-          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
-      <div style="display:flex;gap:8px">
+      ${_narzParamFields('ne', n)}
+      <div style="display:flex;gap:8px;margin-top:14px">
         <button class="btn btn-accent" style="flex:1" onclick="saveNarzEdit()">💾 Zapisz</button>
         <button class="btn btn-outline" style="padding:14px 18px" onclick="setState({narzEditModal:null})">Anuluj</button>
       </div>
@@ -970,40 +1232,35 @@ function renderNarzEditModal() {
 }
 
 function renderNarzDodajModal() {
-  const TYPY = ['Frezy','Płytki wymienne','Noże tokarskie','Tarcze szlifierskie',
-    'Ściernice','Wiertła','Gwintowniki','Ochrona osobista','Materiały pomocnicze','Inne'];
+  const TYPY = ['Wiertła','Frezy palcowe','Frezy czołowe','Wytaczadła','Rozwiertaki','Gwintowniki','Płytki wymienne','Noże tokarskie','Ściernice','Tarcze szlifierskie','Ochrona osobista','Materiały pomocnicze','Inne'];
   return `
   <div id="narz-dodaj-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)hidePanel('narz-dodaj-modal')">
-    <div class="modal">
+    <div class="modal" style="max-width:480px;max-height:90vh;overflow-y:auto">
       <button class="modal-close" onclick="hidePanel('narz-dodaj-modal')">×</button>
-      <h3>＋ Dodaj pozycję</h3>
+      <h3>＋ Dodaj narzędzie</h3>
       <div class="field">
         <label>Indeks / kod *</label>
-        <input id="nd-indeks" type="text" placeholder="np. FRZ-001" autocomplete="off"
-          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+        <input id="nd-indeks" type="text" placeholder="np. WRT-012-HSS" autocomplete="off"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
       <div class="field">
         <label>Nazwa *</label>
-        <input id="nd-nazwa" type="text" placeholder="np. Frez palcowy HSS fi8" autocomplete="off"
-          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+        <input id="nd-nazwa" type="text" placeholder="np. Wiertło HSS ⌀12" autocomplete="off"
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="field">
           <label>Kategoria</label>
           <select id="nd-typ"
-            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-              border-radius:8px;padding:10px 8px;font-size:13px">
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
             ${TYPY.map(t=>`<option>${t}</option>`).join('')}
           </select>
         </div>
         <div class="field">
           <label>Jednostka</label>
           <select id="nd-jm"
-            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-              border-radius:8px;padding:10px 8px;font-size:13px">
-            ${['szt','par','opak','m','mb','kg','l','kpl'].map(j=>`<option>${j}</option>`).join('')}
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
+            ${['szt','par','opak','kpl'].map(j=>`<option>${j}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -1011,23 +1268,21 @@ function renderNarzDodajModal() {
         <div class="field">
           <label>Stan magazynowy</label>
           <input id="nd-stan" type="number" min="0" step="0.01" value="0" autocomplete="off"
-            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-              border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
         </div>
         <div class="field">
           <label>Stan minimalny (alarm)</label>
           <input id="nd-stan-min" type="number" min="0" step="0.01" value="1" autocomplete="off"
-            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-              border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
         </div>
       </div>
       <div class="field">
         <label>Lokalizacja</label>
         <input id="nd-lok" type="text" placeholder="np. Szafa A, Półka 2" autocomplete="off"
-          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);
-            border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+          style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
       </div>
-      <div style="display:flex;gap:8px">
+      ${_narzParamFields('nd', null)}
+      <div style="display:flex;gap:8px;margin-top:14px">
         <button class="btn btn-accent" style="flex:1" onclick="saveNarzDodaj()">＋ Dodaj</button>
         <button class="btn btn-outline" style="padding:14px 18px" onclick="hidePanel('narz-dodaj-modal')">Anuluj</button>
       </div>

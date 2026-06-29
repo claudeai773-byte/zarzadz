@@ -4930,6 +4930,8 @@ def init_db_on_start():
         typ TEXT NOT NULL,
         oznaczenie TEXT DEFAULT '',
         srednica REAL,
+        srednica_chwytu REAL DEFAULT 0,
+        typ_oprawki TEXT DEFAULT '',
         dlugosc_robocza REAL DEFAULT 0,
         operacje TEXT DEFAULT '',
         ilosc INTEGER NOT NULL DEFAULT 1,
@@ -4957,16 +4959,31 @@ def init_db_on_start():
     c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_narzedzie ON narzedzia_skrawajace_wypozyczenia(narzedzie_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_nskr_wyp_status ON narzedzia_skrawajace_wypozyczenia(status)")
 
-    # ➤ Narzędzia skrawające – kolumna ze zdjęciem (jeśli baza istniała wcześniej)
+    # ➤ Narzędzia skrawające – kolumny dodatkowe (migracja)
     for _col, _def in [
         ("zdjecie_url", "TEXT DEFAULT ''"),
         ("dlugosc_robocza", "REAL DEFAULT 0"),
         ("operacje", "TEXT DEFAULT ''"),
+        ("srednica_chwytu", "REAL DEFAULT 0"),
+        ("typ_oprawki", "TEXT DEFAULT ''"),
     ]:
         try:
             c.execute(f"ALTER TABLE narzedzia_skrawajace ADD COLUMN {_col} {_def}")
         except Exception:
             pass
+
+    # ➤ Oprawki narzędziowe
+    c.execute("""CREATE TABLE IF NOT EXISTS oprawki (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        typ TEXT NOT NULL,
+        oznaczenie TEXT DEFAULT '',
+        srednica_min REAL DEFAULT 0,
+        srednica_max REAL DEFAULT 0,
+        dlugosc REAL DEFAULT 0,
+        ilosc INTEGER NOT NULL DEFAULT 1,
+        lokalizacja TEXT DEFAULT '',
+        uwagi TEXT DEFAULT '',
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
 
     # ➤ Narzędzia skrawające – stan zwrotu (ok / uszkodzone / regeneracja) + uwagi przyczyny
     try:
@@ -6176,6 +6193,8 @@ class NarzSkrawDodajRequest(BaseModel):
     typ: str
     oznaczenie: Optional[str] = ""
     srednica: Optional[float] = None
+    srednica_chwytu: Optional[float] = 0
+    typ_oprawki: Optional[str] = ""
     dlugosc_robocza: Optional[float] = 0
     operacje: Optional[str] = ""
     ilosc: int = 1
@@ -6188,6 +6207,8 @@ class NarzSkrawEditRequest(BaseModel):
     typ: Optional[str] = None
     oznaczenie: Optional[str] = None
     srednica: Optional[float] = None
+    srednica_chwytu: Optional[float] = None
+    typ_oprawki: Optional[str] = None
     dlugosc_robocza: Optional[float] = None
     operacje: Optional[str] = None
     ilosc: Optional[int] = None
@@ -6375,9 +6396,10 @@ def create_narzedzie_skrawajace(req: NarzSkrawDodajRequest):
         raise HTTPException(400, f"Nieprawidłowy status (dozwolone: {', '.join(STATUSY_NARZ_SKRAW)})")
     with get_db() as conn:
         cur = conn.execute(
-            "INSERT INTO narzedzia_skrawajace (typ, oznaczenie, srednica, dlugosc_robocza, operacje, ilosc, status, lokalizacja, uwagi, zdjecie_url, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO narzedzia_skrawajace (typ, oznaczenie, srednica, srednica_chwytu, typ_oprawki, dlugosc_robocza, operacje, ilosc, status, lokalizacja, uwagi, zdjecie_url, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (req.typ.strip(), (req.oznaczenie or "").strip(), req.srednica,
+             req.srednica_chwytu or 0, (req.typ_oprawki or "").strip(),
              req.dlugosc_robocza or 0, (req.operacje or "").strip(),
              req.ilosc, status, (req.lokalizacja or "").strip(), (req.uwagi or "").strip(),
              (req.zdjecie_url or "").strip(), _now())
@@ -6409,6 +6431,10 @@ def update_narzedzie_skrawajace(nid: int, req: NarzSkrawEditRequest):
         fields.append("lokalizacja=?"); vals.append(req.lokalizacja.strip())
     if req.uwagi is not None:
         fields.append("uwagi=?"); vals.append(req.uwagi.strip())
+    if req.srednica_chwytu is not None:
+        fields.append("srednica_chwytu=?"); vals.append(req.srednica_chwytu)
+    if req.typ_oprawki is not None:
+        fields.append("typ_oprawki=?"); vals.append(req.typ_oprawki.strip())
     if req.dlugosc_robocza is not None:
         fields.append("dlugosc_robocza=?"); vals.append(req.dlugosc_robocza)
     if req.operacje is not None:
@@ -6572,6 +6598,68 @@ def get_historia_narzedzia_skrawajacego(nid: int):
             (nid,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ══════════════════════════════════════════════════════════════
+# OPRAWKI NARZĘDZIOWE
+# ══════════════════════════════════════════════════════════════
+
+class OprawkaIn(BaseModel):
+    typ: str
+    oznaczenie: Optional[str] = ""
+    srednica_min: Optional[float] = 0
+    srednica_max: Optional[float] = 0
+    dlugosc: Optional[float] = 0
+    ilosc: Optional[int] = 1
+    lokalizacja: Optional[str] = ""
+    uwagi: Optional[str] = ""
+
+@app.get("/api/oprawki", dependencies=[Depends(verify_key)])
+def get_oprawki(typ: str = ""):
+    with get_db() as conn:
+        if typ:
+            rows = conn.execute(
+                "SELECT * FROM oprawki WHERE typ=? ORDER BY typ, srednica_min",
+                (typ,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM oprawki ORDER BY typ, srednica_min"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+@app.post("/api/oprawki", dependencies=[Depends(verify_key)])
+def create_oprawka(req: OprawkaIn):
+    if not req.typ:
+        raise HTTPException(400, "Typ oprawki jest wymagany")
+    with get_db() as conn:
+        cur = conn.execute(
+            """INSERT INTO oprawki (typ, oznaczenie, srednica_min, srednica_max, dlugosc, ilosc, lokalizacja, uwagi, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (req.typ, req.oznaczenie or "", req.srednica_min or 0, req.srednica_max or 0,
+             req.dlugosc or 0, req.ilosc or 1, req.lokalizacja or "", req.uwagi or "", _now())
+        )
+        return {"id": cur.lastrowid}
+
+@app.put("/api/oprawki/{oid}", dependencies=[Depends(verify_key)])
+def update_oprawka(oid: int, req: OprawkaIn):
+    with get_db() as conn:
+        conn.execute(
+            """UPDATE oprawki SET typ=?,oznaczenie=?,srednica_min=?,srednica_max=?,dlugosc=?,
+               ilosc=?,lokalizacja=?,uwagi=?,updated_at=? WHERE id=?""",
+            (req.typ, req.oznaczenie or "", req.srednica_min or 0, req.srednica_max or 0,
+             req.dlugosc or 0, req.ilosc or 1, req.lokalizacja or "", req.uwagi or "", _now(), oid)
+        )
+        return {"ok": True}
+
+@app.delete("/api/oprawki/{oid}", dependencies=[Depends(verify_key)])
+def delete_oprawka(oid: int):
+    with get_db() as conn:
+        conn.execute("DELETE FROM oprawki WHERE id=?", (oid,))
+        return {"ok": True}
+
+
+
 
 
 

@@ -126,10 +126,11 @@ function searchNarzSkraw() {
 
 function switchNarzSkrawView(view) {
   setState({narzSkrawView: view}, true);
-  if (view === 'lista') loadNarzSkrawAll();
-  if (view === 'dobor') loadNarzSkrawAll();
+  if (view === 'lista')       loadNarzSkrawAll();
+  if (view === 'dobor')       { loadNarzSkrawAll(); loadOprawki(); }
+  if (view === 'oprawki')     loadOprawki();
   if (view === 'wypozyczenia') loadNarzSkrawWypozyczenia();
-  if (view === 'historia') loadNarzSkrawHistoria();
+  if (view === 'historia')    loadNarzSkrawHistoria();
   if (view === 'regeneracja') loadNarzSkrawRegeneracja();
   render();
 }
@@ -153,6 +154,7 @@ function renderNarzSkraw() {
   </div>
   <div class="sub-tabs" style="margin-bottom:12px">
     <button class="sub-tab ${view==='lista'?'active':''}" onclick="switchNarzSkrawView('lista')">📦 Baza narzędzi</button>
+    <button class="sub-tab ${view==='oprawki'?'active':''}" onclick="switchNarzSkrawView('oprawki')">🔩 Oprawki</button>
     <button class="sub-tab ${view==='dobor'?'active':''}" onclick="switchNarzSkrawView('dobor')">🎯 Dobór narzędzia</button>
     <button class="sub-tab ${view==='wypozyczenia'?'active':''}" onclick="switchNarzSkrawView('wypozyczenia')">📤 Aktywne wypożyczenia${cnt && cnt.wypozyczone ? ' ('+cnt.wypozyczone+')' : ''}</button>
     <button class="sub-tab ${view==='regeneracja'?'active':''}" onclick="switchNarzSkrawView('regeneracja')">🔧 Do regeneracji${cnt && cnt.do_regeneracji ? ' ('+cnt.do_regeneracji+')' : ''}</button>
@@ -160,6 +162,7 @@ function renderNarzSkraw() {
   </div>`;
 
   if (view === 'lista')         html += renderNarzSkrawLista();
+  if (view === 'oprawki')       html += renderOprawkiWidok();
   if (view === 'dobor')         html += renderNarzSkrawDobor();
   if (view === 'wypozyczenia')  html += renderNarzSkrawWypozyczeniaList();
   if (view === 'regeneracja')   html += renderNarzSkrawRegeneracjaList();
@@ -594,6 +597,20 @@ function renderNarzSkrawEditModal() {
         </div>
         <input type="hidden" id="nske-operacje" value="${n.operacje||''}">
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <label>Typ oprawki</label>
+          <select id="nske-typ-opr" style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
+            <option value="">— brak / nie dotyczy —</option>
+            ${['ER16','ER20','ER25','ER32','ER40','Weldon','Uchwyt wiertarski','Trzpień do głowic','Oprawka wytaczadła'].map(t=>`<option value="${t}" ${(n.typ_oprawki||'')==t?'selected':''}>${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Średnica chwytu (mm)</label>
+          <input id="nske-sr-chwytu" type="number" min="0" step="0.01" value="${n.srednica_chwytu||0}"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+        </div>
+      </div>
       <div class="field">
         <label>Ilość (łącznie)</label>
         <input id="nske-ilosc" type="number" min="0" step="1" value="${n.ilosc}"
@@ -887,6 +904,20 @@ function renderNarzSkrawDodajModal() {
         </div>
         <input type="hidden" id="nskr-operacje" value="">
       </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field">
+          <label>Typ oprawki</label>
+          <select id="nskr-typ-opr" style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 8px;font-size:13px">
+            <option value="">— brak / nie dotyczy —</option>
+            ${['ER16','ER20','ER25','ER32','ER40','Weldon','Uchwyt wiertarski','Trzpień do głowic','Oprawka wytaczadła'].map(t=>`<option value="${t}">${t}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field">
+          <label>Średnica chwytu (mm)</label>
+          <input id="nskr-sr-chwytu" type="number" min="0" step="0.01" value="0" autocomplete="off"
+            style="width:100%;background:var(--entry);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-size:14px;box-sizing:border-box">
+        </div>
+      </div>
       <div class="field">
         <label>Ilość *</label>
         <input id="nskr-ilosc" type="number" min="1" step="1" value="1" autocomplete="off"
@@ -931,18 +962,143 @@ function renderNarzSkrawDodajModal() {
   </div>`;
 }
 
+// ─── Oprawki – loader ────────────────────────────────────────────────────────
+async function loadOprawki() {
+  try {
+    const r = await get('/api/oprawki');
+    setState({oprawki: r}, true);
+    render();
+  } catch(e) { setState({oprawki: []}, true); }
+}
+
+const OPRAWKI_ER_ZAKRESY = {
+  'ER16': {min:1, max:10}, 'ER20': {min:1, max:13},
+  'ER25': {min:1, max:16}, 'ER32': {min:3, max:20}, 'ER40': {min:3, max:26},
+};
+const TYPY_OPRAWEK = ['ER16','ER20','ER25','ER32','ER40','Weldon','Uchwyt wiertarski','Trzpień do głowic','Oprawka wytaczadła'];
+
+function oprawkaPasujeDoNarzedzia(oprawka, narzedzie) {
+  const typOpr = oprawka.typ || '';
+  const typNar = (narzedzie.typ_oprawki || '').trim();
+  if (!typNar) return false;
+  const oBase = typOpr.replace(/\d+/g,'').trim().toLowerCase();
+  const nBase = typNar.replace(/\d+/g,'').trim().toLowerCase();
+  if (oBase !== nBase) return false;
+  const chwyt = narzedzie.srednica_chwytu || 0;
+  if (!chwyt) return true;
+  if (typOpr.startsWith('ER')) {
+    const z = OPRAWKI_ER_ZAKRESY[typOpr];
+    if (z) return chwyt >= z.min && chwyt <= z.max;
+    return chwyt >= (oprawka.srednica_min||0) && chwyt <= (oprawka.srednica_max||oprawka.srednica_min||999);
+  }
+  if (typOpr.toLowerCase().includes('weldon')) {
+    const oSr = oprawka.srednica_min || oprawka.srednica_max || 0;
+    return oSr > 0 && Math.abs(oSr - chwyt) <= 0.1;
+  }
+  if (typOpr.toLowerCase().includes('uchwyt')) {
+    return chwyt >= (oprawka.srednica_min||0) && chwyt <= (oprawka.srednica_max||999);
+  }
+  return true;
+}
+
+// ─── Widok: Oprawki ──────────────────────────────────────────────────────────
+function renderOprawkiWidok() {
+  const oprawki = state.oprawki || null;
+  const inp = (id, ph='', type='text', val='', extra='') =>
+    `<input id="${id}" type="${type}" placeholder="${ph}" value="${val}" autocomplete="off" ${extra}
+      style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:13px;box-sizing:border-box">`;
+  const typOpts = TYPY_OPRAWEK.map(t=>`<option value="${t}">${t}</option>`).join('');
+
+  let html = `
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div style="font-weight:700;font-size:14px">🔩 Oprawki narzędziowe</div>
+    <button class="btn btn-accent" onclick="setState({oprawkaDodajOpen:!state.oprawkaDodajOpen});render()">
+      ${state.oprawkaDodajOpen ? '✕ Zamknij' : '＋ Dodaj oprawkę'}
+    </button>
+  </div>`;
+
+  if (state.oprawkaDodajOpen) {
+    html += `
+    <div class="card" style="border:1px solid var(--accent);margin-bottom:14px">
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px">➕ Nowa oprawka</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Typ *</div>
+          <select id="opr-dodaj-typ" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px">${typOpts}</select></div>
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Oznaczenie</div>${inp('opr-dodaj-ozn','np. ER32 A100')}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Śr. min (mm)</div>${inp('opr-dodaj-srmin','','number','0','step=0.01 min=0')}</div>
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Śr. max (mm)</div>${inp('opr-dodaj-srmax','','number','0','step=0.01 min=0')}</div>
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Długość (mm)</div>${inp('opr-dodaj-dl','','number','0','step=0.1 min=0')}</div>
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Ilość</div>${inp('opr-dodaj-ilosc','','number','1','step=1 min=0')}</div>
+        <div><div style="font-size:11px;color:var(--dim);margin-bottom:3px">Lokalizacja</div>${inp('opr-dodaj-lok','')}</div>
+      </div>
+      <button class="btn btn-accent" style="width:100%" onclick="saveOprawkaDodaj()">✅ Dodaj</button>
+    </div>`;
+  }
+
+  if (!oprawki) return html + `<div style="text-align:center;padding:30px;color:var(--dim)">⏳</div>`;
+  if (!oprawki.length) return html + `<div class="card" style="text-align:center;padding:28px"><div style="font-size:36px;margin-bottom:8px">🔩</div><div style="color:var(--dim)">Brak oprawek – dodaj pierwszą</div></div>`;
+
+  const byTyp = {};
+  oprawki.forEach(o => { (byTyp[o.typ] = byTyp[o.typ]||[]).push(o); });
+  Object.keys(byTyp).sort().forEach(typ => {
+    html += `<div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px">${typ}</div>`;
+    byTyp[typ].forEach(o => {
+      const dostepna = o.ilosc > 0;
+      const srInfo = o.srednica_max > 0 ? `⌀${o.srednica_min||0}–${o.srednica_max} mm` : (o.srednica_min > 0 ? `⌀${o.srednica_min} mm` : '');
+      if (state.oprawkaEditId === o.id) {
+        html += `<div class="card" style="margin-bottom:6px;border:1px solid var(--accent)">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+            <div><div style="font-size:10px;color:var(--dim);margin-bottom:2px">Typ</div>
+              <select id="opr-edit-typ" style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 8px;font-size:12px">
+                ${TYPY_OPRAWEK.map(t=>`<option value="${t}" ${t===o.typ?'selected':''}>${t}</option>`).join('')}
+              </select></div>
+            <div><div style="font-size:10px;color:var(--dim);margin-bottom:2px">Oznaczenie</div>${inp('opr-edit-ozn','','text',o.oznaczenie||'')}</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:6px;margin-bottom:8px">
+            <div><div style="font-size:10px;color:var(--dim);margin-bottom:2px">Śr.min</div>${inp('opr-edit-srmin','','number',o.srednica_min||0,'step=0.01 min=0')}</div>
+            <div><div style="font-size:10px;color:var(--dim);margin-bottom:2px">Śr.max</div>${inp('opr-edit-srmax','','number',o.srednica_max||0,'step=0.01 min=0')}</div>
+            <div><div style="font-size:10px;color:var(--dim);margin-bottom:2px">Dł.(mm)</div>${inp('opr-edit-dl','','number',o.dlugosc||0,'step=0.1 min=0')}</div>
+            <div><div style="font-size:10px;color:var(--dim);margin-bottom:2px">Ilość</div>${inp('opr-edit-ilosc','','number',o.ilosc||1,'step=1 min=0')}</div>
+            <div><div style="font-size:10px;color:var(--dim);margin-bottom:2px">Lok.</div>${inp('opr-edit-lok','','text',o.lokalizacja||'')}</div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-accent" style="flex:1;font-size:12px;padding:8px" onclick="saveOprawkaEdit(${o.id})">💾 Zapisz</button>
+            <button class="btn-outline" style="padding:8px 14px;font-size:12px" onclick="setState({oprawkaEditId:null})">✕</button>
+          </div>
+        </div>`;
+      } else {
+        html += `<div class="card" style="padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:13px">${o.oznaczenie||o.typ}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:1px">${srInfo}${o.dlugosc>0?' · L '+o.dlugosc+' mm':''}${o.lokalizacja?' · 📍'+o.lokalizacja:''}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:16px;font-weight:800;color:${dostepna?'var(--green)':'var(--red)'}">${o.ilosc}</div>
+            <div style="font-size:10px;color:var(--dim)">szt.</div>
+          </div>
+          <div style="display:flex;gap:4px;flex-shrink:0">
+            <button class="btn-sm" style="background:rgba(52,152,219,.12);color:var(--blue);border-color:var(--blue)" onclick="setState({oprawkaEditId:${o.id}})">✏</button>
+            <button class="btn-sm btn-red" onclick="deleteOprawka(${o.id})">🗑</button>
+          </div>
+        </div>`;
+      }
+    });
+  });
+  return html;
+}
+
 // ─── Widok: Dobór narzędzia do operacji ─────────────────────────────────────
 function renderNarzSkrawDobor() {
   const d = state.nskrDobor || {};
   const operacja = d.operacja || '';
-  const srednica = d.srednica || '';
-  const glebokos = d.glebokos || '';
 
   const OPERACJE = [
-    { id: 'otw_zgr',  label: '🔵 Otwór zgrubny',       typy: ['wiertło','wiertła','wiertło centrujące','pogłębiacz'] },
-    { id: 'otw_wyk',  label: '🟢 Otwór wykańczający',   typy: ['wytaczadło zgrubne','wytaczadło wykańczające','wytaczadło','rozwiertak'] },
-    { id: 'plan_ki',  label: '🟡 Planowanie / kieszeń', typy: ['frez wykańczający','frez zgrubny','frez kulowy','głowica frezarska','płytka do głowicy'] },
-    { id: 'gwint',    label: '🔩 Gwintowanie',           typy: ['gwintownik','narzynka','frez do gwintów','wiertło','wiertła'] },
+    { id:'otw_zgr', label:'🔵 Otwór zgrubny',       typy:['wiertło','wiertła','wiertło centrujące','pogłębiacz'] },
+    { id:'otw_wyk', label:'🟢 Otwór wykańczający',   typy:['wytaczadło zgrubne','wytaczadło wykańczające','wytaczadło','rozwiertak'] },
+    { id:'plan_ki', label:'🟡 Planowanie / kieszeń', typy:['frez wykańczający','frez zgrubny','frez kulowy','głowica frezarska','płytka do głowicy'] },
+    { id:'gwint',   label:'🔩 Gwintowanie',           typy:['gwintownik','narzynka','frez do gwintów','wiertło','wiertła'] },
   ];
 
   const opcje = OPERACJE.map(o =>
@@ -958,83 +1114,77 @@ function renderNarzSkrawDobor() {
   let wyniki = '';
   if (operacja) {
     const op = OPERACJE.find(o => o.id === operacja);
-    const wszystkie = state.narzSkrawResults || [];
+    const srednica = parseFloat(d.srednica) || 0;
+    const glebokos = parseFloat(d.glebokos) || 0;
 
-    let pasujace = wszystkie.filter(n => {
+    let pasujaceNarz = (state.narzSkrawResults || []).filter(n => {
       const typLc = (n.typ || '').toLowerCase();
-      // Sprawdź typ narzędzia
       const typMatch = op.typy.some(t => typLc.includes(t));
-      // Sprawdź pole operacje (jeśli wypełnione)
-      const opsMatch = n.operacje && n.operacje.split(',').some(o =>
-        o.trim().toLowerCase().replace('_',' ') === operacja.replace('_',' ')
-      );
+      const opsMatch = n.operacje && n.operacje.split(',').some(o => o.trim().toLowerCase() === operacja.replace('_',' '));
       if (!typMatch && !opsMatch) return false;
-
-      // Filtruj wg średnicy (tolerancja ±0.05 mm)
-      if (srednica && n.srednica > 0) {
-        const sr = parseFloat(srednica);
-        if (!isNaN(sr) && Math.abs(n.srednica - sr) > 0.05) return false;
-      }
-
-      // Filtruj wg głębokości — dlugosc_robocza musi być >= głębokość
-      if (glebokos && n.dlugosc_robocza > 0) {
-        const gl = parseFloat(glebokos);
-        if (!isNaN(gl) && n.dlugosc_robocza < gl) return false;
-      }
-
+      if (srednica > 0 && n.srednica > 0 && Math.abs(n.srednica - srednica) > 0.05) return false;
+      if (glebokos > 0 && n.dlugosc_robocza > 0 && n.dlugosc_robocza < glebokos) return false;
       return true;
     });
 
-    // Sortuj: sprawne i dostępne najpierw, potem wg dopasowania średnicy
-    pasujace.sort((a, b) => {
-      const aOk = a.status === 'sprawne' && a.dostepne > 0 ? 0 : 1;
-      const bOk = b.status === 'sprawne' && b.dostepne > 0 ? 0 : 1;
-      if (aOk !== bOk) return aOk - bOk;
-      if (srednica) {
-        const sr = parseFloat(srednica);
-        return Math.abs((a.srednica||0) - sr) - Math.abs((b.srednica||0) - sr);
-      }
+    pasujaceNarz.sort((a,b) => {
+      const aOk = a.status==='sprawne' && a.dostepne>0 ? 0 : 1;
+      const bOk = b.status==='sprawne' && b.dostepne>0 ? 0 : 1;
+      if (aOk!==bOk) return aOk-bOk;
+      if (srednica) return Math.abs((a.srednica||0)-srednica)-Math.abs((b.srednica||0)-srednica);
       return 0;
     });
 
-    if (!pasujace.length) {
-      wyniki = `<div class="card" style="text-align:center;padding:28px;margin-top:12px">
-        <div style="font-size:32px;margin-bottom:8px">🔍</div>
-        <div style="font-weight:600;color:var(--dim)">Brak pasujących narzędzi</div>
-        <div style="font-size:12px;color:var(--dim);margin-top:6px">
-          Upewnij się że narzędzia mają uzupełniony typ i parametry (średnica, długość robocza)
-        </div>
+    const allOprawki = state.oprawki || [];
+
+    if (!pasujaceNarz.length) {
+      wyniki = `<div class="card" style="text-align:center;padding:24px;margin-top:12px">
+        <div style="font-size:30px;margin-bottom:8px">🔍</div>
+        <div style="color:var(--dim);font-weight:600">Brak pasujących narzędzi</div>
       </div>`;
     } else {
-      wyniki = `<div style="font-size:12px;color:var(--dim);margin:12px 0 8px">
-        Znaleziono <b style="color:var(--text)">${pasujace.length}</b> pasujących narzędzi:
-      </div>`;
-      pasujace.forEach(n => {
+      wyniki = `<div style="font-size:12px;color:var(--dim);margin:12px 0 8px"><b style="color:var(--text)">${pasujaceNarz.length}</b> pasujących narzędzi:</div>`;
+      pasujaceNarz.forEach(n => {
         const meta = narzSkrawStatusMeta(n.status);
         const dostepne = n.dostepne > 0 && n.status === 'sprawne';
         const params = [];
-        if (n.srednica)        params.push(`⌀${n.srednica} mm`);
-        if (n.dlugosc_robocza) params.push(`L rob. ${n.dlugosc_robocza} mm`);
+        if (n.srednica)         params.push(`⌀${n.srednica} mm`);
+        if (n.dlugosc_robocza)  params.push(`L rob. ${n.dlugosc_robocza} mm`);
+        if (n.srednica_chwytu)  params.push(`chwyt ⌀${n.srednica_chwytu} mm`);
+        if (n.typ_oprawki)      params.push(`🔩 ${n.typ_oprawki}`);
+        const pasOprawki = allOprawki.filter(o => oprawkaPasujeDoNarzedzia(o, n));
+        const oprawkiHtml = pasOprawki.length
+          ? pasOprawki.map(o => {
+              const srI = o.srednica_max>0?`⌀${o.srednica_min||0}–${o.srednica_max}mm`:(o.srednica_min>0?`⌀${o.srednica_min}mm`:'');
+              const ok = o.ilosc > 0;
+              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-radius:6px;background:${ok?'rgba(39,174,96,.08)':'rgba(231,76,60,.08)'};margin-top:4px">
+                <span style="font-size:11px">${ok?'🟢':'🔴'} ${o.oznaczenie||o.typ} ${srI}${o.dlugosc?` L${o.dlugosc}mm`:''}</span>
+                <span style="font-size:12px;font-weight:700;color:${ok?'var(--green)':'var(--red)'}">${o.ilosc} szt.</span>
+              </div>`;
+            }).join('')
+          : n.typ_oprawki
+            ? `<div style="font-size:11px;color:var(--orange);padding:4px 0">⚠ Brak oprawki ${n.typ_oprawki}${n.srednica_chwytu?' ⌀'+n.srednica_chwytu:''}  na stanie</div>`
+            : '';
         wyniki += `
         <div class="card" style="padding:10px 12px;margin-bottom:8px;border-left:4px solid ${dostepne?'var(--green)':meta.color}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-            ${n.zdjecie_url ? `<img src="${n.zdjecie_url}" style="width:40px;height:40px;border-radius:6px;object-fit:cover;flex-shrink:0">` : ''}
+            ${n.zdjecie_url?`<img src="${n.zdjecie_url}" style="width:38px;height:38px;border-radius:6px;object-fit:cover;flex-shrink:0">`:''}
             <div style="flex:1;min-width:0">
               <div style="font-weight:700;font-size:13px">${meta.icon} ${n.oznaczenie||n.typ}${n.srednica?` · ⌀${n.srednica}mm`:''}</div>
               <div style="font-size:11px;color:var(--dim)">${n.typ}${n.lokalizacja?' · 📍'+n.lokalizacja:''}</div>
-              ${params.length ? `<div style="font-size:11px;color:var(--accent);margin-top:3px">${params.join(' · ')}</div>` : ''}
-              ${n.uwagi ? `<div style="font-size:11px;color:var(--dim);font-style:italic;margin-top:2px">${n.uwagi}</div>` : ''}
+              ${params.length?`<div style="font-size:11px;color:var(--accent);margin-top:2px">${params.join(' · ')}</div>`:''}
             </div>
             <div style="text-align:right;flex-shrink:0">
               <div style="font-size:18px;font-weight:800;color:${dostepne?'var(--green)':'var(--red)'}">${n.dostepne}/${n.ilosc}</div>
               <div style="font-size:10px;color:var(--dim)">szt.</div>
             </div>
           </div>
+          ${oprawkiHtml?`<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px">
+            <div style="font-size:10px;color:var(--dim);margin-bottom:2px;font-weight:600">OPRAWKI:</div>${oprawkiHtml}</div>`:''}
           ${dostepne
-            ? `<button class="btn btn-accent" style="width:100%;margin-top:8px;padding:8px;font-size:12px"
+            ?`<button class="btn btn-accent" style="width:100%;margin-top:8px;padding:8px;font-size:12px"
                 onclick='setState({narzSkrawWypozyczModal:${JSON.stringify(n).replace(/'/g,"&#39;")}})'>📤 Wypożycz</button>`
-            : `<div style="margin-top:6px;font-size:11px;color:${meta.color};text-align:center;font-weight:600">${meta.icon} ${meta.label} – niedostępne</div>`
-          }
+            :`<div style="margin-top:6px;font-size:11px;color:${meta.color};text-align:center;font-weight:600">${meta.icon} ${meta.label}</div>`}
         </div>`;
       });
     }
@@ -1043,33 +1193,26 @@ function renderNarzSkrawDobor() {
   return `
   <div class="card" style="margin-bottom:14px">
     <div style="font-size:14px;font-weight:700;margin-bottom:14px">🎯 Dobór narzędzia do operacji</div>
-
     <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">1. Rodzaj operacji</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px">
-      ${opcje}
-    </div>
-
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px">${opcje}</div>
     ${operacja ? `
-    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">2. Parametry (opcjonalne – zawężają wyniki)</div>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.05em">2. Parametry (opcjonalne)</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px">
       <div>
         <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Średnica ⌀ (mm)</div>
-        <input type="number" step="0.01" min="0" placeholder="np. 12" value="${srednica}"
-          oninput="setState({nskrDobor:{...state.nskrDobor||{},srednica:this.value}});render()"
+        <input id="nskr-dobor-sr" type="number" step="0.01" min="0" placeholder="np. 12" value="${d.srednica||''}"
+          onchange="setState({nskrDobor:{...state.nskrDobor||{},srednica:this.value}});render()"
           style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:16px;font-weight:700;box-sizing:border-box;text-align:center">
       </div>
       <div>
         <div style="font-size:11px;color:var(--dim);margin-bottom:3px">Głębokość (mm)</div>
-        <input type="number" step="0.1" min="0" placeholder="np. 50" value="${glebokos}"
-          oninput="setState({nskrDobor:{...state.nskrDobor||{},glebokos:this.value}});render()"
+        <input id="nskr-dobor-gl" type="number" step="0.1" min="0" placeholder="np. 50" value="${d.glebokos||''}"
+          onchange="setState({nskrDobor:{...state.nskrDobor||{},glebokos:this.value}});render()"
           style="width:100%;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:10px;font-size:16px;font-weight:700;box-sizing:border-box;text-align:center">
       </div>
     </div>
-    <div style="font-size:10px;color:var(--dim);margin-bottom:14px">
-      💡 Zostaw puste aby pokazać wszystkie narzędzia danego typu. Głębokość filtruje tylko narzędzia z uzupełnioną „Długością roboczą".
-    </div>
+    <div style="font-size:10px;color:var(--dim);margin-bottom:14px">💡 Filtrowanie uruchamia się po opuszczeniu pola (Tab lub kliknięcie gdzieś indziej).</div>
     ` : ''}
-
     ${wyniki}
   </div>`;
 }
@@ -1080,6 +1223,48 @@ function nskrSyncOperacje(hiddenId) {
   const container = hidden.parentElement;
   const checked = [...container.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
   hidden.value = checked.join(',');
+}
+
+// ─── Oprawki – akcje ─────────────────────────────────────────────────────────
+async function saveOprawkaDodaj() {
+  const g  = id => document.getElementById(id)?.value?.trim() || '';
+  const gf = id => parseFloat(document.getElementById(id)?.value) || 0;
+  const typ = document.getElementById('opr-dodaj-typ')?.value;
+  if (!typ) { alert('Wybierz typ oprawki'); return; }
+  try {
+    await post('/api/oprawki', {
+      typ, oznaczenie: g('opr-dodaj-ozn'),
+      srednica_min: gf('opr-dodaj-srmin'), srednica_max: gf('opr-dodaj-srmax'),
+      dlugosc: gf('opr-dodaj-dl'), ilosc: parseInt(g('opr-dodaj-ilosc'))||1,
+      lokalizacja: g('opr-dodaj-lok'),
+    });
+    setState({oprawkaDodajOpen: false}, true);
+    await loadOprawki();
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function saveOprawkaEdit(id) {
+  const g  = id => document.getElementById(id)?.value?.trim() || '';
+  const gf = id => parseFloat(document.getElementById(id)?.value) || 0;
+  const typ = document.getElementById('opr-edit-typ')?.value;
+  try {
+    await put('/api/oprawki/' + id, {
+      typ, oznaczenie: g('opr-edit-ozn'),
+      srednica_min: gf('opr-edit-srmin'), srednica_max: gf('opr-edit-srmax'),
+      dlugosc: gf('opr-edit-dl'), ilosc: parseInt(document.getElementById('opr-edit-ilosc')?.value)||1,
+      lokalizacja: g('opr-edit-lok'),
+    });
+    setState({oprawkaEditId: null}, true);
+    await loadOprawki();
+  } catch(e) { alert('Błąd: ' + e.message); }
+}
+
+async function deleteOprawka(id) {
+  if (!confirm('Usunąć tę oprawkę?')) return;
+  try {
+    await del('/api/oprawki/' + id);
+    await loadOprawki();
+  } catch(e) { alert('Błąd: ' + e.message); }
 }
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
@@ -1094,11 +1279,13 @@ async function saveNarzSkrawDodaj() {
   const lokalizacja = document.getElementById('nskr-lok').value.trim();
   const uwagi = document.getElementById('nskr-uwagi').value.trim();
   const zdjecie_url = (document.getElementById('nskr-zdjecie-url')||{}).value || '';
+  const typ_oprawki     = document.getElementById('nskr-typ-opr')?.value || '';
+  const srednica_chwytu = parseFloat(document.getElementById('nskr-sr-chwytu')?.value) || 0;
   try {
     await post('/api/narzedzia-skrawajace', {
       typ, oznaczenie, srednica: srednicaRaw ? parseFloat(srednicaRaw) : null,
       dlugosc_robocza: dlrRaw ? parseFloat(dlrRaw) : 0,
-      operacje,
+      operacje, typ_oprawki, srednica_chwytu,
       ilosc, status, lokalizacja, uwagi, zdjecie_url
     });
     hidePanel('nskr-dodaj-modal');
@@ -1124,11 +1311,13 @@ async function saveNarzSkrawEdit(id) {
   const lokalizacja = document.getElementById('nske-lok').value.trim();
   const uwagi = document.getElementById('nske-uwagi').value.trim();
   const zdjecie_url = (document.getElementById('nske-zdjecie-url')||{}).value || '';
+  const typ_oprawki     = document.getElementById('nske-typ-opr')?.value || '';
+  const srednica_chwytu = parseFloat(document.getElementById('nske-sr-chwytu')?.value) || 0;
   try {
     await put(`/api/narzedzia-skrawajace/${id}`, {
       typ, oznaczenie, srednica: srednicaRaw ? parseFloat(srednicaRaw) : null,
       dlugosc_robocza: dlrRaw ? parseFloat(dlrRaw) : 0,
-      operacje,
+      operacje, typ_oprawki, srednica_chwytu,
       ilosc, status, lokalizacja, uwagi, zdjecie_url
     });
     setState({narzSkrawEditModal: null}, true);
